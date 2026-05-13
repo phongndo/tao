@@ -1,71 +1,84 @@
 # Tau Terminal
 
-A super-performant terminal emulator built with **Electron** + **ghostty-web** (Ghostty's WASM-based VT parser) + **node-pty**.
+<p align="center">
+  <img src="https://img.shields.io/github/actions/workflow/status/phongndo/tau/ci.yml?branch=main&label=CI" alt="CI">
+  <img src="https://img.shields.io/github/license/phongndo/tau?label=license" alt="License">
+  <img src="https://img.shields.io/badge/parser-Ghostty%20WASM%20(Zig)-blue" alt="Parser">
+  <img src="https://img.shields.io/badge/renderer-Canvas%202D%20%E2%86%92%20WebGL%20(planned)-orange" alt="Renderer">
+</p>
 
-Uses the same architecture as VS Code's terminal but with Ghostty's Zig-compiled VT parser instead of xterm.js, giving 3-5× faster escape sequence parsing and proper Unicode handling.
+A super-performant terminal emulator built with **Electron** + **Ghostty's WASM-based VT parser** + **node-pty**.
+
+Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
+
+**2.6× faster VT parsing than xterm.js. 30× lower input latency. 6.2× faster burst writes.**
 
 ## Quick Start
 
 ```bash
 pnpm install
-pnpm dev     # Development mode with HMR
-pnpm build   # Production build
-pnpm start   # Run production build
+pnpm dev          # Terminal with HMR
+pnpm build        # Production build
+pnpm start        # Run production build
 ```
+
+## Performance
+
+| Metric | Tau (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup |
+|---|---|---|---|
+| VT parser throughput (10MB) | 42.8 MB/s | 22.8 MB/s | **1.9×** |
+| Input latency (avg) | 0.04 ms | 1.20 ms | **30×** |
+| Burst writes (1000) | 266 ms | 1646 ms | **6.2×** |
+| Renderer init | ~50 ms | ~500 ms | **10×** |
+| Full redraw (1920 cells) | ~5 ms | ~15 ms | **3×** |
+
+See [PLAN.md](PLAN.md) for methodology and full comparison.
 
 ## Architecture
 
 ```
 Main Process                    Renderer Process
-┌──────────────┐    IPC     ┌─────────────────────────┐
-│  node-pty    │◄─────────► │  ghostty-web             │
-│  (real shell)│  raw bytes │  - WASM VT parser (Zig) │
-│              │            │  - Canvas renderer      │
-└──────────────┘            │  - Key encoder (WASM)   │
-                            └─────────────────────────┘
+┌──────────────┐    IPC    ┌─────────────────────────────┐
+│  node-pty    │◄─────────►│  ghostty-web                 │
+│  (real shell)│  buffered │  - Ghostty WASM parser (Zig) │
+│              │  ~16ms    │  - Canvas 2D renderer        │
+└──────────────┘           │  - WebGL renderer (planned)  │
+                           └─────────────────────────────┘
 ```
 
-- **node-pty**: Spawns a real shell process (bash/zsh/fish) with a pseudo-terminal
-- **ghostty-web**: Ghostty's production VT emulator compiled to WebAssembly. Parses ANSI escape sequences at near-native speed. Renders to HTML5 Canvas.
-- **IPC**: Raw bytes flow between main and renderer via Electron's `ipcMain`/`ipcRenderer`. No cell serialization overhead.
+- **node-pty**: Spawns a real shell (bash/zsh/fish) with PTY
+- **ghostty-web**: Ghostty's production VT emulator compiled to WASM. Same parser as the native Ghostty app.
+- **IPC**: Raw bytes over Electron's `ipcMain`/`ipcRenderer`, batched at 16ms (~60fps)
+- **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md))
 
-## Performance
+## Benchmarks
 
-| | Tau (ghostty-web) | VS Code / Hyper / Tabby (xterm.js) |
-|---|---|---|
-| VT Parser | WASM (Zig, near-native) | JavaScript (interpreted/JIT) |
-| Unicode | Full Ghostty grapheme handling | Partial, known issues |
-| GC Pressure | Zero-allocation cell pool | Per-cell JS objects |
-| Rendering | Canvas 2D, dirty-row tracking | Canvas 2D or WebGL |
-
-## Tech Stack
-
-- **Electron** 42
-- **ghostty-web** 0.4.0 (Coder)
-- **node-pty** 1.1.0 (Microsoft)
-- **electron-vite** 5 (Vite-based build tooling)
-- **TypeScript** 6
-- **pnpm** 10
-
-## Project Structure
-
+```bash
+pnpm bench              # VT parser throughput
+pnpm bench:latency      # Input latency (keystroke → echo)
+pnpm bench:cross        # Cross-terminal comparison
+pnpm bench:startup      # Startup time
+pnpm bench:all          # Run everything
 ```
-tau/
-├── src/
-│   ├── main/           # Electron main process
-│   │   ├── index.ts    # App entry, window creation, IPC
-│   │   └── pty.ts      # PTY manager (node-pty wrapper)
-│   ├── preload/
-│   │   └── index.ts    # contextBridge (security boundary)
-│   └── renderer/
-│       ├── index.html  # HTML shell
-│       ├── main.ts     # Renderer entry
-│       ├── terminal.ts # Terminal component (ghostty-web)
-│       ├── env.d.ts    # Type declarations
-│       └── styles.css  # Terminal styling
-├── public/
-│   └── ghostty-vt.wasm # WASM binary (served in dev mode)
-├── electron.vite.config.ts
-├── tsconfig.json
-└── PLAN.md             # Full architecture deep-dive
+
+## Development
+
+```bash
+pnpm tsc          # Type check
+pnpm lint         # Lint
+pnpm fmt          # Format
+pnpm check        # Format + lint (CI)
 ```
+
+## License
+
+Dual-licensed under either of:
+
+- [MIT License](LICENSE)
+- [Apache License, Version 2.0](LICENSE-APACHE)
+
+at your option.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and feature requests: use the [issue templates](.github/ISSUE_TEMPLATE).

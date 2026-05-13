@@ -1,0 +1,63 @@
+name: 🐛 Bug Report
+description: Something isn't working in Tau Terminal.
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you expect to happen?
+      placeholder: |
+        When I press Escape in nvim, the cursor stays in insert mode.
+
+        Expected: Escape should switch to normal mode.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Open Tau Terminal
+        2. Run `nvim`
+        3. Press `i` to enter insert mode
+        4. Press `Escape`
+        5. Observe: still in insert mode
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x86_64)
+        - Linux (ARM64)
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Tau version
+      description: Commit hash or `git describe --tags`
+      placeholder: '6e85aed'
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant console output
+      description: Open DevTools (Cmd+Opt+I) and paste any errors or warnings.
+      render: shell
