@@ -1,9 +1,28 @@
 import { app, BrowserWindow, MessageChannelMain, ipcMain } from 'electron'
 
-const TOTAL_MB = Number.parseInt(process.env.TAU_IPC_BENCH_MB || '64', 10)
-const CHUNK_KB = Number.parseInt(process.env.TAU_IPC_BENCH_CHUNK_KB || '64', 10)
-const RUNS = Number.parseInt(process.env.TAU_IPC_BENCH_RUNS || '3', 10)
-const PING_EVERY_CHUNKS = Number.parseInt(process.env.TAU_IPC_BENCH_PING_EVERY_CHUNKS || '4', 10)
+process.once('uncaughtException', (err) => {
+  console.error(err)
+  app.exit(1)
+})
+
+function readPositiveIntEnv(name, fallback, max) {
+  const raw = process.env[name] ?? String(fallback)
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new Error(`${name} must be a positive integer`)
+  }
+
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isSafeInteger(parsed) || parsed > max) {
+    throw new Error(`${name} must be <= ${max}`)
+  }
+
+  return parsed
+}
+
+const TOTAL_MB = readPositiveIntEnv('TAU_IPC_BENCH_MB', 64, 4096)
+const CHUNK_KB = readPositiveIntEnv('TAU_IPC_BENCH_CHUNK_KB', 64, 1024)
+const RUNS = readPositiveIntEnv('TAU_IPC_BENCH_RUNS', 3, 100)
+const PING_EVERY_CHUNKS = readPositiveIntEnv('TAU_IPC_BENCH_PING_EVERY_CHUNKS', 4, 1_000_000)
 
 const totalBytes = TOTAL_MB * 1024 * 1024
 const chunkBytes = CHUNK_KB * 1024
@@ -174,9 +193,19 @@ function rendererHtml() {
 </html>`
 }
 
-function waitFor(channel) {
-  return new Promise((resolve) => {
-    ipcMain.once(channel, (_event, result) => resolve(result))
+function waitFor(channel, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const onEvent = (_event, result) => {
+      clearTimeout(timer)
+      resolve(result)
+    }
+
+    const timer = setTimeout(() => {
+      ipcMain.removeListener(channel, onEvent)
+      reject(new Error(`Timed out waiting for ${channel}`))
+    }, timeoutMs)
+
+    ipcMain.once(channel, onEvent)
   })
 }
 
