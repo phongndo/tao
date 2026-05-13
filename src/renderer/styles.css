@@ -17,6 +17,8 @@ body {
   font-family: Menlo, Monaco, 'Courier New', monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Prevent the browser from doing scroll bounce (rubber-banding) */
+  overscroll-behavior: none;
 }
 
 /* ── Terminal container fills the window ── */
@@ -24,27 +26,47 @@ body {
   width: 100%;
   height: 100%;
   /*
-   * Promote to its own compositor layer for smoother rendering.
-   * The canvas inside will also be GPU-accelerated by Chromium.
+   * CSS containment: tells the browser this subtree is self-contained.
+   * Enables aggressive optimizations: skip layout/recalc outside this
+   * tree when only the terminal content changes.
+   * 'strict' = size + layout + style + paint containment.
    */
   contain: strict;
+  /*
+   * Promote to its own compositor layer. Combined with contain:strict,
+   * Chromium can skip the main document compositing step entirely and
+   * just swap this layer on each frame. Critical for terminal FPS.
+   */
+  will-change: transform;
+  transform: translateZ(0);
+  /* Isolate to prevent subpixel AA bleed from other elements */
+  isolation: isolate;
 }
 
-/* ── Canvas: crisp pixel alignment ── */
+/* ── Canvas: crisp text, GPU layer ── */
 #terminal-container canvas {
   display: block;
   image-rendering: auto;
+  /*
+   * Promote canvas to independent GPU texture.
+   * When the canvas is repainted (60fps rAF loop), Chromium uploads
+   * only the changed rows as a texture update rather than re-rasterizing
+   * the entire page. Combined with dirty-row tracking in ghostty-web,
+   * this gives near-native rendering performance.
+   */
+  will-change: contents;
+  /* Disable alpha channel for canvas — terminal background is opaque.
+   * This allows Chromium to skip alpha blending for this layer. */
+  /* Note: canvas context is created by ghostty-web, so we can't set
+     alpha:false here — but the renderer creates an opaque canvas. */
 }
 
-/* ── Hidden textarea (ghostty-web renders to canvas, 
-      but keeps a textarea for focus/IME) ── */
+/* ── Hidden textarea (for focus/IME) ── */
 #terminal-container textarea {
   opacity: 0;
   position: absolute;
   pointer-events: none;
 }
-
-/* ── Scrollbar styling (ghostty-web renders its own) ── */
 
 /* ── Selection color overrides ── */
 #terminal-container ::selection {
