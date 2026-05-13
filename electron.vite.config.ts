@@ -1,6 +1,6 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
-import { resolve } from 'node:path'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
 /**
  * Custom Vite plugin that copies ghostty-vt.wasm to the renderer output

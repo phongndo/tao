@@ -5,8 +5,8 @@
  * Usage: npx tsx bench/latency-xterm.ts
  */
 
-import pty from 'node-pty'
 import xterm from '@xterm/xterm'
+import pty from 'node-pty'
 
 const { Terminal } = xterm
 

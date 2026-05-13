@@ -5,10 +5,10 @@
  * Usage: npx tsx bench/latency-tau.ts
  */
 
-import pty from 'node-pty'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import pty from 'node-pty'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')

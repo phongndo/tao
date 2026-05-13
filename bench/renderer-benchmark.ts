@@ -40,7 +40,7 @@ function generateData(sizeMB: number, ansiDensity: number): string {
       }
       line += String.fromCharCode(32 + Math.floor(Math.random() * 95))
     }
-    out += line + '\n'
+    out += `${line}\n`
   }
   return out
 }
@@ -116,7 +116,7 @@ async function benchmarkParserThroughput(): Promise<void> {
   const term = exp.ghostty_terminal_new(120, 40)
 
   // Write initial data
-  const initData = '\x1b[2J' + 'Line 1\n'.repeat(40)
+  const initData = `\x1b[2J${'Line 1\n'.repeat(40)}`
   const initEnc = new TextEncoder().encode(initData)
   const initPtr = exp.ghostty_wasm_alloc_u8_array(initEnc.length)
   new Uint8Array(mem.buffer).set(initEnc, initPtr)
