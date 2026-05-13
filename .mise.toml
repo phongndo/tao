@@ -1,0 +1,25 @@
+# mise — Tool version manager
+# https://mise.jdx.dev
+#
+# Two backends so contributors can pick whichever they have:
+#   1. mise (lightweight, single binary)
+#   2. Nix flake (reproducible, declarative)
+#
+# Usage:
+#   mise install          # Install all tools
+#   mise trust            # Trust the config (first time)
+#   pnpm install && pnpm dev
+
+[tools]
+node    = "22"        # LTS, matches CI
+pnpm    = "10"        # Package manager
+zig     = "0.13"      # For tau-gl WASM module (when ready)
+
+[env]
+# Ensure node-pty native addon is rebuilt for Electron, not system Node
+ELECTRON_RENDERER_URL = ""  # Set by electron-vite dev, blank for production
+
+[settings]
+always_keep_download = true   # Cache tool downloads
+experimental = false
+verbose = false

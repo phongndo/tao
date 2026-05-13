@@ -3,4 +3,13 @@ out/
 dist/
 *.log
 .DS_Store
+
+# mise (local overrides)
+.mise.local.toml
+
+# direnv
+.direnv/
+
+# nix
+result
 bench/data/
