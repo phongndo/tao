@@ -11,6 +11,7 @@
     "start": "electron .",
     "bench": "tsx bench/benchmark.ts",
     "bench:latency": "bash bench/latency-bench.sh",
+    "bench:ipc": "electron bench/ipc-benchmark.mjs",
     "bench:cross": "bash bench/cross-terminal.sh",
     "bench:startup": "bash bench/startup-bench.sh",
     "bench:all": "bash bench/run-all.sh",

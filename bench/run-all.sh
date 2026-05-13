@@ -19,23 +19,28 @@ echo -e "${BOLD}╚════════════════════�
 echo ""
 
 # 1. Parser benchmark (Node.js, headless)
-echo -e "${CYAN}▶ Bench 1/4: VT Parser Throughput${NC}"
+echo -e "${CYAN}▶ Bench 1/5: VT Parser Throughput${NC}"
 pnpm bench || echo "  (parser benchmark completed with warnings)"
 
 # 2. Latency benchmark
 echo ""
-echo -e "${CYAN}▶ Bench 2/4: Input Latency${NC}"
+echo -e "${CYAN}▶ Bench 2/5: Input Latency${NC}"
 bash "$SCRIPT_DIR/latency-bench.sh" || echo "  (latency benchmark skipped)"
 
 # 3. Cross-terminal throughput
 echo ""
-echo -e "${CYAN}▶ Bench 3/4: Cross-Terminal Throughput${NC}"
+echo -e "${CYAN}▶ Bench 3/5: Cross-Terminal Throughput${NC}"
 bash "$SCRIPT_DIR/cross-terminal.sh" || echo "  (cross-terminal benchmark skipped)"
 
 # 4. Startup time
 echo ""
-echo -e "${CYAN}▶ Bench 4/4: Startup Time${NC}"
+echo -e "${CYAN}▶ Bench 4/5: Startup Time${NC}"
 bash "$SCRIPT_DIR/startup-bench.sh" || echo "  (startup benchmark skipped)"
+
+# 5. Electron IPC transport
+echo ""
+echo -e "${CYAN}▶ Bench 5/5: Electron IPC Transport${NC}"
+pnpm bench:ipc || echo "  (IPC benchmark skipped)"
 
 echo ""
 echo -e "${GREEN}${BOLD}All benchmarks complete.${NC}"
@@ -43,4 +48,4 @@ echo ""
 echo "Results:"
 echo "  bench/results.txt          — cross-terminal throughput"
 echo "  bench/startup-results.txt  — startup time"
-echo "  (parser + latency results printed to stdout above)"
+echo "  (parser + latency + IPC results printed to stdout above)"
