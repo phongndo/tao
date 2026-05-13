@@ -37,18 +37,18 @@ See [PLAN.md](PLAN.md) for methodology and full comparison.
 ## Architecture
 
 ```
-Main Process                    Renderer Process
-┌──────────────┐    IPC    ┌─────────────────────────────┐
-│  node-pty    │◄─────────►│  ghostty-web                │
-│  (real shell)│  buffered │  - Ghostty WASM parser (Zig)│
-│              │  ~16ms    │  - Canvas 2D renderer       │
-└──────────────┘           │  - WebGL renderer (planned) │
-                           └─────────────────────────────┘
+Main Process                 PTY Utility Process              Renderer Process
+┌──────────────┐             ┌──────────────┐   MessagePort   ┌─────────────────────────────┐
+│  Window      │             │  node-pty    │◄───────────────►│  ghostty-web                │
+│  lifecycle   │             │  real shell  │    buffered     │  - Ghostty WASM parser (Zig)│
+│  only        │             │              │    ~16ms        │  - Canvas 2D renderer       │
+└──────────────┘             └──────────────┘                 │  - WebGL renderer (planned) │
+                                                              └─────────────────────────────┘
 ```
 
-- **node-pty**: Spawns a real shell (bash/zsh/fish) with PTY
+- **node-pty**: Runs in an Electron utility process and spawns a real shell (bash/zsh/fish) with PTY
 - **ghostty-web**: Ghostty's production VT emulator compiled to WASM. Same parser as the native Ghostty app.
-- **IPC**: Raw bytes over Electron's `ipcMain`/`ipcRenderer`, batched at 16ms (~60fps)
+- **IPC**: Raw bytes over a direct `MessagePort`, batched at 16ms (~60fps), with main kept off the PTY hot path
 - **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md))
 
 ## Benchmarks
