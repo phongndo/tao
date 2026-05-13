@@ -13,7 +13,7 @@
 [tools]
 node    = "22"        # LTS, matches CI
 pnpm    = "10"        # Package manager
-zig     = "0.13"      # For tau-gl WASM module (when ready)
+zig     = "0.16"      # For tau-gl WASM module (when ready)
 
 [env]
 # Ensure node-pty native addon is rebuilt for Electron, not system Node

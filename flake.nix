@@ -22,7 +22,7 @@
           nativeBuildInputs = with pkgs; [
             nodejs_22          # LTS (matches CI)
             pnpm_10            # Package manager
-            zig_0_13           # For tau-gl WASM module
+            zig_0_16           # For tau-gl WASM module
           ];
 
           # Runtime dependencies for Electron

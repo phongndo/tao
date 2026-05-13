@@ -454,7 +454,7 @@ tau/
 brew install zig
 
 # Verify
-zig version  # Should be 0.14.x or later
+zig version  # Should be 0.16.x or later
 
 # Build the WASM module
 cd tau-gl
