@@ -79,6 +79,8 @@ let mainWindow: BrowserWindow | null = null
 let ptyService: Electron.UtilityProcess | null = null
 let rendererPort: Electron.MessagePortMain | null = null
 
+const WINDOW_SHOW_FALLBACK_MS = 5000
+
 // ─── Window Creation ───
 
 function createWindow() {
@@ -121,6 +123,13 @@ function createWindow() {
     },
   })
 
+  const showFallbackTimer = setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  }, WINDOW_SHOW_FALLBACK_MS)
+
   // Remove menu bar (cleaner look, fewer resources)
   mainWindow.setMenuBarVisibility(false)
 
@@ -132,7 +141,12 @@ function createWindow() {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  mainWindow.once('show', () => {
+    clearTimeout(showFallbackTimer)
+  })
+
   mainWindow.on('closed', () => {
+    clearTimeout(showFallbackTimer)
     disposePtyService()
     mainWindow = null
   })

@@ -53,6 +53,8 @@ async function bootstrap() {
         <h2 style="color:#f7768e;margin-bottom:1rem;">Failed to initialize terminal</h2>
         <pre style="color:#a9b1d6;max-width:80%;overflow:auto;">${message}</pre>
       </div>`
+    // Do not leave the BrowserWindow hidden if terminal initialization failed.
+    window.electronAPI.signalReady()
   }
 }
 

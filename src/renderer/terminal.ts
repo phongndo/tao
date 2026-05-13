@@ -44,11 +44,12 @@ function updateStatus(msg: string) {
 export async function createTerminal(container: HTMLElement): Promise<Terminal> {
   // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
-  console.log('[terminal] Loading Ghostty WASM from /ghostty-vt.wasm...')
+  const wasmUrl = new URL('ghostty-vt.wasm', window.location.href).href
+  console.log(`[terminal] Loading Ghostty WASM from ${wasmUrl}...`)
 
   const t0 = performance.now()
   const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
-    Ghostty.load('/ghostty-vt.wasm'),
+    Ghostty.load(wasmUrl),
     window.electronAPI.getInitialColsRows(),
   ])
   console.log(

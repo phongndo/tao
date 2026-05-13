@@ -15,6 +15,11 @@ const PTY_MAX_BUFFER_CHARS = 64 * 1024 // cap per IPC payload to avoid renderer 
 const PTY_INTERACTIVE_WINDOW_MS = 32
 const PTY_INTERACTIVE_CHARS = 256
 
+// MessagePort/native PTY handles can be insufficient to keep an Electron
+// utility process alive on every platform/build. Keep the service process
+// explicitly alive until the main process kills it during app shutdown.
+const keepAliveTimer = setInterval(() => {}, 60_000)
+
 let rendererReadyForPty = false
 let ptyManager: PtyManager | null = null
 let port: MessagePortMain | null = null
@@ -23,18 +28,15 @@ let ptyBufferedChars = 0
 let ptyFlushTimer: ReturnType<typeof setTimeout> | null = null
 let ptyFlushTimerDelay = 0
 let lastPtyInputAt = 0
-let pendingServiceMessages: PtyServiceMessage[] = []
 
 function postToClient(message: PtyServiceMessage) {
   port?.postMessage(message)
 }
 
 function postOrQueueServiceMessage(message: PtyServiceMessage) {
-  if (!rendererReadyForPty && message.type !== 'data') {
-    pendingServiceMessages.push(message)
-    return
-  }
-
+  // Control messages must be delivered before the renderer marks itself ready:
+  // the renderer waits for `ready` to learn the initial PTY size before it can
+  // create the terminal and send `renderer-ready` back.
   postToClient(message)
 }
 
@@ -57,7 +59,6 @@ function resetPtyBuffer() {
   clearPtyFlushTimer()
   ptyChunks = []
   ptyBufferedChars = 0
-  pendingServiceMessages = []
 }
 
 function sendPtyData(data: string) {
@@ -144,10 +145,6 @@ function handleClientMessage(message: PtyClientMessage) {
     case 'renderer-ready':
       rendererReadyForPty = true
       flushPtyBuffer()
-      for (const pendingMessage of pendingServiceMessages) {
-        postToClient(pendingMessage)
-      }
-      pendingServiceMessages = []
       break
     case 'write':
       if (typeof message.data !== 'string' || message.data.length === 0) return
@@ -202,4 +199,7 @@ parentPort.once('message', (event) => {
   setupPty()
 })
 
-process.once('exit', disposePty)
+process.once('exit', () => {
+  clearInterval(keepAliveTimer)
+  disposePty()
+})
