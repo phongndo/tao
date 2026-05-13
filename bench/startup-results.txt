@@ -1,0 +1,10 @@
+terminal|run|duration_ms
+tau (electron+ghostty)|1|12
+tau (electron+ghostty)|2|12
+tau (electron+ghostty)|3|12
+vscode (xterm.js)|1|12
+vscode (xterm.js)|2|12
+vscode (xterm.js)|3|12
+zed (native)|1|13
+zed (native)|2|12
+zed (native)|3|13
