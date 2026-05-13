@@ -1,46 +1,48 @@
 # Coderabbit Configuration
 # Docs: https://docs.coderabbit.ai
-
-# Reviews are FREE for public repos — no quota, no API keys needed.
-# Coderabbit runs on their own infrastructure, not your subscription.
+# FREE for public repos — no quota, no API keys.
 
 version: 1
 
-# ── When to review ──
+# ── PR Reviews ──
 reviews:
-  # Only review PRs, not direct pushes to main
   request_changes_workflow: true
   high_level_summary: true
-  poem: false # No poems (saves tokens)
+  poem: false
 
-  # Only auto-review when requested (not every PR automatically)
+  # Review ALL PRs from everyone — no gatekeeping
   auto_review:
     enabled: true
-    # Only review PRs that:
-    # - Are opened (not drafts)
-    # - Are from users with at least 1 prior merged PR (avoids spam)
-    # - Are labeled "ready-for-review"
     drafts: false
     base_branches: ["main"]
 
-# ── What to review ──
+  # Skip generated files and binaries
   path_filters:
-    # Skip generated files and lock files
     - "!pnpm-lock.yaml"
     - "!out/**"
     - "!dist/**"
-    - "!public/ghostty-vt.wasm" # 400KB binary, not reviewable
+    - "!public/ghostty-vt.wasm"
     - "!*.png"
     - "!*.svg"
+    - "!*.wasm"
 
-# ── Review depth ──
-chat:
-  auto_reply: true
+# ── Issue Analysis ──
+# Coderabbit can analyze issues and suggest fixes
+issue_analysis:
+  enabled: true
+  auto_analyze:
+    enabled: true
+    labels: ["bug", "enhancement"]
 
+# ── Knowledge Base ──
 knowledge:
-  # Point Coderabbit at your architecture docs
   primary_docs:
     - PLAN.md
     - docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md
     - docs/WEBGL_RENDERER_PLAN.md
     - CONTRIBUTING.md
+    - README.md
+
+# ── Chat ──
+chat:
+  auto_reply: true
