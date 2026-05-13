@@ -60,10 +60,10 @@ Native terminals (Alacritty, Kitty, Ghostty, WezTerm) all use the same pattern:
 
 ```
 ┌─────────────────────────────────────┐
-│  A  B  C  D  E  F  G  H  I  J  ... │  ← One big GPU texture (e.g., 2048×2048)
-│  a  b  c  d  e  f  g  h  i  j  ... │     Each glyph is rasterized ONCE
-│  0  1  2  3  4  5  6  7  8  9  ... │     at font-load time.
-│  !  @  #  $  %  ^  &  *  (  ) ... │
+│  A  B  C  D  E  F  G  H  I  J  ...  │  ← One big GPU texture (e.g., 2048×2048)
+│  a  b  c  d  e  f  g  h  i  j  ...  │     Each glyph is rasterized ONCE
+│  0  1  2  3  4  5  6  7  8  9  ...  │     at font-load time.
+│  !  @  #  $  %  ^  &  *  (  )  ...  │
 │  ...                                │
 └─────────────────────────────────────┘
 ```

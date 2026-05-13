@@ -17,8 +17,8 @@ pnpm start   # Run production build
 
 ```
 Main Process                    Renderer Process
-┌──────────────┐    IPC    ┌─────────────────────────┐
-│  node-pty    │◄─────────►│  ghostty-web             │
+┌──────────────┐    IPC     ┌─────────────────────────┐
+│  node-pty    │◄─────────► │  ghostty-web             │
 │  (real shell)│  raw bytes │  - WASM VT parser (Zig) │
 │              │            │  - Canvas renderer      │
 └──────────────┘            │  - Key encoder (WASM)   │
