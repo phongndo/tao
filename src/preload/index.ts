@@ -1,5 +1,30 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+const ptyDataCallbacks = new Set<(data: string) => void>()
+let ptyDataPort: MessagePort | null = null
+
+function attachPtyDataPort(port: MessagePort) {
+  ptyDataPort?.close()
+  ptyDataPort = port
+
+  ptyDataPort.onmessage = (event: MessageEvent<unknown>) => {
+    if (typeof event.data !== 'string') return
+
+    for (const callback of ptyDataCallbacks) {
+      callback(event.data)
+    }
+  }
+
+  ptyDataPort.start()
+}
+
+ipcRenderer.on('pty:data-port', (event) => {
+  const [port] = event.ports
+  if (!port) return
+
+  attachPtyDataPort(port)
+})
+
 /**
  * The API exposed to the renderer process via contextBridge.
  * This is a minimal, typed surface — the renderer can only call
@@ -31,12 +56,9 @@ const electronAPI = {
    * Register a callback for PTY output data
    */
   onPtyData(callback: (data: string) => void): () => void {
-    const listener = (_event: Electron.IpcRendererEvent, data: string) => {
-      callback(data)
-    }
-    ipcRenderer.on('pty:data', listener)
+    ptyDataCallbacks.add(callback)
     return () => {
-      ipcRenderer.removeListener('pty:data', listener)
+      ptyDataCallbacks.delete(callback)
     }
   },
 
