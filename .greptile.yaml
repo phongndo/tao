@@ -1,0 +1,41 @@
+# Greptile Configuration
+# Docs: https://docs.greptile.com
+
+# Greptile indexes your codebase and provides AI-powered code search
+# and Q&A. Free for public repos.
+
+# ── Repository ──
+repository:
+  # Only index these paths (ignore build artifacts and binaries)
+  include:
+    - src/**
+    - docs/**
+    - bench/**
+    - tau-gl/**
+    - "*.md"
+    - "*.json"
+    - "*.ts"
+    - "*.yaml"
+    - "*.yml"
+
+  exclude:
+    - pnpm-lock.yaml
+    - out/**
+    - dist/**
+    - public/ghostty-vt.wasm
+    - node_modules/**
+
+# ── Indexing ──
+indexing:
+  # What to include in the vector index
+  chunk_size: 800   # characters per chunk
+  chunk_overlap: 100
+
+  # Prioritize architecture docs for Q&A accuracy
+  priority_files:
+    - PLAN.md
+    - docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md
+    - docs/WEBGL_RENDERER_PLAN.md
+    - CONTRIBUTING.md
+    - src/main/index.ts
+    - src/renderer/terminal.ts
