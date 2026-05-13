@@ -40,7 +40,6 @@ tau/
 │   ├── main/           # Electron main process (window, PTY, IPC)
 │   ├── preload/        # contextBridge (security boundary)
 │   └── renderer/       # Terminal UI (ghostty-web + rendering)
-├── tau-gl/             # Zig WASM vertex packer (planned)
 ├── bench/              # Benchmark suite
 ├── docs/               # Architecture + plans
 └── .github/            # CI + templates
@@ -48,12 +47,11 @@ tau/
 
 ## Architecture
 
-See [PLAN.md](PLAN.md) for the full architecture deep-dive and [docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md](docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md) for the WebGL renderer plan.
+See [PLAN.md](PLAN.md) for the full architecture deep-dive.
 
 ## Code Style
 
 - **TypeScript**: Biome (format + lint). `pnpm fmt` to auto-format.
-- **Zig**: `zig fmt` (when the Zig module is added).
 - **Commit messages**: [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## License
