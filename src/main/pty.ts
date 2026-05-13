@@ -8,10 +8,15 @@ export interface PtyExitInfo {
 type DataCallback = (data: string) => void
 type ExitCallback = (info: PtyExitInfo) => void
 
+const DEFAULT_COLS = 80
+const DEFAULT_ROWS = 24
+
 export class PtyManager {
   private ptyProcess: pty.IPty
   private dataCallbacks: DataCallback[] = []
   private exitCallbacks: ExitCallback[] = []
+  private cols = DEFAULT_COLS
+  private rows = DEFAULT_ROWS
 
   constructor(shell: string) {
     const env = Object.assign({}, process.env as Record<string, string>, {
@@ -21,8 +26,8 @@ export class PtyManager {
 
     this.ptyProcess = pty.spawn(shell, [], {
       name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
+      cols: this.cols,
+      rows: this.rows,
       cwd: process.env.HOME || process.cwd(),
       env,
     })
@@ -58,19 +63,28 @@ export class PtyManager {
   }
 
   write(data: string): void {
+    if (data.length === 0) return
     this.ptyProcess.write(data)
   }
 
   resize(cols: number, rows: number): void {
+    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return
+
+    const nextCols = Math.max(2, Math.floor(cols))
+    const nextRows = Math.max(1, Math.floor(rows))
+    if (nextCols === this.cols && nextRows === this.rows) return
+
     try {
-      this.ptyProcess.resize(cols, rows)
+      this.ptyProcess.resize(nextCols, nextRows)
+      this.cols = nextCols
+      this.rows = nextRows
     } catch (err) {
       console.error('[pty] resize error:', err)
     }
   }
 
   getColsRows(): { cols: number; rows: number } {
-    return { cols: this.ptyProcess.cols, rows: this.ptyProcess.rows }
+    return { cols: this.cols, rows: this.rows }
   }
 
   dispose(): void {

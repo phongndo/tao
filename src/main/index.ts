@@ -16,8 +16,8 @@
  *   - WASM preloaded in parallel with PTY spawn
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { PtyManager } from './pty'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
@@ -65,10 +65,9 @@ const enableFeatures = [
 
 app.commandLine.appendSwitch('enable-features', enableFeatures)
 
-// V8: reduce max heap size. Terminal workloads are steady-state,
-// not bursty allocations. A smaller heap means less GC pause time
-// and lower memory footprint. 256MB is plenty for one terminal window.
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=256 --optimize-for-size')
+// V8: cap old-space for predictable GC without forcing size-optimized codegen.
+// Terminal workloads are steady-state; 256MB is plenty for one terminal window.
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=256')
 
 // Limit to 1 renderer process. We only have one window.
 // This avoids the overhead of a spare renderer process sitting idle.
@@ -77,10 +76,12 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 // ─── Application State ───
 
 let mainWindow: BrowserWindow | null = null
+let rendererReadyForPty = false
 
 // ─── Window Creation ───
 
 function createWindow() {
+  rendererReadyForPty = false
   mainWindow = new BrowserWindow({
     width: 900,
     height: 600,
@@ -120,13 +121,6 @@ function createWindow() {
     },
   })
 
-  // Show window only when renderer signals terminal is ready
-  ipcMain.once('renderer:ready', () => {
-    mainWindow?.show()
-    // Focus the window so the terminal receives keyboard input immediately
-    mainWindow?.focus()
-  })
-
   // Remove menu bar (cleaner look, fewer resources)
   mainWindow.setMenuBarVisibility(false)
 
@@ -139,6 +133,7 @@ function createWindow() {
   }
 
   mainWindow.on('closed', () => {
+    rendererReadyForPty = false
     mainWindow = null
   })
 }
@@ -146,33 +141,106 @@ function createWindow() {
 // ─── PTY with Output Batching ───
 //
 // Instead of sending every PTY byte to the renderer as it arrives,
-// we buffer output for up to 16ms (one frame) and flush in one IPC message.
-// This reduces IPC message count by 10-100× during heavy output
-// (e.g., `cat bigfile`, compiler output) and aligns data delivery
-// with the renderer's rAF loop.
+// we adaptively batch output: tiny echoes flush almost immediately,
+// while bulk output is frame-batched and size-capped. This keeps input
+// latency low without letting a huge IPC payload jank the renderer.
 
 let ptyManager: PtyManager | null = null
-let ptyBuffer = ''
+let ptyChunks: string[] = []
+let ptyBufferedChars = 0
 let ptyFlushTimer: ReturnType<typeof setTimeout> | null = null
+let ptyFlushTimerDelay = 0
+let lastPtyInputAt = 0
 
-const PTY_FLUSH_INTERVAL = 16 // ms (~60fps)
+const PTY_FLUSH_INTERVAL = 16 // ms (~60fps) for bulk output
+const PTY_INTERACTIVE_FLUSH_INTERVAL = 1 // ms, keeps typed-key echo snappy
+const PTY_MAX_BUFFER_CHARS = 64 * 1024 // cap per IPC payload to avoid renderer jank
+const PTY_INTERACTIVE_WINDOW_MS = 32
+const PTY_INTERACTIVE_CHARS = 256
 
-function flushPtyBuffer() {
-  if (ptyBuffer.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('pty:data', ptyBuffer)
-    ptyBuffer = ''
-  }
-  ptyFlushTimer = null
+function hasLiveRenderer(): boolean {
+  return rendererReadyForPty && mainWindow !== null && !mainWindow.isDestroyed()
 }
 
-function schedulePtyFlush() {
-  if (ptyFlushTimer === null) {
-    ptyFlushTimer = setTimeout(flushPtyBuffer, PTY_FLUSH_INTERVAL)
+function clearPtyFlushTimer() {
+  if (ptyFlushTimer !== null) {
+    clearTimeout(ptyFlushTimer)
+    ptyFlushTimer = null
+    ptyFlushTimerDelay = 0
   }
+}
+
+function takePtyBuffer(): string {
+  const data = ptyChunks.length === 1 ? ptyChunks[0] : ptyChunks.join('')
+  ptyChunks = []
+  ptyBufferedChars = 0
+  return data
+}
+
+function resetPtyBuffer() {
+  clearPtyFlushTimer()
+  ptyChunks = []
+  ptyBufferedChars = 0
+}
+
+function sendPtyData(data: string) {
+  if (data.length === 0 || !mainWindow || mainWindow.isDestroyed()) return
+
+  for (let start = 0; start < data.length; ) {
+    let end = Math.min(start + PTY_MAX_BUFFER_CHARS, data.length)
+    // Avoid splitting surrogate pairs when a chunk contains wide Unicode input.
+    if (end < data.length) {
+      const code = data.charCodeAt(end)
+      if (code >= 0xdc00 && code <= 0xdfff) end--
+    }
+
+    mainWindow.webContents.send('pty:data', data.slice(start, end))
+    start = end
+  }
+}
+
+function flushPtyBuffer() {
+  clearPtyFlushTimer()
+  if (ptyBufferedChars === 0 || !hasLiveRenderer()) return
+
+  sendPtyData(takePtyBuffer())
+}
+
+function schedulePtyFlush(delay: number) {
+  if (!hasLiveRenderer()) return
+  if (ptyFlushTimer !== null && delay >= ptyFlushTimerDelay) return
+
+  clearPtyFlushTimer()
+  ptyFlushTimerDelay = delay
+  ptyFlushTimer = setTimeout(flushPtyBuffer, delay)
+}
+
+function bufferPtyData(data: string) {
+  if (data.length === 0) return
+
+  ptyChunks.push(data)
+  ptyBufferedChars += data.length
+
+  // Keep shell startup output until the renderer has registered its IPC listener.
+  if (!hasLiveRenderer()) return
+
+  if (ptyBufferedChars >= PTY_MAX_BUFFER_CHARS) {
+    flushPtyBuffer()
+    return
+  }
+
+  const isInteractiveEcho =
+    data.length <= PTY_INTERACTIVE_CHARS && Date.now() - lastPtyInputAt <= PTY_INTERACTIVE_WINDOW_MS
+
+  schedulePtyFlush(isInteractiveEcho ? PTY_INTERACTIVE_FLUSH_INTERVAL : PTY_FLUSH_INTERVAL)
 }
 
 function setupPty() {
   if (!mainWindow) return
+
+  ptyManager?.dispose()
+  ptyManager = null
+  resetPtyBuffer()
 
   const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
   console.log(`[main] Spawning PTY with shell: ${shell}`)
@@ -180,10 +248,9 @@ function setupPty() {
   try {
     ptyManager = new PtyManager(shell)
 
-    // PTY output → buffered IPC (reduces message count 10-100×)
+    // PTY output → adaptive buffered IPC (low latency for echo, batched for bulk output)
     ptyManager.onData((data: string) => {
-      ptyBuffer += data
-      schedulePtyFlush()
+      bufferPtyData(data)
     })
 
     // Handle pty exit
@@ -201,11 +268,26 @@ function setupPty() {
 
 // ─── IPC Handlers ───
 
+ipcMain.on('renderer:ready', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
+
+  rendererReadyForPty = true
+  flushPtyBuffer()
+
+  mainWindow?.show()
+  // Focus the window so the terminal receives keyboard input immediately
+  mainWindow?.focus()
+})
+
 ipcMain.on('pty:write', (_event, data: string) => {
+  if (typeof data !== 'string' || data.length === 0) return
+
+  lastPtyInputAt = Date.now()
   ptyManager?.write(data)
 })
 
 ipcMain.on('pty:resize', (_event, cols: number, rows: number) => {
+  if (typeof cols !== 'number' || typeof rows !== 'number') return
   ptyManager?.resize(cols, rows)
 })
 
@@ -229,7 +311,10 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   flushPtyBuffer()
+  resetPtyBuffer()
   ptyManager?.dispose()
+  ptyManager = null
+  rendererReadyForPty = false
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -237,5 +322,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   flushPtyBuffer()
+  resetPtyBuffer()
   ptyManager?.dispose()
+  ptyManager = null
 })
