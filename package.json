@@ -9,7 +9,14 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron .",
-    "bench": "npx tsx bench/benchmark.ts"
+    "bench": "npx tsx bench/benchmark.ts",
+    "fmt": "biome format --write src/",
+    "fmt:check": "biome format src/",
+    "lint": "biome lint src/",
+    "lint:fix": "biome lint --write src/",
+    "check": "biome check src/",
+    "check:fix": "biome check --write src/",
+    "tsc": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "keywords": [
     "terminal",
@@ -26,6 +33,7 @@
     ]
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
     "@electron/rebuild": "^4.0.4",
     "@types/node": "^25.7.0",
     "@xterm/xterm": "^6.0.0",
@@ -35,7 +43,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "ghostty-web": "^0.4.0",
+    "ghostty-web": "0.4.0-next.14.g6a1a50d",
     "node-pty": "^1.1.0"
   }
 }

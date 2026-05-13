@@ -1,0 +1,26 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "off"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "semicolons": "asNeeded",
+      "quoteStyle": "single",
+      "trailingCommas": "all"
+    }
+  },
+  "files": {
+    "ignore": ["out", "dist", "node_modules", "pnpm-lock.yaml", "public/ghostty-vt.wasm"]
+  }
+}

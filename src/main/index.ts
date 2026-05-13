@@ -10,7 +10,7 @@ function createWindow() {
     height: 600,
     minWidth: 400,
     minHeight: 300,
-    backgroundColor: '#1a1b26',
+    backgroundColor: '#151515',
     title: 'Tau Terminal',
     show: false, // Hide until terminal is ready (instant-open feel)
     webPreferences: {

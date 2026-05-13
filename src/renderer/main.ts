@@ -1,6 +1,21 @@
 import { createTerminal } from './terminal'
 import './styles.css'
 
+// ── Suppress ghostty-vt OSC warnings ──
+// nvim sends OSC queries (11;?, 12;?, 22;, 66;*, 112) and ghostty-web's
+// WASM layer logs a warning for each because no OSC allocator is configured.
+// These are cosmetic — nvim falls back to defaults — but they spam the console.
+// We silence them so real errors aren't buried.
+{
+  const originalWarn = console.warn.bind(console)
+  console.warn = (...args: any[]) => {
+    const msg = args.join(' ')
+    if (msg.includes('[ghostty-vt]') && msg.includes('warning(osc)')) return
+    if (msg.includes('[ghostty-vt]') && msg.includes('invalid OSC')) return
+    originalWarn(...args)
+  }
+}
+
 // Guard against HMR double-initialization (Vite hot reload re-runs this module)
 let initialized = false
 

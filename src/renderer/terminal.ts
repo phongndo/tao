@@ -1,31 +1,32 @@
 import { Ghostty, Terminal, FitAddon } from 'ghostty-web'
 
 /**
- * Tokyo Night Storm theme.
+ * Tau Default — based on Mellow by @kvparik (shipped with Ghostty).
+ * https://github.com/ghostty-org/ghostty
  */
 const THEME = {
-  background: '#1a1b26',
-  foreground: '#a9b1d6',
-  cursor: '#c0caf5',
-  cursorAccent: '#1a1b26',
-  selectionBackground: '#364A82',
-  selectionForeground: '#c0caf5',
-  black: '#32344a',
-  red: '#f7768e',
-  green: '#9ece6a',
-  yellow: '#e0af68',
-  blue: '#7aa2f7',
-  magenta: '#ad8ee6',
-  cyan: '#449dab',
-  white: '#9699a8',
-  brightBlack: '#444b6a',
-  brightRed: '#ff7a93',
-  brightGreen: '#b9f27c',
-  brightYellow: '#ff9e64',
-  brightBlue: '#7da6ff',
-  brightMagenta: '#bb9af7',
-  brightCyan: '#0db9d7',
-  brightWhite: '#acb0d0',
+  background: '#151515',
+  foreground: '#c9c7cd',
+  cursor: '#cac9dd',
+  cursorAccent: '#151515',
+  selectionBackground: '#2a2a2d',
+  selectionForeground: '#c1c0d4',
+  black: '#27272a',
+  red: '#f5a191',
+  green: '#90b99f',
+  yellow: '#e6b99d',
+  blue: '#aca1cf',
+  magenta: '#e29eca',
+  cyan: '#ea83a5',
+  white: '#c1c0d4',
+  brightBlack: '#424246',
+  brightRed: '#ffae9f',
+  brightGreen: '#9dc6ac',
+  brightYellow: '#f0c5a9',
+  brightBlue: '#b9aeda',
+  brightMagenta: '#ecaad6',
+  brightCyan: '#f591b2',
+  brightWhite: '#cac9dd',
 }
 
 function updateStatus(msg: string) {
@@ -66,8 +67,8 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     fontSize: 14,
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     theme: THEME,
-    cursorBlink: true,
-    cursorStyle: 'bar',
+    cursorBlink: false,
+    cursorStyle: 'block',
     scrollback: 10000,
     allowTransparency: false,
   })
@@ -97,6 +98,7 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     term.write(data)
   })
 
+  // Terminal input → PTY (no debug overhead)
   term.onData((data: string) => {
     window.electronAPI.sendPtyInput(data)
   })
