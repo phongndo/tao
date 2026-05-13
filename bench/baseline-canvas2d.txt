@@ -1,0 +1,39 @@
+╔══════════════════════════════════════════════╗
+║   Renderer Baseline: Canvas 2D Performance  ║
+╚══════════════════════════════════════════════╝
+
+Measuring VT parser + cell grid update time.
+(Canvas 2D rendering not measured in Node.js)
+
+─── 1. Parser Throughput ───
+  cat 1MB (plain)        parse:   23.0 ms  (   44 MB/s)  cells:   0.29 ms  (1997.4M cells/s)
+  cat 10MB (plain)       parse:  131.9 ms  (   76 MB/s)  cells:   0.12 ms  (4826.8M cells/s)
+  cat 50MB (plain)       parse:  661.6 ms  (   76 MB/s)  cells:   0.08 ms  (6887.9M cells/s)
+  compiler 1MB (ANSI)    parse:   42.8 ms  (   23 MB/s)  cells:   0.08 ms  (7372.8M cells/s)
+  compiler 10MB (ANSI)   parse:  399.0 ms  (   25 MB/s)  cells:   0.07 ms  (8032.6M cells/s)
+  mixed 10MB             parse:  309.5 ms  (   32 MB/s)  cells:   0.07 ms  (8501.8M cells/s)
+
+─── 2. Dirty Row Tracking (simulated normal use) ───
+  avg frame: 0.03 ms
+  p50:       0.03 ms
+  p95:       0.04 ms
+  p99:       0.14 ms
+  max:       0.14 ms
+  frames:    100
+
+─── 3. Full Redraw (all 1,920 cells) ───
+  avg full redraw (JS loop): 0.16 ms
+  per cell:                  0.09 μs
+  total cells/frame:         1920
+
+╔══════════════════════════════════════════════╗
+║   BASELINE CAPTURED                         ║
+║                                              ║
+║   Parser throughput:       43 MB/s (10MB)        ║
+║   Per-frame (dirty rows):  0.03 ms              ║
+║   Full redraw (JS loop):   0.16 ms              ║
+║   Per-cell (JS):           0.09 μs          ║
+╚══════════════════════════════════════════════╝
+
+Save this output to: bench/baseline-canvas2d.txt
+After WebGL renderer is built, run again and compare.
