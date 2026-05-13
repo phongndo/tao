@@ -9,7 +9,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron .",
-    "bench": "npx tsx bench/benchmark.ts",
+    "bench": "tsx bench/benchmark.ts",
     "bench:latency": "bash bench/latency-bench.sh",
     "bench:cross": "bash bench/cross-terminal.sh",
     "bench:startup": "bash bench/startup-bench.sh",
