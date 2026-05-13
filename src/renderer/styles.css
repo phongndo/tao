@@ -1,0 +1,53 @@
+/* ── Reset & full-bleed layout ── */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #1a1b26;
+  color: #a9b1d6;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Terminal container fills the window ── */
+#terminal-container {
+  width: 100%;
+  height: 100%;
+  /*
+   * Promote to its own compositor layer for smoother rendering.
+   * The canvas inside will also be GPU-accelerated by Chromium.
+   */
+  contain: strict;
+}
+
+/* ── Canvas: crisp pixel alignment ── */
+#terminal-container canvas {
+  display: block;
+  image-rendering: auto;
+}
+
+/* ── Hidden textarea (ghostty-web renders to canvas, 
+      but keeps a textarea for focus/IME) ── */
+#terminal-container textarea {
+  opacity: 0;
+  position: absolute;
+  pointer-events: none;
+}
+
+/* ── Scrollbar styling (ghostty-web renders its own) ── */
+
+/* ── Selection color overrides ── */
+#terminal-container ::selection {
+  background: #364a82;
+  color: #c0caf5;
+}

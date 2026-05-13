@@ -1,0 +1,41 @@
+{
+  "name": "tau",
+  "version": "1.0.0",
+  "description": "A super-performant terminal emulator built with Electron + ghostty-web",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron .",
+    "bench": "npx tsx bench/benchmark.ts"
+  },
+  "keywords": [
+    "terminal",
+    "emulator",
+    "electron",
+    "ghostty"
+  ],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.33.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/node": "^25.7.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^42.0.1",
+    "electron-vite": "^5.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "ghostty-web": "^0.4.0",
+    "node-pty": "^1.1.0"
+  }
+}
