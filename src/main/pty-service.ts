@@ -23,9 +23,19 @@ let ptyBufferedChars = 0
 let ptyFlushTimer: ReturnType<typeof setTimeout> | null = null
 let ptyFlushTimerDelay = 0
 let lastPtyInputAt = 0
+let pendingServiceMessages: PtyServiceMessage[] = []
 
 function postToClient(message: PtyServiceMessage) {
   port?.postMessage(message)
+}
+
+function postOrQueueServiceMessage(message: PtyServiceMessage) {
+  if (!rendererReadyForPty && message.type !== 'data') {
+    pendingServiceMessages.push(message)
+    return
+  }
+
+  postToClient(message)
 }
 
 function clearPtyFlushTimer() {
@@ -47,6 +57,7 @@ function resetPtyBuffer() {
   clearPtyFlushTimer()
   ptyChunks = []
   ptyBufferedChars = 0
+  pendingServiceMessages = []
 }
 
 function sendPtyData(data: string) {
@@ -112,12 +123,12 @@ function setupPty() {
       flushPtyBuffer()
       console.log(`[pty-service] PTY exited with code ${exitCode}, signal ${signal}`)
       ptyManager = null
-      postToClient({ type: 'exit', info: { exitCode, signal } })
+      postOrQueueServiceMessage({ type: 'exit', info: { exitCode, signal } })
     })
-    postToClient({ type: 'ready', size: ptyManager.getColsRows() })
+    postOrQueueServiceMessage({ type: 'ready', size: ptyManager.getColsRows() })
   } catch (err) {
     console.error('[pty-service] Failed to spawn PTY:', err)
-    postToClient({ type: 'error', error: String(err) })
+    postOrQueueServiceMessage({ type: 'error', error: String(err) })
   }
 }
 
@@ -133,6 +144,10 @@ function handleClientMessage(message: PtyClientMessage) {
     case 'renderer-ready':
       rendererReadyForPty = true
       flushPtyBuffer()
+      for (const pendingMessage of pendingServiceMessages) {
+        postToClient(pendingMessage)
+      }
+      pendingServiceMessages = []
       break
     case 'write':
       if (typeof message.data !== 'string' || message.data.length === 0) return
