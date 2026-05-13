@@ -15,10 +15,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm tsc
-      - run: pnpm lint
-      - run: pnpm fmt:check
+      - run: |
+          echo "=== Environment ==="
+          node --version
+          pnpm --version
+          echo "=== Install ==="
+          pnpm install --frozen-lockfile
+          echo "=== Type Check ==="
+          pnpm tsc
+          echo "=== Lint ==="
+          pnpm lint
+          echo "=== Format Check ==="
+          pnpm fmt:check
 
   build:
     runs-on: ubuntu-latest
