@@ -1,4 +1,4 @@
-import { Ghostty, Terminal, FitAddon } from 'ghostty-web'
+import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
 
 /**
  * Tau Default — based on Mellow by @kvparik (shipped with Ghostty).
@@ -42,20 +42,21 @@ function updateStatus(msg: string) {
 }
 
 export async function createTerminal(container: HTMLElement): Promise<Terminal> {
-  // Step 1: Load Ghostty WASM explicitly from the public path
+  // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
   console.log('[terminal] Loading Ghostty WASM from /ghostty-vt.wasm...')
 
   const t0 = performance.now()
-  const ghostty = await Ghostty.load('/ghostty-vt.wasm')
-  console.log(`[terminal] Ghostty WASM loaded in ${(performance.now() - t0).toFixed(0)}ms`)
-
-  // Step 2: Get PTY dimensions
-  console.log('[terminal] Getting initial PTY dimensions...')
-  const { cols: initialCols, rows: initialRows } = await window.electronAPI.getInitialColsRows()
+  const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
+    Ghostty.load('/ghostty-vt.wasm'),
+    window.electronAPI.getInitialColsRows(),
+  ])
+  console.log(
+    `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
+  )
   console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
 
-  // Step 3: Create terminal instance (with pre-loaded Ghostty)
+  // Step 2: Create terminal instance (with pre-loaded Ghostty)
   updateStatus('Creating terminal...')
   console.log('[terminal] Creating Terminal instance...')
 
@@ -72,7 +73,7 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     allowTransparency: false,
   })
 
-  // Step 4: Clear container and open terminal
+  // Step 3: Clear container and open terminal
   updateStatus('Opening terminal...')
   console.log('[terminal] Opening terminal...')
 
@@ -90,7 +91,7 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     throw err
   }
 
-  // Step 5: Wire IPC
+  // Step 4: Wire IPC
   console.log('[terminal] Wiring IPC...')
 
   const unsubPtyData = window.electronAPI.onPtyData((data: string) => {
