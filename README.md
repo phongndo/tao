@@ -39,10 +39,10 @@ See [PLAN.md](PLAN.md) for methodology and full comparison.
 ```
 Main Process                    Renderer Process
 ┌──────────────┐    IPC    ┌─────────────────────────────┐
-│  node-pty    │◄─────────►│  ghostty-web                 │
-│  (real shell)│  buffered │  - Ghostty WASM parser (Zig) │
-│              │  ~16ms    │  - Canvas 2D renderer        │
-└──────────────┘           │  - WebGL renderer (planned)  │
+│  node-pty    │◄─────────►│  ghostty-web                │
+│  (real shell)│  buffered │  - Ghostty WASM parser (Zig)│
+│              │  ~16ms    │  - Canvas 2D renderer       │
+└──────────────┘           │  - WebGL renderer (planned) │
                            └─────────────────────────────┘
 ```
 

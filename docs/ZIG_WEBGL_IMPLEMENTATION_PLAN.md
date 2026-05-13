@@ -13,9 +13,9 @@ Two WASM modules in the renderer process:
 │  │  Dirty row tracking, scrollback, cursor state       │  │
 │  │  Exports: getViewport(), isRowDirty(), etc.         │  │
 │  └─────────────────────────────────────────────────────┘  │
-│                         │                                  │
-│                         │ GhosttyCell[] (WASM memory)      │
-│                         ▼                                  │
+│                         │                                 │
+│                         │ GhosttyCell[] (WASM memory)     │
+│                         ▼                                 │
 │  tau-gl.wasm (Zig, NEW, ~30KB)                            │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │  Input:  GhosttyCell[] pointer + count              │  │
@@ -26,12 +26,12 @@ Two WASM modules in the renderer process:
 │  │    codepoint → atlas slot lookup (hash map)         │  │
 │  │    compute (x, y) on screen from (col, row)         │  │
 │  │    compute (u, v) in atlas from slot (col, row)     │  │
-│  │    pack 4 vertices × 10 floats = 40 floats/cell    │  │
+│  │    pack 4 vertices × 10 floats = 40 floats/cell     │  │
 │  │    handle missing glyphs → request atlas update     │  │
 │  └─────────────────────────────────────────────────────┘  │
-│                         │                                  │
-│                         │ Float32Array (shared memory)     │
-│                         ▼                                  │
+│                         │                                 │
+│                         │ Float32Array (shared memory)    │
+│                         ▼                                 │
 │  WebGL Renderer (TypeScript, ~200 lines)                  │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │  1. gl.bindTexture(atlas)                           │  │
@@ -42,8 +42,8 @@ Two WASM modules in the renderer process:
 │  Atlas Manager (TypeScript, ~150 lines)                   │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │  Offscreen canvas rasterizes new glyphs             │  │
-│  │  Uploads to WebGL texture when atlas grows           │  │
-│  │  Reports atlas layout to tau-gl.wasm                 │  │
+│  │  Uploads to WebGL texture when atlas grows          │  │
+│  │  Reports atlas layout to tau-gl.wasm                │  │
 │  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────┘
 ```
