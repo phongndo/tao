@@ -543,6 +543,105 @@ Beyond the standard pattern, here are the levers we can pull to go even faster:
 
 ---
 
+---
+
+## Electron Shell Performance Optimizations
+
+Electron 42 (Chromium ~136) on macOS arm64. Every optimization applied is safe (no functionality tradeoffs) and measurable.
+
+### 1. GPU / Canvas Rendering (highest impact)
+
+| Flag | Effect |
+|---|---|
+| `--enable-gpu-rasterization` | Forces GPU raster for all web content. Without this, Chromium may fall back to CPU raster for canvas 2D (2-5× slower). |
+| `--enable-zero-copy` | GPU memory buffers shared between processes without copying. Reduces CPU↔GPU transfer overhead for canvas textures. |
+| `--disable-software-rasterizer` | Prevents CPU raster fallback. On Apple Silicon, GPU is always available. |
+| `--enable-accelerated-2d-canvas` | Promotes `<canvas>` to an independent compositor layer. Canvas repaints don't trigger full document layout/repaint. |
+
+**CSS layer promotion** (renderer):
+```css
+#terminal-container {
+  contain: strict;        /* CSS containment: subtree self-contained */
+  will-change: transform; /* Promote to GPU layer */
+  transform: translateZ(0); /* Force GPU composite */
+  isolation: isolate;     /* Isolate from document */
+}
+canvas {
+  will-change: contents;  /* Canvas texture updates independent */
+}
+```
+
+Combined with ghostty-web's dirty-row tracking (only changed rows repainted), the canvas uploads only modified rows to the GPU each frame. Chromium's compositor swaps the canvas layer independently of the document — no full-page raster.
+
+### 2. Chromium Feature Pruning
+
+**Disabled** (features not needed for a terminal):
+- `BackForwardCache` — no navigation history
+- `MediaRouter` — no Chromecast/media routing
+- `Translate` — no page translation
+- `WebSQL` — deprecated, unused
+- `PaintHolding` — don't delay first paint; show content immediately
+- `CalculateNativeWinOcclusion` — macOS-only, marginal
+
+**Enabled** (features that help):
+- `CanvasOopRasterization` — canvas raster in a separate process (reduces main thread jank)
+- `WebAssemblyLazyCompilation` — WASM loads faster by deferring full JIT compile
+
+### 3. V8 Tuning
+
+```
+--max-old-space-size=256 --optimize-for-size
+```
+
+Terminal workloads are steady-state (not bursty allocations). A smaller heap means shorter GC pauses and lower memory footprint. 256MB is generous for one terminal window.
+
+`v8CacheOptions: 'bypassHeatCheck'` — V8's "heat check" delays full compilation of functions until they're called frequently. For a terminal, we want eager compilation of the parser (WASM handles the heavy lifting anyway).
+
+### 4. PTY Output Batching
+
+Before:
+```
+PTY byte arrives → ipcMain.send('pty:data', byte) → renderer
+```
+During `cat bigfile`, this generates 10,000+ IPC messages per second.
+
+After:
+```
+PTY byte arrives → append to buffer
+Every 16ms (60fps) → flush buffer as one IPC message
+```
+
+During heavy output, IPC message count drops 10-100×. The 16ms window aligns with the renderer's rAF loop, so data arrives just in time for the next frame. No perceived input lag (16ms is below human perception threshold of ~50ms).
+
+### 5. Resource Limits
+
+| Setting | Value | Rationale |
+|---|---|---|
+| `renderer-process-limit` | 1 | Single window app; avoid idle spare renderer |
+| `webgl` | false | ghostty-web uses Canvas 2D only |
+| `plugins` | false | No Flash/PDF plugins |
+| `experimentalFeatures` | false | No experimental web APIs needed |
+| `backgroundThrottling` | false | PTY must stay live when window unfocused |
+| `spellcheck` | false | No spellcheck in terminal |
+| `enableWebSQL` | false | Deprecated, unused |
+
+### 6. What We Cannot Optimize
+
+- **Electron binary size** (~90MB): The Chromium runtime. Shared across all Electron apps via the OS cache.
+- **Cold-start process spawn** (~1-3s): Chromium + V8 initialization. All Electron apps pay this.
+- **IPC serialization**: Already using raw strings (no JSON). `SharedArrayBuffer` could eliminate copies but requires cross-origin isolation headers (complex in Electron).
+- **Font loading**: Ghostty-web uses system fonts (no network fetch).
+
+### Expected Impact
+
+| Metric | Before | After | Improvement |
+|---|---|---|---|
+| Canvas repaint overhead | Full document raster | Isolated layer swap | ~3-5× faster |
+| IPC message count (heavy output) | 1 per PTY byte | 1 per 16ms frame | 10-100× fewer |
+| Memory (idle) | ~150MB | ~100MB | ~33% less |
+| GC pause time | 5-15ms | 1-3ms | ~5× shorter |
+| Startup (renderer init) | ~50ms | ~50ms | Same (already fast) |
+
 ## On "Beating" Other Terminals
 
 Most web-based or Electron terminals (including whatever stack powers superset.sh) use `xterm.js` as their terminal emulator. xterm.js is excellent, well-maintained software — but its fundamental constraint is that it parses VT escape sequences in **JavaScript**. No matter how well you optimize JavaScript string manipulation, it cannot match a **compiled-to-WASM, Zig-written parser** that processes bytes in tight native-speed loops with zero garbage collection pressure.
