@@ -17,7 +17,7 @@
  */
 
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, MessageChannelMain, type MessagePortMain, ipcMain } from 'electron'
 import { PtyManager } from './pty'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
@@ -77,6 +77,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 let mainWindow: BrowserWindow | null = null
 let rendererReadyForPty = false
+let ptyDataPort: MessagePortMain | null = null
 
 // ─── Window Creation ───
 
@@ -134,6 +135,7 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     rendererReadyForPty = false
+    closePtyDataPort()
     mainWindow = null
   })
 }
@@ -159,7 +161,34 @@ const PTY_INTERACTIVE_WINDOW_MS = 32
 const PTY_INTERACTIVE_CHARS = 256
 
 function hasLiveRenderer(): boolean {
-  return rendererReadyForPty && mainWindow !== null && !mainWindow.isDestroyed()
+  return (
+    rendererReadyForPty && mainWindow !== null && !mainWindow.isDestroyed() && ptyDataPort !== null
+  )
+}
+
+function closePtyDataPort() {
+  if (ptyDataPort === null) return
+
+  ptyDataPort.close()
+  ptyDataPort = null
+}
+
+function setupPtyDataPort() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  closePtyDataPort()
+
+  const { port1, port2 } = new MessageChannelMain()
+  ptyDataPort = port1
+  ptyDataPort.start()
+  ptyDataPort.once('close', () => {
+    if (ptyDataPort === port1) {
+      ptyDataPort = null
+      rendererReadyForPty = false
+    }
+  })
+
+  mainWindow.webContents.postMessage('pty:data-port', null, [port2])
 }
 
 function clearPtyFlushTimer() {
@@ -184,7 +213,7 @@ function resetPtyBuffer() {
 }
 
 function sendPtyData(data: string) {
-  if (data.length === 0 || !mainWindow || mainWindow.isDestroyed()) return
+  if (data.length === 0 || ptyDataPort === null) return
 
   for (let start = 0; start < data.length; ) {
     let end = Math.min(start + PTY_MAX_BUFFER_CHARS, data.length)
@@ -194,7 +223,7 @@ function sendPtyData(data: string) {
       if (code >= 0xdc00 && code <= 0xdfff) end--
     }
 
-    mainWindow.webContents.send('pty:data', data.slice(start, end))
+    ptyDataPort.postMessage(data.slice(start, end))
     start = end
   }
 }
@@ -271,6 +300,7 @@ function setupPty() {
 ipcMain.on('renderer:ready', (event) => {
   if (event.sender !== mainWindow?.webContents) return
 
+  setupPtyDataPort()
   rendererReadyForPty = true
   flushPtyBuffer()
 
@@ -312,6 +342,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   flushPtyBuffer()
   resetPtyBuffer()
+  closePtyDataPort()
   ptyManager?.dispose()
   ptyManager = null
   rendererReadyForPty = false
@@ -323,6 +354,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   flushPtyBuffer()
   resetPtyBuffer()
+  closePtyDataPort()
   ptyManager?.dispose()
   ptyManager = null
 })
