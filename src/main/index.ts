@@ -155,16 +155,40 @@ function setupPtyService() {
   disposePtyService()
 
   const { port1, port2 } = new MessageChannelMain()
-  ptyService = utilityProcess.fork(ptyServicePath, [], {
-    serviceName: 'Tau PTY Service',
-    stdio: 'inherit',
-  })
+  let service: Electron.UtilityProcess
+  try {
+    service = utilityProcess.fork(ptyServicePath, [], {
+      serviceName: 'Tau PTY Service',
+      stdio: 'inherit',
+    })
+  } catch (err) {
+    port1.close()
+    port2.close()
+    notifyPtyServiceError(`Failed to start PTY service: ${String(err)}`)
+    return
+  }
+
+  ptyService = service
   rendererPort = port2
   ptyService.postMessage({ type: 'connect' }, [port1])
+  ptyService.once('error', (err) => {
+    if (ptyService === service) {
+      rendererPort?.close()
+      rendererPort = null
+      ptyService = null
+    }
+    notifyPtyServiceError(`PTY service error: ${String(err)}`)
+  })
   ptyService.once('exit', (code) => {
     console.log(`[main] PTY service exited with code ${code}`)
-    ptyService = null
-    rendererPort = null
+    if (ptyService === service) {
+      rendererPort?.close()
+      rendererPort = null
+      ptyService = null
+      if (code !== 0) {
+        notifyPtyServiceError(`PTY service exited before ready (code=${code})`)
+      }
+    }
   })
 }
 
@@ -175,6 +199,11 @@ function disposePtyService() {
   if (!ptyService) return
   ptyService.kill()
   ptyService = null
+}
+
+function notifyPtyServiceError(error: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('pty:service-error', error)
 }
 
 // ─── IPC Handlers ───

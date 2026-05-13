@@ -10,10 +10,13 @@ type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 
+const INITIAL_SIZE_TIMEOUT_MS = 5000
+
 let ptyPort: MessagePort | null = null
 let readySize: PtySize | null = null
 let readyResolve: ((size: PtySize) => void) | null = null
 let readyReject: ((err: Error) => void) | null = null
+let readyTimeout: ReturnType<typeof setTimeout> | null = null
 let pendingClientMessages: PtyClientMessage[] = []
 let pendingData: string[] = []
 let ptyDataCallbacks: PtyDataCallback[] = []
@@ -23,6 +26,9 @@ let ptyExitCallbacks: PtyExitCallback[] = []
 const readyPromise = new Promise<PtySize>((resolve, reject) => {
   readyResolve = resolve
   readyReject = reject
+  readyTimeout = setTimeout(() => {
+    rejectReady(new Error('Timed out waiting for PTY service to become ready'))
+  }, INITIAL_SIZE_TIMEOUT_MS)
 })
 
 function postToPty(message: PtyClientMessage): boolean {
@@ -47,9 +53,16 @@ function flushPendingClientMessages() {
 }
 
 function rejectReady(error: Error) {
+  clearReadyTimeout()
   readyReject?.(error)
   readyResolve = null
   readyReject = null
+}
+
+function clearReadyTimeout() {
+  if (readyTimeout === null) return
+  clearTimeout(readyTimeout)
+  readyTimeout = null
 }
 
 function flushPendingData() {
@@ -78,6 +91,7 @@ function handlePtyMessage(message: PtyServiceMessage) {
     case 'ready':
       readySize = message.size
       readyResolve?.(message.size)
+      clearReadyTimeout()
       readyResolve = null
       readyReject = null
       break
@@ -127,6 +141,13 @@ ipcRenderer.on('pty:port', (event) => {
   }
   ptyPort.start()
   flushPendingClientMessages()
+})
+
+ipcRenderer.on('pty:service-error', (_event, error: string) => {
+  rejectReady(new Error(error))
+  for (const callback of ptyErrorCallbacks) {
+    callback(error)
+  }
 })
 
 ipcRenderer.send('pty:requestPort')
