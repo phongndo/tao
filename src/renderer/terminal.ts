@@ -46,14 +46,13 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
   updateStatus('Loading Ghostty WASM...')
   console.log('[terminal] Loading Ghostty WASM from /ghostty-vt.wasm...')
 
-  let t0 = performance.now()
+  const t0 = performance.now()
   const ghostty = await Ghostty.load('/ghostty-vt.wasm')
   console.log(`[terminal] Ghostty WASM loaded in ${(performance.now() - t0).toFixed(0)}ms`)
 
   // Step 2: Get PTY dimensions
   console.log('[terminal] Getting initial PTY dimensions...')
-  const { cols: initialCols, rows: initialRows } =
-    await window.electronAPI.getInitialColsRows()
+  const { cols: initialCols, rows: initialRows } = await window.electronAPI.getInitialColsRows()
   console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
 
   // Step 3: Create terminal instance (with pre-loaded Ghostty)

@@ -23,13 +23,13 @@ const shell = pty.spawn(process.env.SHELL || 'bash', [], {
 const term = new Terminal({ cols: 120, rows: 40, allowProposedApi: true })
 
 // Wait for shell prompt
-await new Promise(r => setTimeout(r, 500))
+await new Promise((r) => setTimeout(r, 500))
 
 const latencies: number[] = []
 for (let i = 0; i < RUNS; i++) {
   const start = performance.now()
   shell.write('x')
-  await new Promise<void>(resolve => {
+  await new Promise<void>((resolve) => {
     const h = (data: string) => {
       shell.removeListener('data', h)
       term.write(data, resolve)

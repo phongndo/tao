@@ -3,7 +3,24 @@
   "formatter": {
     "indentStyle": "space",
     "indentWidth": 2,
-    "lineWidth": 100
+    "lineWidth": 100,
+    "includes": [
+      "src/**/*.ts",
+      "src/**/*.js",
+      "src/**/*.json",
+      "src/**/*.css",
+      "src/**/*.md",
+      "src/**/*.yml",
+      "src/**/*.yaml",
+      "src/**/*.html",
+      "bench/**/*.ts",
+      "docs/**/*.md",
+      "*.json",
+      "*.md",
+      "*.ts",
+      "*.yml",
+      "*.yaml"
+    ]
   },
   "linter": {
     "rules": {
@@ -11,7 +28,8 @@
       "suspicious": {
         "noExplicitAny": "off"
       }
-    }
+    },
+    "includes": ["src/**/*.ts", "src/**/*.js", "bench/**/*.ts", "*.ts"]
   },
   "javascript": {
     "formatter": {
@@ -21,6 +39,11 @@
     }
   },
   "files": {
-    "ignore": ["out", "dist", "node_modules", "pnpm-lock.yaml", "public/ghostty-vt.wasm"]
+    "maxSize": 1048576,
+    "ignoreUnknown": true
+  },
+  "vcs": {
+    "useIgnoreFile": true,
+    "root": "."
   }
 }

@@ -7,9 +7,9 @@
  * Usage: npx tsx bench/benchmark.ts
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
-import { fileURLToPath } from 'url'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
@@ -19,11 +19,24 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 function generateMixedData(sizeMB: number, ansiDensity = 0.3): Buffer {
   const target = sizeMB * 1024 * 1024
   const styles = [
-    '\x1b[31m', '\x1b[32m', '\x1b[33m', '\x1b[34m', '\x1b[35m', '\x1b[36m',
-    '\x1b[1m', '\x1b[3m', '\x1b[4m', '\x1b[0m',
-    '\x1b[38;5;196m', '\x1b[48;5;22m',
-    '\x1b[38;2;255;128;0m', '\x1b[48;2;0;0;128m',
-    '\x1b[H', '\x1b[2J', '\x1b[K', '\x1b[10;20H',
+    '\x1b[31m',
+    '\x1b[32m',
+    '\x1b[33m',
+    '\x1b[34m',
+    '\x1b[35m',
+    '\x1b[36m',
+    '\x1b[1m',
+    '\x1b[3m',
+    '\x1b[4m',
+    '\x1b[0m',
+    '\x1b[38;5;196m',
+    '\x1b[48;5;22m',
+    '\x1b[38;2;255;128;0m',
+    '\x1b[48;2;0;0;128m',
+    '\x1b[H',
+    '\x1b[2J',
+    '\x1b[K',
+    '\x1b[10;20H',
   ]
   const chunks: Buffer[] = []
   let bytes = 0
@@ -67,13 +80,13 @@ async function benchXtermJs(data: Buffer, label: string): Promise<Result> {
 
   // Warmup
   const warm = new Terminal({ cols: 120, rows: 40, allowProposedApi: true })
-  await new Promise<void>(resolve => warm.write('warmup\r\n', resolve))
+  await new Promise<void>((resolve) => warm.write('warmup\r\n', resolve))
   warm.dispose()
 
   // Actual test — use callback to measure real parse time
   const term = new Terminal({ cols: 120, rows: 40, allowProposedApi: true })
   const start = performance.now()
-  await new Promise<void>(resolve => {
+  await new Promise<void>((resolve) => {
     term.write(data.toString('utf-8'), resolve)
   })
   const duration = performance.now() - start
@@ -105,7 +118,9 @@ async function benchGhostty(data: Buffer, label: string): Promise<Result> {
           const mem = (wasmModule.instance.exports as any).memory as WebAssembly.Memory
           const bytes = new Uint8Array(mem.buffer, ptr, len)
           logs.push(new TextDecoder().decode(bytes))
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       },
     },
   })
@@ -209,7 +224,7 @@ async function main() {
   const xt = new T2({ cols: 120, rows: 40, allowProposedApi: true })
   const burstStartX = performance.now()
   for (const chunk of tinyChunks) {
-    await new Promise<void>(resolve => xt.write(chunk, resolve))
+    await new Promise<void>((resolve) => xt.write(chunk, resolve))
   }
   const burstDurX = performance.now() - burstStartX
   xt.dispose()
@@ -218,8 +233,20 @@ async function main() {
   console.log(`  ghostty-web:  ${burstDurG.toFixed(1)} ms`)
   console.log(`  xterm.js:     ${burstDurX.toFixed(1)} ms`)
   results.push({
-    ghostty: { name: 'burst', engine: 'ghostty-web (WASM)', sizeMB: 10, durationMs: burstDurG, throughputMBps: 0 },
-    xterm: { name: 'burst', engine: 'xterm.js (JS)', sizeMB: 10, durationMs: burstDurX, throughputMBps: 0 },
+    ghostty: {
+      name: 'burst',
+      engine: 'ghostty-web (WASM)',
+      sizeMB: 10,
+      durationMs: burstDurG,
+      throughputMBps: 0,
+    },
+    xterm: {
+      name: 'burst',
+      engine: 'xterm.js (JS)',
+      sizeMB: 10,
+      durationMs: burstDurX,
+      throughputMBps: 0,
+    },
     speedup: burstSpeedup,
   })
 
@@ -235,8 +262,12 @@ async function main() {
   }
   console.log(`╠══════════════════════════════════════════════════════════╣`)
   console.log(`║  Average speedup: ${avgSpeedup.toFixed(1)}×                              ║`)
-  console.log(`║  ghostty-web peak: ${results[2].ghostty.throughputMBps.toFixed(0)} MB/s                        ║`)
-  console.log(`║  xterm.js peak:    ${results[2].xterm.throughputMBps.toFixed(0)} MB/s                        ║`)
+  console.log(
+    `║  ghostty-web peak: ${results[2].ghostty.throughputMBps.toFixed(0)} MB/s                        ║`,
+  )
+  console.log(
+    `║  xterm.js peak:    ${results[2].xterm.throughputMBps.toFixed(0)} MB/s                        ║`,
+  )
   console.log('╚══════════════════════════════════════════════════════════╝')
   console.log()
   console.log('Note: Benchmarks run in Node.js (headless, no rendering).')

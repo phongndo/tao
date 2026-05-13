@@ -6,9 +6,9 @@
  */
 
 import pty from 'node-pty'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
@@ -30,13 +30,13 @@ const shell = pty.spawn(process.env.SHELL || 'bash', [], {
 })
 
 // Wait for shell prompt
-await new Promise(r => setTimeout(r, 500))
+await new Promise((r) => setTimeout(r, 500))
 
 const latencies: number[] = []
 for (let i = 0; i < RUNS; i++) {
   const start = performance.now()
   shell.write('x')
-  await new Promise<void>(resolve => {
+  await new Promise<void>((resolve) => {
     const h = (data: string) => {
       shell.removeListener('data', h)
       const enc = new TextEncoder().encode(data)

@@ -17,7 +17,7 @@
  */
 
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { join } from 'node:path'
 import { PtyManager } from './pty'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
@@ -42,24 +42,24 @@ app.commandLine.appendSwitch('enable-accelerated-2d-canvas')
 // Disable unused Chromium features to reduce memory footprint
 // and background processing overhead.
 const disableFeatures = [
-  'BackForwardCache',           // No back/forward navigation in a terminal
+  'BackForwardCache', // No back/forward navigation in a terminal
   'CalculateNativeWinOcclusion', // macOS only optimization, not needed
   'FlushTasksBetweenFrameIntervals', // Reduce task scheduling overhead
-  'InterestFeedV2',             // Google feed, not applicable
-  'MediaRouter',                // No ChromeCast/media routing
-  'PaintHolding',               // Don't delay paints — show content ASAP
+  'InterestFeedV2', // Google feed, not applicable
+  'MediaRouter', // No ChromeCast/media routing
+  'PaintHolding', // Don't delay paints — show content ASAP
   'PreloadMediaEngagementData', // Media engagement tracking
-  'Translate',                  // No translation in a terminal
-  'WebAuthnConditionalUI',      // No WebAuthn
-  'WebSQL',                     // Already disabled, double ensure
+  'Translate', // No translation in a terminal
+  'WebAuthnConditionalUI', // No WebAuthn
+  'WebSQL', // Already disabled, double ensure
 ].join(',')
 
 app.commandLine.appendSwitch('disable-features', disableFeatures)
 
 const enableFeatures = [
-  'Canvas2dRenderingTBR',       // Tile-based rendering for canvas 2D (faster)
-  'CanvasOopRasterization',     // Out-of-process canvas rasterization
-  'WebAssemblyCodeProtection',  // Protect WASM memory pages
+  'Canvas2dRenderingTBR', // Tile-based rendering for canvas 2D (faster)
+  'CanvasOopRasterization', // Out-of-process canvas rasterization
+  'WebAssemblyCodeProtection', // Protect WASM memory pages
   'WebAssemblyLazyCompilation', // Load WASM faster by deferring full compile
 ].join(',')
 
@@ -68,10 +68,7 @@ app.commandLine.appendSwitch('enable-features', enableFeatures)
 // V8: reduce max heap size. Terminal workloads are steady-state,
 // not bursty allocations. A smaller heap means less GC pause time
 // and lower memory footprint. 256MB is plenty for one terminal window.
-app.commandLine.appendSwitch(
-  'js-flags',
-  '--max-old-space-size=256 --optimize-for-size',
-)
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=256 --optimize-for-size')
 
 // Limit to 1 renderer process. We only have one window.
 // This avoids the overhead of a spare renderer process sitting idle.
@@ -113,10 +110,10 @@ function createWindow() {
       offscreen: false,
 
       // Disable unnecessary renderer features
-      webgl: false,              // Ghostty-web uses Canvas 2D, not WebGL
-      plugins: false,            // No Flash/PDF plugins
+      webgl: false, // Ghostty-web uses Canvas 2D, not WebGL
+      plugins: false, // No Flash/PDF plugins
       experimentalFeatures: false,
-      webSecurity: true,         // Keep security, CSP handles WASM
+      webSecurity: true, // Keep security, CSP handles WASM
 
       // V8: eager compile for fast startup
       v8CacheOptions: 'bypassHeatCheck',

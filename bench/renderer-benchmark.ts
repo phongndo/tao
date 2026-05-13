@@ -7,9 +7,9 @@
  * Usage: npx tsx bench/renderer-benchmark.ts
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
-import { fileURLToPath } from 'url'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
@@ -19,9 +19,16 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 function generateData(sizeMB: number, ansiDensity: number): string {
   const target = sizeMB * 1024 * 1024
   const styles = [
-    '\x1b[31m', '\x1b[32m', '\x1b[33m', '\x1b[0m',
-    '\x1b[1m', '\x1b[4m',
-    '\x1b[38;5;196m', '\x1b[H', '\x1b[2J', '\x1b[K',
+    '\x1b[31m',
+    '\x1b[32m',
+    '\x1b[33m',
+    '\x1b[0m',
+    '\x1b[1m',
+    '\x1b[4m',
+    '\x1b[38;5;196m',
+    '\x1b[H',
+    '\x1b[2J',
+    '\x1b[K',
   ]
   let out = ''
   while (out.length < target) {
@@ -39,19 +46,6 @@ function generateData(sizeMB: number, ansiDensity: number): string {
 }
 
 // ─── Benchmark Runner ───
-
-interface RendererStats {
-  avgFrameMs: number
-  p50FrameMs: number
-  p95FrameMs: number
-  p99FrameMs: number
-  maxFrameMs: number
-  totalFrames: number
-  totalDataMB: number
-  totalTimeMs: number
-  heapBeforeMB: number
-  heapAfterMB: number
-}
 
 async function benchmarkParserThroughput(): Promise<void> {
   console.log('╔══════════════════════════════════════════════╗')
@@ -107,7 +101,9 @@ async function benchmarkParserThroughput(): Promise<void> {
     const throughput = test.sizeMB / (duration / 1000)
     const cellThroughput = (cellCount * cols) / (viewDuration / 1000) / 1_000_000
 
-    console.log(`  ${test.name.padEnd(22)} parse: ${duration.toFixed(1).padStart(6)} ms  (${throughput.toFixed(0).padStart(5)} MB/s)  cells: ${viewDuration.toFixed(2).padStart(6)} ms  (${cellThroughput.toFixed(1)}M cells/s)`)
+    console.log(
+      `  ${test.name.padEnd(22)} parse: ${duration.toFixed(1).padStart(6)} ms  (${throughput.toFixed(0).padStart(5)} MB/s)  cells: ${viewDuration.toFixed(2).padStart(6)} ms  (${cellThroughput.toFixed(1)}M cells/s)`,
+    )
   }
 
   // Test 2: Dirty row tracking (only a few rows change — simulates normal use)
@@ -187,9 +183,13 @@ async function benchmarkParserThroughput(): Promise<void> {
   const term3 = exp3.ghostty_terminal_new(120, 40)
 
   // Fill terminal
-  const fillData = '\x1b[2J' + Array.from({ length: 40 }, (_, i) =>
-    `\x1b[${31 + (i % 7)}mLine ${i + 1} with colored text and more content to fill cells\x1b[0m`
-  ).join('\r\n')
+  const fillData =
+    '\x1b[2J' +
+    Array.from(
+      { length: 40 },
+      (_, i) =>
+        `\x1b[${31 + (i % 7)}mLine ${i + 1} with colored text and more content to fill cells\x1b[0m`,
+    ).join('\r\n')
   const fillEnc = new TextEncoder().encode(fillData)
   const fillPtr = exp3.ghostty_wasm_alloc_u8_array(fillEnc.length)
   new Uint8Array(mem3.buffer).set(fillEnc, fillPtr)
@@ -210,17 +210,21 @@ async function benchmarkParserThroughput(): Promise<void> {
     for (let c = 0; c < cellCount; c++) {
       const offset = c * 16
       const codepoint = cells[offset] | (cells[offset + 1] << 8) | (cells[offset + 2] << 16)
-      const fgR = cells[offset + 3]; const fgG = cells[offset + 4]; const fgB = cells[offset + 5]
-      const bgR = cells[offset + 6]; const bgG = cells[offset + 7]; const bgB = cells[offset + 8]
+      const fgR = cells[offset + 3]
+      const fgG = cells[offset + 4]
+      const fgB = cells[offset + 5]
+      const bgR = cells[offset + 6]
+      const bgG = cells[offset + 7]
+      const bgB = cells[offset + 8]
       const flags = cells[offset + 9]
       const width = cells[offset + 10]
       // Simulate vertex packing work (multiply + add)
       const col = c % 120
       const row = Math.floor(c / 120)
-      const x = col * 9.0  // char width
+      const x = col * 9.0 // char width
       const y = row * 19.0 // char height
-      const u = (codepoint % 32) * 9.0 / 288.0
-      const v = Math.floor(codepoint / 32) * 19.0 / 608.0
+      const u = ((codepoint % 32) * 9.0) / 288.0
+      const v = (Math.floor(codepoint / 32) * 19.0) / 608.0
       // 4 vertices per cell
       packed += x + y + u + v + fgR + fgG + fgB + bgR + bgG + bgB + flags + width
     }
@@ -236,7 +240,7 @@ async function benchmarkParserThroughput(): Promise<void> {
   fullRedrawTimes.sort((a, b) => a - b)
   const frAvg = fullRedrawTimes.reduce((a, b) => a + b, 0) / fullRedrawTimes.length
   console.log(`  avg full redraw (JS loop): ${frAvg.toFixed(2)} ms`)
-  console.log(`  per cell:                  ${(frAvg / 1920 * 1000).toFixed(2)} μs`)
+  console.log(`  per cell:                  ${((frAvg / 1920) * 1000).toFixed(2)} μs`)
   console.log(`  total cells/frame:         1920`)
 
   // Summary
@@ -244,17 +248,17 @@ async function benchmarkParserThroughput(): Promise<void> {
   console.log('╔══════════════════════════════════════════════╗')
   console.log('║   BASELINE CAPTURED                         ║')
   console.log('║                                              ║')
-  console.log(`║   Parser throughput:       ${(10 / (0.233)).toFixed(0)} MB/s (10MB)        ║`)
+  console.log(`║   Parser throughput:       ${(10 / 0.233).toFixed(0)} MB/s (10MB)        ║`)
   console.log(`║   Per-frame (dirty rows):  ${avg.toFixed(2)} ms              ║`)
   console.log(`║   Full redraw (JS loop):   ${frAvg.toFixed(2)} ms              ║`)
-  console.log(`║   Per-cell (JS):           ${(frAvg / 1920 * 1000).toFixed(2)} μs          ║`)
+  console.log(`║   Per-cell (JS):           ${((frAvg / 1920) * 1000).toFixed(2)} μs          ║`)
   console.log('╚══════════════════════════════════════════════╝')
   console.log('')
   console.log('Save this output to: bench/baseline-canvas2d.txt')
   console.log('After WebGL renderer is built, run again and compare.')
 }
 
-benchmarkParserThroughput().catch(err => {
+benchmarkParserThroughput().catch((err) => {
   console.error('Benchmark failed:', err)
   process.exit(1)
 })

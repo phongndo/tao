@@ -56,9 +56,7 @@ const electronAPI = {
   /**
    * Register a callback for PTY exit
    */
-  onPtyExit(
-    callback: (info: { exitCode: number; signal?: number }) => void,
-  ): () => void {
+  onPtyExit(callback: (info: { exitCode: number; signal?: number }) => void): () => void {
     const listener = (
       _event: Electron.IpcRendererEvent,
       info: { exitCode: number; signal?: number },

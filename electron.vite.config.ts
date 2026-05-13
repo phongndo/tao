@@ -1,6 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
-import { resolve } from 'path'
-import { copyFileSync, existsSync, mkdirSync } from 'fs'
+import { resolve } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 
 /**
  * Custom Vite plugin that copies ghostty-vt.wasm to the renderer output
@@ -17,17 +17,11 @@ function copyGhosttyWasm() {
       outDir = config.build.outDir
     },
     closeBundle() {
-      const wasmSource = resolve(
-        __dirname,
-        'node_modules/ghostty-web/ghostty-vt.wasm',
-      )
+      const wasmSource = resolve(__dirname, 'node_modules/ghostty-web/ghostty-vt.wasm')
       const wasmDest = resolve(outDir, 'ghostty-vt.wasm')
 
       if (!existsSync(wasmSource)) {
-        console.warn(
-          '[copy-ghostty-wasm] WASM source not found:',
-          wasmSource,
-        )
+        console.warn('[copy-ghostty-wasm] WASM source not found:', wasmSource)
         return
       }
 

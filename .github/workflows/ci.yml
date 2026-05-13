@@ -11,8 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Type check + lint ──
+  # ── Static analysis (type check + lint + format) ──
   check:
+    name: Check (tsc + lint + format)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -27,9 +28,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm tsc
       - run: pnpm lint
+      - run: pnpm fmt:check
 
   # ── Build (production) ──
   build:
+    name: Build (electron-vite)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -50,6 +53,7 @@ jobs:
 
   # ── Parser benchmark (smoke test) ──
   bench:
+    name: Bench (VT parser)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -63,3 +67,23 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm bench
+
+  # ── Nix flake check ──
+  nix:
+    name: Nix (flake)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix flake check
+
+  # ── Shell scripts ──
+  shell:
+    name: Shell (shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - run: shellcheck bench/*.sh
