@@ -141,7 +141,11 @@ function createWindow() {
 // ─── PTY Service Lifecycle ───
 
 function sendPtyPortToRenderer() {
-  if (!mainWindow || mainWindow.isDestroyed() || !rendererPort) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!rendererPort) {
+    setupPtyService()
+  }
+  if (!rendererPort) return
 
   mainWindow.webContents.postMessage('pty:port', null, [rendererPort])
   rendererPort = null

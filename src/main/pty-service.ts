@@ -140,6 +140,14 @@ function handleClientMessage(message: PtyClientMessage) {
       ptyManager?.write(message.data)
       break
     case 'resize':
+      if (
+        !Number.isInteger(message.cols) ||
+        !Number.isInteger(message.rows) ||
+        message.cols <= 0 ||
+        message.rows <= 0
+      ) {
+        return
+      }
       ptyManager?.resize(message.cols, message.rows)
       break
     case 'dispose':

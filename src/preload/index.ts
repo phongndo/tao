@@ -14,6 +14,7 @@ let ptyPort: MessagePort | null = null
 let readySize: PtySize | null = null
 let readyResolve: ((size: PtySize) => void) | null = null
 let readyReject: ((err: Error) => void) | null = null
+let pendingClientMessages: PtyClientMessage[] = []
 let pendingData: string[] = []
 let ptyDataCallbacks: PtyDataCallback[] = []
 let ptyErrorCallbacks: PtyErrorCallback[] = []
@@ -24,8 +25,31 @@ const readyPromise = new Promise<PtySize>((resolve, reject) => {
   readyReject = reject
 })
 
-function postToPty(message: PtyClientMessage) {
-  ptyPort?.postMessage(message)
+function postToPty(message: PtyClientMessage): boolean {
+  if (!ptyPort) return false
+  ptyPort.postMessage(message)
+  return true
+}
+
+function queuePtyMessage(message: PtyClientMessage) {
+  pendingClientMessages.push(message)
+  flushPendingClientMessages()
+}
+
+function flushPendingClientMessages() {
+  if (!ptyPort || pendingClientMessages.length === 0) return
+
+  const messages = pendingClientMessages
+  pendingClientMessages = []
+  for (const message of messages) {
+    postToPty(message)
+  }
+}
+
+function rejectReady(error: Error) {
+  readyReject?.(error)
+  readyResolve = null
+  readyReject = null
 }
 
 function flushPendingData() {
@@ -54,17 +78,28 @@ function handlePtyMessage(message: PtyServiceMessage) {
     case 'ready':
       readySize = message.size
       readyResolve?.(message.size)
+      readyResolve = null
+      readyReject = null
       break
     case 'data':
       handlePtyData(message.data)
       break
     case 'error':
-      readyReject?.(new Error(message.error))
+      rejectReady(new Error(message.error))
       for (const callback of ptyErrorCallbacks) {
         callback(message.error)
       }
       break
     case 'exit':
+      if (!readySize) {
+        rejectReady(
+          new Error(
+            `PTY exited before ready (exitCode=${message.info.exitCode}, signal=${
+              message.info.signal ?? 'none'
+            })`,
+          ),
+        )
+      }
       for (const callback of ptyExitCallbacks) {
         callback(message.info)
       }
@@ -91,6 +126,7 @@ ipcRenderer.on('pty:port', (event) => {
     handlePtyMessage(messageEvent.data)
   }
   ptyPort.start()
+  flushPendingClientMessages()
 })
 
 ipcRenderer.send('pty:requestPort')
@@ -106,7 +142,7 @@ const electronAPI = {
    */
   sendPtyInput(data: string): void {
     if (typeof data !== 'string' || data.length === 0) return
-    postToPty({ type: 'write', data })
+    queuePtyMessage({ type: 'write', data })
   },
 
   /**
@@ -114,7 +150,7 @@ const electronAPI = {
    */
   resizePty(cols: number, rows: number): void {
     if (typeof cols !== 'number' || typeof rows !== 'number') return
-    postToPty({ type: 'resize', cols, rows })
+    queuePtyMessage({ type: 'resize', cols, rows })
   },
 
   /**
@@ -166,7 +202,7 @@ const electronAPI = {
    * This triggers the window to be shown for an instant-open feel.
    */
   signalReady(): void {
-    postToPty({ type: 'renderer-ready' })
+    queuePtyMessage({ type: 'renderer-ready' })
     ipcRenderer.send('renderer:ready')
   },
 }
