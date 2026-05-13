@@ -37,18 +37,18 @@ See [PLAN.md](PLAN.md) for methodology and full comparison.
 ## Architecture
 
 ```
-Main Process                    Renderer Process
-┌──────────────┐ MessagePort ┌─────────────────────────────┐
-│  node-pty    │◄─────────►│  ghostty-web                │
-│  (real shell)│  buffered │  - Ghostty WASM parser (Zig)│
-│              │  ~16ms    │  - Canvas 2D renderer       │
-└──────────────┘           │  - WebGL renderer (planned) │
-                           └─────────────────────────────┘
+Main Process                 PTY Utility Process              Renderer Process
+┌──────────────┐             ┌──────────────┐   MessagePort   ┌─────────────────────────────┐
+│  Window      │             │  node-pty    │◄───────────────►│  ghostty-web                │
+│  lifecycle   │             │  real shell  │    buffered     │  - Ghostty WASM parser (Zig)│
+│  only        │             │              │    ~16ms        │  - Canvas 2D renderer       │
+└──────────────┘             └──────────────┘                 │  - WebGL renderer (planned) │
+                                                              └─────────────────────────────┘
 ```
 
-- **node-pty**: Spawns a real shell (bash/zsh/fish) with PTY
+- **node-pty**: Runs in an Electron utility process and spawns a real shell (bash/zsh/fish) with PTY
 - **ghostty-web**: Ghostty's production VT emulator compiled to WASM. Same parser as the native Ghostty app.
-- **IPC**: Raw PTY output over an Electron `MessagePort`, batched at 16ms (~60fps); low-volume input, resize, error, and exit signals stay on standard IPC.
+- **IPC**: Raw bytes over a direct `MessagePort`, batched at 16ms (~60fps), with main kept off the PTY hot path
 - **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md))
 
 ## Benchmarks
@@ -56,7 +56,6 @@ Main Process                    Renderer Process
 ```bash
 pnpm bench              # VT parser throughput
 pnpm bench:latency      # Input latency (keystroke → echo)
-pnpm bench:ipc          # Electron IPC throughput/stall comparison
 pnpm bench:cross        # Cross-terminal comparison
 pnpm bench:startup      # Startup time
 pnpm bench:all          # Run everything

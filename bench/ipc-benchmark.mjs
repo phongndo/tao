@@ -1,4 +1,4 @@
-import { app, BrowserWindow, MessageChannelMain, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, MessageChannelMain } from 'electron'
 
 process.once('uncaughtException', (err) => {
   console.error(err)
