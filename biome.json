@@ -40,7 +40,8 @@
   },
   "files": {
     "maxSize": 1048576,
-    "ignoreUnknown": true
+    "ignoreUnknown": true,
+    "includes": ["**", "!out"]
   },
   "vcs": {
     "useIgnoreFile": true,
