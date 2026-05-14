@@ -6,7 +6,7 @@ Thanks for your interest in contributing!
 
 ### Prerequisites
 
-Install [Nix](https://nixos.org/download) with flakes enabled, then:
+Install [Nix](https://nixos.org/download) — if using the standard installer, enable flakes by adding `experimental-features = nix-command flakes` to `~/.config/nix/nix.conf`. The [Determinate Nix Installer](https://github.com/DeterminateSystems/nix-installer) enables flakes by default. Then:
 
 ```bash
 git clone https://github.com/phongndo/tau.git
