@@ -1,6 +1,7 @@
 {
   "statusCheck": true,
   "statusCommentsEnabled": true,
+  "triggerOnUpdates": true,
   "includeBranches": ["main"],
   "include": [
     "src/**",
