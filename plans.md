@@ -9,15 +9,15 @@ zero-copy rendering, dedicated PTY utility process).
 
 ---
 
-## 1. Tech Stack (Final)
+## 1. Tech Stack (Current + Target)
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
 | **Shell** | Electron 42 + electron-vite | Already in use; same as Superset |
-| **Rendering** | React 19 + React DOM | Ecosystem: react-mosaic-component, TanStack Query, lucide-react |
+| **Rendering** | React 19 + React DOM | Ecosystem: react-mosaic-component, lucide-react; TanStack Query is only a temporary renderer cache |
 | **UI State** | Zustand 5 | Tiny, fast, synchronous — handles active tab, pane layout, workspace order |
-| **Effect Runtime** | Effect.ts (`effect`) | Typed side-effect boundary for shell commands, IPC, persistence, cancellation, retries, and testable services |
-| **Async Cache** | TanStack Query | Renderer cache over Effect-backed reads: git branch, worktrees, PR info — data that changes outside the app |
+| **Effect Runtime** | Effect.ts (`effect`) | Primary backend/runtime model for shell commands, IPC, persistence, cancellation, retries, streaming, typed errors, and testable services |
+| **Async Cache** | TanStack Query (transitional) | Current renderer cache over Effect-backed reads; target is an Effect-owned request/cache/subscription layer so this dependency can be removed later |
 | **Pane Layout** | react-mosaic-component | Battle-tested recursive split tiling (same lib Superset uses) |
 | **Sidebar / Main Split** | react-resizable-panels | Resizable left sidebar + main content area |
 | **Icons** | lucide-react | Consistent icon set, tree-shakeable |
@@ -33,7 +33,7 @@ zero-copy rendering, dedicated PTY utility process).
 ```text
 Zustand:        "which tab is active right now"     (ephemeral UI state)
 Effect:         "run git safely and return typed errors" (fallible side effects)
-TanStack Query: "cache branch for this workspace"   (renderer cache / refetch policy)
+TanStack Query: "temporary renderer cache adapter"  (do not grow this surface)
 ```
 
 Effect is the only place for fallible external work. React components and
@@ -41,6 +41,13 @@ Zustand actions should not call shell commands, Electron IPC, storage, or PTY
 operations directly. They call narrow Effect-backed services, and the renderer
 adapters decide whether to run those programs directly or expose them through
 TanStack Query.
+
+Direction: Tau should become Effect-first, especially in the Electron
+main/preload/utility-process backend. TanStack Query is acceptable as a
+short-term renderer adapter while the app has only a few workspace metadata
+reads, but new backend-facing code should be modeled as Effect services. Once
+the Effect runtime owns request caching, invalidation, subscriptions, and
+cancellation, remove TanStack Query instead of expanding it.
 
 ---
 
@@ -129,7 +136,7 @@ type PaneType = 'terminal' | 'webview'
 type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 ```
 
-### TanStack Query (Async / External State)
+### TanStack Query (Current Transitional Adapter)
 
 ```typescript
 import { UseQueryResult } from '@tanstack/react-query'
@@ -140,6 +147,11 @@ useGitWorktrees(workspacePath: string): UseQueryResult<WorktreeInfo[], Error>
 useGitStatus(workspacePath: string): UseQueryResult<{ changed: number, staged: number }, Error>
 useWorkspacePorts(workspacePath: string): UseQueryResult<PortInfo[], Error>
 ```
+
+This is the current React adapter shape, not the long-term backend model. Do
+not add business logic, command execution, retry semantics, IPC parsing, or
+domain error handling to TanStack Query callbacks. Those belong in Effect
+programs and services.
 
 ### Effect Services (Side-Effect Boundary)
 
@@ -200,6 +212,19 @@ Effect services must own:
 - Persistence reads/writes for workspace layout
 - Runtime validation with `Schema` at process and IPC boundaries
 - Typed domain errors instead of thrown `unknown`
+- Request caching, invalidation, and subscriptions once the app outgrows the
+  temporary TanStack Query adapter
+
+Effect-first implementation rules:
+- New shell, git, workspace, PTY, persistence, and agent-facing code should
+  expose typed `Effect.Effect<A, E, R>` programs at the service boundary.
+- Use `Context.Tag` + `Layer` for dependencies instead of importing singleton
+  helpers from deep modules.
+- Keep thrown exceptions and raw `Promise` code at the adapter edge only.
+- Use `Schema` for every process, IPC, persisted-state, and command-output
+  boundary that crosses trust or version seams.
+- Keep React hooks thin: they should run or subscribe to Effect-backed services,
+  not become the source of domain behavior.
 
 Renderer hooks stay thin:
 
@@ -222,6 +247,9 @@ const useGitBranch = (
       ),
   })
 ```
+
+Long term, this hook should stop calling `useQuery` and instead use Tau's
+configured Effect runtime plus an Effect-owned cache/subscription primitive.
 
 ---
 
@@ -452,9 +480,22 @@ Independent PTY sessions per pane remain Phase 4.
 - [ ] Drag-and-drop tab reorder
 - [ ] Drag-and-drop workspace reorder
 
+### Phase 7: Effect-First Backend + TanStack Exit
+- [ ] Introduce a configured app Effect runtime for main/preload/renderer
+      adapters
+- [ ] Convert workspace and git helpers from Promise-returning functions into
+      `Context.Tag` services with `Layer` implementations
+- [ ] Move IPC request/response wrappers behind Effect services with typed
+      domain errors
+- [ ] Add Effect-owned caching/subscription semantics for workspace metadata,
+      git status, worktrees, ports, and PR info
+- [ ] Replace the TanStack Query hooks with thin Effect runtime hooks
+- [ ] Remove `@tanstack/react-query` once the Effect-backed hooks cover the
+      current branch/worktree/status surfaces
+
 ---
 
-## 9. Key Dependencies to Add
+## 9. Key Dependencies
 
 ```jsonc
 {
@@ -477,15 +518,15 @@ Independent PTY sessions per pane remain Phase 4.
 }
 ```
 
-The existing `electron-vite` config needs a `@vitejs/plugin-react` plugin added
-to the renderer build config.
+These are the dependency families used or planned across the implementation
+phases. `package.json` remains the source of truth for what has landed.
 
-> The dependencies listed above are planned additions tracked by the
-> implementation phases in [§8](#8-implementation-phases). The `effect` package
-> will be added to `package.json` when Phase 1 begins, alongside the Effect
-> runtime initialization. This PR is limited to the architecture document; no
-> dependency changes are made beyond the existing `react`/`react-dom` version
-> pinning (see `package.json`).
+`@tanstack/react-query` is transitional. Keep it while the current sidebar
+metadata hooks need a renderer cache, but do not treat it as part of the final
+Tau backend architecture. The target backend architecture is Effect-first.
+
+The existing `electron-vite` config needs a `@vitejs/plugin-react` plugin in
+the renderer build config.
 
 ---
 
