@@ -12,6 +12,7 @@ type PtyExitCallback = (info: PtyExitInfo) => void
 type AppShortcutCallback = () => void
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
+const TERMINAL_FONT_ENV = 'TAU_TERMINAL_FONT_FAMILY'
 
 let ptyPort: MessagePort | null = null
 let readySize: PtySize | null = null
@@ -180,6 +181,14 @@ const electronAPI = {
    */
   getInitialColsRows(): Promise<{ cols: number; rows: number }> {
     return readySize ? Promise.resolve(readySize) : readyPromise
+  },
+
+  /**
+   * Get the user-selected terminal font family, if configured.
+   */
+  getTerminalFontFamily(): string | undefined {
+    const fontFamily = process.env[TERMINAL_FONT_ENV]?.trim()
+    return fontFamily && fontFamily.length > 0 ? fontFamily : undefined
   },
 
   /**

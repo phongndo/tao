@@ -7,6 +7,10 @@
   box-sizing: border-box;
 }
 
+:root {
+  --terminal-font-family: monospace, "Symbols Nerd Font Mono", "Symbols Nerd Font";
+}
+
 html,
 body {
   width: 100%;
@@ -14,7 +18,7 @@ body {
   overflow: hidden;
   background: #151515;
   color: #c9c7cd;
-  font-family: Menlo, Monaco, "Courier New", monospace;
+  font-family: var(--terminal-font-family);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* Prevent the browser from doing scroll bounce (rubber-banding) */
@@ -163,7 +167,7 @@ body {
   justify-content: center;
   flex-direction: column;
   padding: 2rem;
-  font-family: Menlo, Monaco, "Courier New", monospace;
+  font-family: var(--terminal-font-family);
   color: #9699a8;
 }
 

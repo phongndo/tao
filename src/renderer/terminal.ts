@@ -1,5 +1,7 @@
 import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
 
+import { getTerminalFontFamily } from './fonts'
+
 /**
  * Tau Default — based on Mellow by @kvparik (shipped with Ghostty).
  * https://github.com/ghostty-org/ghostty
@@ -52,6 +54,8 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     Ghostty.load(wasmUrl),
     window.electronAPI.getInitialColsRows(),
   ])
+  const fontFamily = getTerminalFontFamily(window.electronAPI.getTerminalFontFamily())
+  document.documentElement.style.setProperty('--terminal-font-family', fontFamily)
   console.log(
     `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
   )
@@ -66,7 +70,7 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     cols: initialCols,
     rows: initialRows,
     fontSize: 14,
-    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    fontFamily,
     theme: THEME,
     cursorBlink: false,
     cursorStyle: 'block',
