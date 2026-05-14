@@ -169,7 +169,6 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
     unsubPtyData()
     unsubPtyError()
     unsubPtyExit()
-    window.electronAPI.killPty(sessionId)
     fitAddon.dispose()
     originalDispose()
   }
