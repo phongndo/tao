@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot } from 'react-dom/client'
 import { App } from './ui/App'
+import 'react-mosaic-component/react-mosaic-component.css'
 import './styles.css'
 
 // ── Suppress ghostty-vt OSC warnings ──

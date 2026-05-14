@@ -1,6 +1,23 @@
-import { FolderPlus, GitBranch, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useTauStore, type Workspace } from '../state/store'
+import {
+  FolderPlus,
+  GitBranch,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Terminal,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Mosaic, type MosaicNode } from 'react-mosaic-component'
+import {
+  LOCAL_WORKSPACE_ID,
+  type MosaicLayoutNode,
+  type Pane,
+  type Tab,
+  useTauStore,
+  type Workspace,
+} from '../state/store'
 import { useGitBranch, useGitWorktrees } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 
@@ -13,6 +30,12 @@ const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
+}
+
+function firstPaneId(layout: MosaicLayoutNode): string | null {
+  if (typeof layout === 'string') return layout
+  if (!layout.first) return null
+  return firstPaneId(layout.first)
 }
 
 function WorkspaceItem({ workspace }: { workspace: Workspace }) {
@@ -222,14 +245,201 @@ function ResizeShell({
   )
 }
 
+const TabBar = memo(function TabBar({
+  tabs,
+  activeTabId,
+  onNewTab,
+  onSelectTab,
+  onCloseTab,
+}: {
+  tabs: Tab[]
+  activeTabId: string | null
+  onNewTab(): void
+  onSelectTab(tabId: string): void
+  onCloseTab(tabId: string): void
+}) {
+  return (
+    <div className="tab-bar">
+      <div className="tab-list" role="tablist" aria-label="Terminal tabs">
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeTabId
+          return (
+            <div className={isActive ? 'tab-item tab-item-active' : 'tab-item'} key={tab.id}>
+              <button
+                type="button"
+                className="tab-select-button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => onSelectTab(tab.id)}
+              >
+                <Terminal size={13} />
+                <span>{tab.name}</span>
+              </button>
+              <button
+                type="button"
+                className="tab-close-button"
+                aria-label={`Close ${tab.name}`}
+                title="Close tab"
+                onClick={() => onCloseTab(tab.id)}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="New tab"
+        title="New tab"
+        onClick={onNewTab}
+      >
+        <Plus size={15} />
+      </button>
+    </div>
+  )
+})
+
+const PaneTile = memo(function PaneTile({
+  pane,
+  isActive,
+  isLiveTerminal,
+  onClose,
+  onSelect,
+}: {
+  pane: Pane
+  isActive: boolean
+  isLiveTerminal: boolean
+  onClose(): void
+  onSelect(): void
+}) {
+  return (
+    <div
+      className={isActive ? 'pane-tile pane-tile-active' : 'pane-tile'}
+      data-pane-id={pane.id}
+      onPointerDown={(event) => {
+        if (event.target instanceof Node && event.currentTarget.contains(event.target)) onSelect()
+      }}
+    >
+      <button
+        type="button"
+        className="pane-close-button"
+        aria-label={`Close ${pane.name}`}
+        title="Close pane"
+        onPointerDown={(event) => {
+          event.stopPropagation()
+        }}
+        onClick={(event) => {
+          event.stopPropagation()
+          onClose()
+        }}
+      >
+        <X size={12} />
+      </button>
+      {isLiveTerminal ? (
+        <TerminalPane />
+      ) : (
+        <div className="pane-standby" aria-hidden="true">
+          <Terminal size={18} />
+        </div>
+      )}
+    </div>
+  )
+})
+
+const PaneGrid = memo(function PaneGrid({
+  tab,
+  panesById,
+  activePaneId,
+  livePaneId,
+  onClosePane,
+  onLayoutRelease,
+  onSelectPane,
+}: {
+  tab: Tab
+  panesById: Map<string, Pane>
+  activePaneId: string | null
+  livePaneId: string | null
+  onClosePane(paneId: string): void
+  onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
+  onSelectPane(paneId: string): void
+}) {
+  const [draftLayout, setDraftLayout] = useState<MosaicNode<string> | null>(tab.layout)
+
+  useEffect(() => {
+    setDraftLayout(tab.layout)
+  }, [tab.layout])
+
+  const handleLayoutChange = useCallback((layout: MosaicNode<string> | null) => {
+    setDraftLayout(layout)
+  }, [])
+
+  const handleLayoutRelease = useCallback(
+    (layout: MosaicNode<string> | null) => {
+      setDraftLayout(layout)
+      onLayoutRelease(tab.id, layout)
+    },
+    [onLayoutRelease, tab.id],
+  )
+
+  const renderTile = useCallback(
+    (paneId: string) => {
+      const pane = panesById.get(paneId)
+      if (!pane) {
+        return <div className="pane-tile pane-tile-missing" />
+      }
+
+      return (
+        <PaneTile
+          pane={pane}
+          isActive={pane.id === activePaneId}
+          isLiveTerminal={pane.id === livePaneId}
+          onClose={() => onClosePane(pane.id)}
+          onSelect={() => onSelectPane(pane.id)}
+        />
+      )
+    },
+    [activePaneId, livePaneId, onClosePane, onSelectPane, panesById],
+  )
+
+  return (
+    <Mosaic<string>
+      value={draftLayout}
+      onChange={handleLayoutChange}
+      onRelease={handleLayoutRelease}
+      renderTile={renderTile}
+      className="tau-mosaic"
+      resize={{ minimumPaneSizePercentage: 18 }}
+      zeroStateView={<div className="pane-grid-empty" />}
+    />
+  )
+})
+
 export function App() {
   const workspaces = useTauStore((state) => state.workspaces)
+  const tabs = useTauStore((state) => state.tabs)
+  const panes = useTauStore((state) => state.panes)
+  const activeTabId = useTauStore((state) => state.activeTabId)
+  const activePaneId = useTauStore((state) => state.activePaneId)
+  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
   const sidebarExpanded = useTauStore((state) => state.sidebarExpanded)
   const sidebarWidth = useTauStore((state) => state.sidebarWidth)
   const addWorkspace = useTauStore((state) => state.addWorkspace)
+  const ensureWorkspaceTab = useTauStore((state) => state.ensureWorkspaceTab)
+  const newTab = useTauStore((state) => state.newTab)
+  const closeTab = useTauStore((state) => state.closeTab)
+  const closeActiveTab = useTauStore((state) => state.closeActiveTab)
+  const selectTab = useTauStore((state) => state.selectTab)
+  const setTabLayout = useTauStore((state) => state.setTabLayout)
+  const selectPane = useTauStore((state) => state.selectPane)
+  const splitActivePane = useTauStore((state) => state.splitActivePane)
+  const closePane = useTauStore((state) => state.closePane)
+  const closeActivePane = useTauStore((state) => state.closeActivePane)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
+  const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
     () =>
       Math.min(
@@ -242,14 +452,53 @@ export function App() {
     [sidebarWidth],
   )
   const renderedSidebarWidth = sidebarExpanded ? sidebarSize : SIDEBAR_COLLAPSED_WIDTH
+  const workspaceTabs = useMemo(
+    () =>
+      tabs
+        .filter((tab) => tab.workspaceId === activeWorkspaceKey)
+        .sort((a, b) => a.order - b.order),
+    [activeWorkspaceKey, tabs],
+  )
+  const activeTab = useMemo(
+    () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
+    [activeTabId, workspaceTabs],
+  )
+  const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
+  const livePaneId = useMemo(() => {
+    if (!activeTab || activeTab.id !== activeTabId) return null
+    return firstPaneId(activeTab.layout)
+  }, [activeTab, activeTabId])
+
+  useEffect(() => {
+    ensureWorkspaceTab(activeWorkspaceKey)
+  }, [activeWorkspaceKey, ensureWorkspaceTab])
 
   useEffect(() => {
     const unsubscribeToggleSidebar = window.electronAPI.onToggleSidebar(toggleSidebar)
+    const unsubscribeNewTab = window.electronAPI.onAppCommand('new-tab', () => {
+      newTab(activeWorkspaceKey)
+    })
+    const unsubscribeCloseTab = window.electronAPI.onAppCommand('close-tab', closeActiveTab)
+    const unsubscribeClosePane = window.electronAPI.onAppCommand('close-pane', closeActivePane)
+    const unsubscribeSplitVertical = window.electronAPI.onAppCommand('split-pane-vertical', () => {
+      splitActivePane('row')
+    })
+    const unsubscribeSplitHorizontal = window.electronAPI.onAppCommand(
+      'split-pane-horizontal',
+      () => {
+        splitActivePane('column')
+      },
+    )
 
     return () => {
       unsubscribeToggleSidebar()
+      unsubscribeNewTab()
+      unsubscribeCloseTab()
+      unsubscribeClosePane()
+      unsubscribeSplitVertical()
+      unsubscribeSplitHorizontal()
     }
-  }, [toggleSidebar])
+  }, [activeWorkspaceKey, closeActivePane, closeActiveTab, newTab, splitActivePane, toggleSidebar])
 
   async function handleAddWorkspace() {
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
@@ -359,7 +608,38 @@ export function App() {
       </ResizeShell>
       <section className="tau-main">
         <main className="main-content">
-          <TerminalPane />
+          <TabBar
+            tabs={workspaceTabs}
+            activeTabId={activeTab?.id ?? null}
+            onNewTab={() => newTab(activeWorkspaceKey)}
+            onSelectTab={selectTab}
+            onCloseTab={closeTab}
+          />
+          <div className="pane-grid">
+            {activeTab ? (
+              <PaneGrid
+                key={activeTab.id}
+                tab={activeTab}
+                panesById={panesById}
+                activePaneId={activePaneId}
+                livePaneId={livePaneId}
+                onClosePane={closePane}
+                onLayoutRelease={setTabLayout}
+                onSelectPane={selectPane}
+              />
+            ) : (
+              <div className="pane-grid-empty">
+                <button
+                  type="button"
+                  className="empty-new-tab-button"
+                  aria-label="New tab"
+                  onClick={() => newTab(activeWorkspaceKey)}
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
+            )}
+          </div>
         </main>
       </section>
     </div>

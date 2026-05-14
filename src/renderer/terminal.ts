@@ -107,8 +107,21 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     window.electronAPI.sendPtyInput(data)
   })
 
+  let pendingResize: { cols: number; rows: number } | null = null
+  let resizeFrame: number | null = null
+
   term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
-    window.electronAPI.resizePty(cols, rows)
+    pendingResize = { cols, rows }
+    if (resizeFrame !== null) return
+
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = null
+      const nextResize = pendingResize
+      pendingResize = null
+      if (nextResize) {
+        window.electronAPI.resizePty(nextResize.cols, nextResize.rows)
+      }
+    })
   })
 
   const unsubPtyError = window.electronAPI.onPtyError((error: string) => {
@@ -136,6 +149,11 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
   // Cleanup
   const originalDispose = term.dispose.bind(term)
   term.dispose = () => {
+    if (resizeFrame !== null) {
+      window.cancelAnimationFrame(resizeFrame)
+      resizeFrame = null
+    }
+    pendingResize = null
     unsubPtyData()
     unsubPtyError()
     unsubPtyExit()

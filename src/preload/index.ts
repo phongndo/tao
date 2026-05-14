@@ -2,6 +2,7 @@ import { Schema } from 'effect'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
+import type { AppCommand } from '../shared/app-command'
 import type { WorktreeInfo } from '../shared/workspace'
 
 type PtyDataCallback = (data: string) => void
@@ -231,6 +232,20 @@ const electronAPI = {
     ipcRenderer.on('app:toggle-sidebar', listener)
     return () => {
       ipcRenderer.removeListener('app:toggle-sidebar', listener)
+    }
+  },
+
+  /**
+   * Register a callback for a tab/pane command handled before terminal input.
+   */
+  onAppCommand(command: AppCommand, callback: AppShortcutCallback): () => void {
+    const channel = `app:${command}`
+    const listener = () => {
+      callback()
+    }
+    ipcRenderer.on(channel, listener)
+    return () => {
+      ipcRenderer.removeListener(channel, listener)
     }
   },
 

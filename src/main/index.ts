@@ -97,6 +97,7 @@ function createWindow() {
     acceptFirstMouse: true,
     // macOS: use built-in titlebar for smooth integration
     titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 18, y: 14 },
 
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -136,11 +137,39 @@ function createWindow() {
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
-    if (input.key.toLowerCase() !== 'b') return
-    if (!input.meta || input.shift || input.alt || input.control) return
+    if (!input.meta || input.alt || input.control) return
 
-    event.preventDefault()
-    mainWindow?.webContents.send('app:toggle-sidebar')
+    const key = input.key.toLowerCase()
+    if (key === 'b' && !input.shift) {
+      event.preventDefault()
+      mainWindow?.webContents.send('app:toggle-sidebar')
+      return
+    }
+
+    if (key === 't' && !input.shift) {
+      event.preventDefault()
+      mainWindow?.webContents.send('app:new-tab')
+      return
+    }
+
+    if (key === 'w' && !input.shift) {
+      event.preventDefault()
+      mainWindow?.webContents.send('app:close-tab')
+      return
+    }
+
+    if (key === 'w' && input.shift) {
+      event.preventDefault()
+      mainWindow?.webContents.send('app:close-pane')
+      return
+    }
+
+    if (key === 'd') {
+      event.preventDefault()
+      mainWindow?.webContents.send(
+        input.shift ? 'app:split-pane-horizontal' : 'app:split-pane-vertical',
+      )
+    }
   })
 
   // Load the renderer
