@@ -1,10 +1,17 @@
-import { useEffect, useRef } from 'react'
 import type { Terminal } from 'ghostty-web'
+import { useEffect, useRef, useState } from 'react'
 import { createTerminal } from '../terminal'
+
+type TerminalError = {
+  title?: string
+  message: string
+  detail?: string
+}
 
 export function TerminalPane() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
 
   useEffect(() => {
     let disposed = false
@@ -14,15 +21,15 @@ export function TerminalPane() {
       if (!container) return
 
       if (!window.electronAPI) {
-        container.innerHTML = `
-          <div class="terminal-error">
-            <pre>FATAL: window.electronAPI is undefined</pre>
-            <p>Preload script failed. Check DevTools.</p>
-          </div>`
+        setTerminalError({
+          message: 'FATAL: window.electronAPI is undefined',
+          detail: 'Preload script failed. Check DevTools.',
+        })
         return
       }
 
       try {
+        setTerminalError(null)
         const terminal = await createTerminal(container)
         if (disposed) {
           terminal.dispose()
@@ -35,11 +42,10 @@ export function TerminalPane() {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error('[renderer] Failed:', err)
-        container.innerHTML = `
-          <div class="terminal-error">
-            <h2>Failed to initialize terminal</h2>
-            <pre>${message}</pre>
-          </div>`
+        setTerminalError({
+          title: 'Failed to initialize terminal',
+          message,
+        })
         // Do not leave the BrowserWindow hidden if terminal initialization failed.
         window.electronAPI.signalReady()
       }
@@ -54,5 +60,15 @@ export function TerminalPane() {
     }
   }, [])
 
-  return <div id="terminal-container" ref={containerRef} />
+  return (
+    <div id="terminal-container" ref={containerRef}>
+      {terminalError ? (
+        <div className="terminal-error">
+          {terminalError.title ? <h2>{terminalError.title}</h2> : null}
+          <pre>{terminalError.message}</pre>
+          {terminalError.detail ? <p>{terminalError.detail}</p> : null}
+        </div>
+      ) : null}
+    </div>
+  )
 }
