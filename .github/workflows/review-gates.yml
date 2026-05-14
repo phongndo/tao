@@ -14,6 +14,7 @@ on:
 permissions:
   pull-requests: read
   issues: read
+  contents: read
 
 jobs:
   require-ai-reviews:
