@@ -36,6 +36,15 @@ function updateStatus(msg: string) {
   console.log(`[terminal] ${msg}`)
 }
 
+function renderTerminalError(container: HTMLElement, err: unknown) {
+  const errorNode = document.createElement('div')
+  errorNode.style.color = '#f7768e'
+  errorNode.style.padding = '2rem'
+  errorNode.style.fontFamily = 'monospace'
+  errorNode.textContent = `Error opening terminal: ${String(err)}`
+  container.replaceChildren(errorNode)
+}
+
 export async function createTerminal(container: HTMLElement, sessionId: string): Promise<Terminal> {
   // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
@@ -88,7 +97,7 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
     window.electronAPI.killPty(sessionId)
-    container.innerHTML = `<div style="color:#f7768e;padding:2rem;font-family:monospace;">Error opening terminal: ${err}</div>`
+    renderTerminalError(container, err)
     throw err
   }
 
@@ -160,6 +169,7 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
     unsubPtyData()
     unsubPtyError()
     unsubPtyExit()
+    window.electronAPI.killPty(sessionId)
     fitAddon.dispose()
     originalDispose()
   }

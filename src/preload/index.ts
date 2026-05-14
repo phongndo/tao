@@ -238,15 +238,21 @@ ipcRenderer.on('pty:port', (event) => {
 })
 
 ipcRenderer.on('pty:service-error', (_event, error: string) => {
-  for (const sessionId of readyStates.keys()) {
+  const sessionIds = new Set([
+    ...readyStates.keys(),
+    ...pendingData.keys(),
+    ...ptyDataCallbacks.keys(),
+    ...ptyErrorCallbacks.keys(),
+    ...ptyExitCallbacks.keys(),
+  ])
+
+  for (const sessionId of sessionIds) {
     rejectPtyReady(sessionId, new Error(error))
-  }
-  for (const callbacks of ptyErrorCallbacks.values()) {
-    for (const callback of callbacks) {
+    for (const callback of ptyErrorCallbacks.get(sessionId) ?? []) {
       callback(error)
     }
+    clearSessionState(sessionId)
   }
-  readyStates.clear()
 })
 
 ipcRenderer.send('pty:requestPort')
