@@ -43,48 +43,58 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
   console.log(`[terminal] Loading Ghostty WASM from ${wasmUrl}...`)
 
   const t0 = performance.now()
-  const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
-    Ghostty.load(wasmUrl),
-    window.electronAPI.spawnPty(sessionId, 80, 24),
-  ])
-  console.log(
-    `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
-  )
-  console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
-
-  // Step 2: Create terminal instance (with pre-loaded Ghostty)
-  updateStatus('Creating terminal...')
-  console.log('[terminal] Creating Terminal instance...')
-
-  const term = new Terminal({
-    ghostty, // Pass the pre-loaded Ghostty instance for instant open
-    cols: initialCols,
-    rows: initialRows,
-    fontSize: 14,
-    fontFamily: terminalFontFamily,
-    theme: THEME,
-    cursorBlink: false,
-    cursorStyle: 'block',
-    scrollback: 10000,
-    allowTransparency: false,
-  })
-
-  // Step 3: Clear container and open terminal
-  updateStatus('Opening terminal...')
-  console.log('[terminal] Opening terminal...')
-
-  // Clear any previous content (status messages, old terminal instances)
-  while (container.firstChild) {
-    container.removeChild(container.firstChild)
-  }
+  const ptyReady = window.electronAPI.spawnPty(sessionId, 80, 24)
+  let term: Terminal | null = null
 
   try {
+    const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
+      Ghostty.load(wasmUrl),
+      ptyReady,
+    ])
+    console.log(
+      `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
+    )
+    console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
+
+    // Step 2: Create terminal instance (with pre-loaded Ghostty)
+    updateStatus('Creating terminal...')
+    console.log('[terminal] Creating Terminal instance...')
+
+    term = new Terminal({
+      ghostty, // Pass the pre-loaded Ghostty instance for instant open
+      cols: initialCols,
+      rows: initialRows,
+      fontSize: 14,
+      fontFamily: terminalFontFamily,
+      theme: THEME,
+      cursorBlink: false,
+      cursorStyle: 'block',
+      scrollback: 10000,
+      allowTransparency: false,
+    })
+
+    // Step 3: Clear container and open terminal
+    updateStatus('Opening terminal...')
+    console.log('[terminal] Opening terminal...')
+
+    // Clear any previous content (status messages, old terminal instances)
+    while (container.firstChild) {
+      container.removeChild(container.firstChild)
+    }
+
     term.open(container)
     console.log('[terminal] Terminal opened')
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
+    term?.dispose()
+    window.electronAPI.killPty(sessionId)
     container.innerHTML = `<div style="color:#f7768e;padding:2rem;font-family:monospace;">Error opening terminal: ${err}</div>`
     throw err
+  }
+
+  if (!term) {
+    window.electronAPI.killPty(sessionId)
+    throw new Error('Terminal failed to initialize')
   }
 
   // Step 4: Wire IPC

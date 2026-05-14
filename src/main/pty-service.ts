@@ -168,8 +168,8 @@ function killPty(sessionId: string) {
 
   flushPtyBuffer(sessionId)
   resetPtyBuffer(session)
-  sessions.delete(sessionId)
   session.manager.dispose()
+  sessions.delete(sessionId)
 }
 
 function killAllPtys() {
@@ -189,7 +189,14 @@ function handleClientMessage(message: PtyClientMessage) {
       }
       break
     case 'spawn':
-      if (!Number.isInteger(message.cols) || !Number.isInteger(message.rows)) return
+      if (
+        !Number.isInteger(message.cols) ||
+        !Number.isInteger(message.rows) ||
+        message.cols <= 0 ||
+        message.rows <= 0
+      ) {
+        return
+      }
       spawnPty(message.sessionId, message.cols, message.rows)
       break
     case 'write': {
@@ -218,8 +225,9 @@ function handleClientMessage(message: PtyClientMessage) {
   }
 }
 
-function isClientMessage(message: unknown): message is PtyClientMessage {
-  return Schema.decodeUnknownOption(PtyClientMessageSchema)(message)._tag === 'Some'
+function decodeClientMessage(message: unknown): PtyClientMessage | null {
+  const decoded = Schema.decodeUnknownOption(PtyClientMessageSchema)(message)
+  return decoded._tag === 'Some' ? decoded.value : null
 }
 
 const parentPort = (process as typeof process & { parentPort?: ParentPort | null }).parentPort
@@ -236,8 +244,9 @@ parentPort.once('message', (event) => {
 
   port = receivedPort
   port.on('message', (messageEvent) => {
-    if (!isClientMessage(messageEvent.data)) return
-    handleClientMessage(messageEvent.data)
+    const message = decodeClientMessage(messageEvent.data)
+    if (!message) return
+    handleClientMessage(message)
   })
   port.start()
 })

@@ -19,8 +19,10 @@ type ReadyState = {
 }
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
+const MAX_PENDING_DATA_CHARS = 1024 * 1024
 
 let ptyPort: MessagePort | null = null
+let rendererReadySignaled = false
 let pendingClientMessages: PtyClientMessage[] = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, string[]>()
@@ -67,7 +69,8 @@ function clearReadyTimeout(state: ReadyState) {
 }
 
 function rejectPtyReady(sessionId: string, error: Error) {
-  const state = getReadyState(sessionId)
+  const state = readyStates.get(sessionId)
+  if (!state) return
   clearReadyTimeout(state)
   state.reject?.(error)
   state.resolve = null
@@ -75,7 +78,8 @@ function rejectPtyReady(sessionId: string, error: Error) {
 }
 
 function resolvePtyReady(sessionId: string, size: PtySize) {
-  const state = getReadyState(sessionId)
+  const state = readyStates.get(sessionId)
+  if (!state) return
   state.size = size
   clearReadyTimeout(state)
   state.resolve?.(size)
@@ -113,6 +117,38 @@ function callbacksFor<T>(callbacksBySession: Map<string, T[]>, sessionId: string
   return nextCallbacks
 }
 
+function removeCallback<T>(callbacksBySession: Map<string, T[]>, sessionId: string, callback: T) {
+  const currentCallbacks = callbacksBySession.get(sessionId)
+  if (!currentCallbacks) return
+
+  const nextCallbacks = currentCallbacks.filter((registeredCallback) => {
+    return registeredCallback !== callback
+  })
+  if (nextCallbacks.length === 0) {
+    callbacksBySession.delete(sessionId)
+    return
+  }
+
+  callbacksBySession.set(sessionId, nextCallbacks)
+}
+
+function clearSessionState(sessionId: string) {
+  const state = readyStates.get(sessionId)
+  if (state) {
+    clearReadyTimeout(state)
+  }
+  readyStates.delete(sessionId)
+  pendingData.delete(sessionId)
+  ptyDataCallbacks.delete(sessionId)
+  ptyErrorCallbacks.delete(sessionId)
+  ptyExitCallbacks.delete(sessionId)
+}
+
+function rejectAndClearSessionState(sessionId: string, error: Error) {
+  rejectPtyReady(sessionId, error)
+  clearSessionState(sessionId)
+}
+
 function flushPendingData(sessionId: string) {
   const chunks = pendingData.get(sessionId)
   const callbacks = ptyDataCallbacks.get(sessionId)
@@ -130,6 +166,13 @@ function handlePtyData(sessionId: string, data: string) {
   if (!callbacks || callbacks.length === 0) {
     const chunks = pendingData.get(sessionId) ?? []
     chunks.push(data)
+    let bufferedChars = chunks.reduce((count, chunk) => count + chunk.length, 0)
+    while (bufferedChars > MAX_PENDING_DATA_CHARS && chunks.length > 1) {
+      bufferedChars -= chunks.shift()?.length ?? 0
+    }
+    if (bufferedChars > MAX_PENDING_DATA_CHARS && chunks.length === 1) {
+      chunks[0] = chunks[0].slice(-MAX_PENDING_DATA_CHARS)
+    }
     pendingData.set(sessionId, chunks)
     return
   }
@@ -149,10 +192,10 @@ function handlePtyMessage(message: PtyServiceMessage) {
       break
     case 'error':
       rejectPtyReady(message.sessionId, new Error(message.error))
-      readyStates.delete(message.sessionId)
       for (const callback of ptyErrorCallbacks.get(message.sessionId) ?? []) {
         callback(message.error)
       }
+      clearSessionState(message.sessionId)
       break
     case 'exit': {
       const state = readyStates.get(message.sessionId)
@@ -169,14 +212,15 @@ function handlePtyMessage(message: PtyServiceMessage) {
       for (const callback of ptyExitCallbacks.get(message.sessionId) ?? []) {
         callback(message.info)
       }
-      readyStates.delete(message.sessionId)
+      clearSessionState(message.sessionId)
       break
     }
   }
 }
 
-function isPtyServiceMessage(message: unknown): message is PtyServiceMessage {
-  return Schema.decodeUnknownOption(PtyServiceMessageSchema)(message)._tag === 'Some'
+function decodePtyServiceMessage(message: unknown): PtyServiceMessage | null {
+  const decoded = Schema.decodeUnknownOption(PtyServiceMessageSchema)(message)
+  return decoded._tag === 'Some' ? decoded.value : null
 }
 
 ipcRenderer.on('pty:port', (event) => {
@@ -185,8 +229,9 @@ ipcRenderer.on('pty:port', (event) => {
 
   ptyPort = port
   ptyPort.onmessage = (messageEvent) => {
-    if (!isPtyServiceMessage(messageEvent.data)) return
-    handlePtyMessage(messageEvent.data)
+    const message = decodePtyServiceMessage(messageEvent.data)
+    if (!message) return
+    handlePtyMessage(message)
   }
   ptyPort.start()
   flushPendingClientMessages()
@@ -201,6 +246,7 @@ ipcRenderer.on('pty:service-error', (_event, error: string) => {
       callback(error)
     }
   }
+  readyStates.clear()
 })
 
 ipcRenderer.send('pty:requestPort')
@@ -238,46 +284,27 @@ const electronAPI = {
 
   killPty(sessionId: string): void {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    rejectAndClearSessionState(sessionId, new Error(`PTY ${sessionId} was killed before ready`))
     queuePtyMessage({ type: 'kill', sessionId })
-    readyStates.delete(sessionId)
-    pendingData.delete(sessionId)
-    ptyDataCallbacks.delete(sessionId)
-    ptyErrorCallbacks.delete(sessionId)
-    ptyExitCallbacks.delete(sessionId)
   },
 
   onPtyData(sessionId: string, callback: (data: string) => void): () => void {
     const callbacks = callbacksFor(ptyDataCallbacks, sessionId)
     callbacks.push(callback)
     flushPendingData(sessionId)
-    return () => {
-      ptyDataCallbacks.set(
-        sessionId,
-        callbacks.filter((registeredCallback) => registeredCallback !== callback),
-      )
-    }
+    return () => removeCallback(ptyDataCallbacks, sessionId, callback)
   },
 
   onPtyError(sessionId: string, callback: (error: string) => void): () => void {
     const callbacks = callbacksFor(ptyErrorCallbacks, sessionId)
     callbacks.push(callback)
-    return () => {
-      ptyErrorCallbacks.set(
-        sessionId,
-        callbacks.filter((registeredCallback) => registeredCallback !== callback),
-      )
-    }
+    return () => removeCallback(ptyErrorCallbacks, sessionId, callback)
   },
 
   onPtyExit(sessionId: string, callback: (info: PtyExitInfo) => void): () => void {
     const callbacks = callbacksFor(ptyExitCallbacks, sessionId)
     callbacks.push(callback)
-    return () => {
-      ptyExitCallbacks.set(
-        sessionId,
-        callbacks.filter((registeredCallback) => registeredCallback !== callback),
-      )
-    }
+    return () => removeCallback(ptyExitCallbacks, sessionId, callback)
   },
 
   /**
@@ -286,6 +313,8 @@ const electronAPI = {
    */
   signalReady(): void {
     queuePtyMessage({ type: 'renderer-ready' })
+    if (rendererReadySignaled) return
+    rendererReadySignaled = true
     ipcRenderer.send('renderer:ready')
   },
 
