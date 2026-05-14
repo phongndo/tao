@@ -1,9 +1,4 @@
-import type {
-  MosaicDirection,
-  MosaicNode,
-  MosaicSplitNode,
-  MosaicTabsNode,
-} from 'react-mosaic-component'
+import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-component'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { WorktreeInfo } from '../../shared/workspace'
@@ -112,12 +107,8 @@ function createTerminalTab(workspaceId: string, order: number): { tab: Tab; pane
   }
 }
 
-function isSplitNode(node: MosaicLayoutNode): node is MosaicSplitNode<string> {
-  return typeof node === 'object' && node !== null && node.type === 'split'
-}
-
-function isTabsNode(node: MosaicLayoutNode): node is MosaicTabsNode<string> {
-  return typeof node === 'object' && node !== null && node.type === 'tabs'
+function isParentNode(node: MosaicLayoutNode): node is MosaicParent<string> {
+  return typeof node === 'object' && node !== null
 }
 
 function getWorkspaceTabs(tabs: Tab[], workspaceId: string): Tab[] {
@@ -126,9 +117,7 @@ function getWorkspaceTabs(tabs: Tab[], workspaceId: string): Tab[] {
 
 function getPaneIdsInLayout(layout: MosaicLayoutNode): string[] {
   if (typeof layout === 'string') return [layout]
-  if (isSplitNode(layout)) return layout.children.flatMap(getPaneIdsInLayout)
-  if (isTabsNode(layout)) return layout.tabs
-  return []
+  return [layout.first, layout.second].flatMap(getPaneIdsInLayout)
 }
 
 function getFirstPaneId(layout: MosaicLayoutNode): string | null {
@@ -147,40 +136,24 @@ function splitLayoutNode(
 ): MosaicLayoutNode {
   if (layout === paneId) {
     return {
-      type: 'split',
       direction,
-      children: [paneId, newPaneId],
-      splitPercentages: [50, 50],
+      first: paneId,
+      second: newPaneId,
+      splitPercentage: 50,
     }
   }
 
   if (typeof layout === 'string') return layout
 
-  if (isSplitNode(layout)) {
+  if (isParentNode(layout)) {
     return {
       ...layout,
-      children: layout.children.map((child) =>
-        splitLayoutNode(child, paneId, newPaneId, direction),
-      ),
-    }
-  }
-
-  if (isTabsNode(layout)) {
-    if (!layout.tabs.includes(paneId)) return layout
-
-    return {
-      type: 'split',
-      direction,
-      children: [layout, newPaneId],
-      splitPercentages: [50, 50],
+      first: splitLayoutNode(layout.first, paneId, newPaneId, direction),
+      second: splitLayoutNode(layout.second, paneId, newPaneId, direction),
     }
   }
 
   return layout
-}
-
-function normalizeSplitPercentages(length: number): number[] {
-  return Array.from({ length }, () => 100 / length)
 }
 
 function removePaneFromLayout(
@@ -190,39 +163,20 @@ function removePaneFromLayout(
   if (layout === paneId) return { layout: null, removed: true }
   if (typeof layout === 'string') return { layout, removed: false }
 
-  if (isSplitNode(layout)) {
-    let removed = false
-    const children = layout.children.flatMap((child) => {
-      const result = removePaneFromLayout(child, paneId)
-      removed ||= result.removed
-      return result.layout ? [result.layout] : []
-    })
-
+  if (isParentNode(layout)) {
+    const first = removePaneFromLayout(layout.first, paneId)
+    const second = removePaneFromLayout(layout.second, paneId)
+    const removed = first.removed || second.removed
     if (!removed) return { layout, removed: false }
-    if (children.length === 0) return { layout: null, removed: true }
-    if (children.length === 1) return { layout: children[0], removed: true }
+    if (!first.layout && !second.layout) return { layout: null, removed: true }
+    if (!first.layout) return { layout: second.layout, removed: true }
+    if (!second.layout) return { layout: first.layout, removed: true }
 
     return {
       layout: {
         ...layout,
-        children,
-        splitPercentages: normalizeSplitPercentages(children.length),
-      },
-      removed: true,
-    }
-  }
-
-  if (isTabsNode(layout)) {
-    const tabs = layout.tabs.filter((tab) => tab !== paneId)
-    if (tabs.length === layout.tabs.length) return { layout, removed: false }
-    if (tabs.length === 0) return { layout: null, removed: true }
-    if (tabs.length === 1) return { layout: tabs[0], removed: true }
-
-    return {
-      layout: {
-        ...layout,
-        tabs,
-        activeTabIndex: Math.min(layout.activeTabIndex, tabs.length - 1),
+        first: first.layout,
+        second: second.layout,
       },
       removed: true,
     }

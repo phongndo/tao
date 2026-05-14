@@ -34,9 +34,7 @@ function workspaceNameFromPath(projectPath: string): string {
 
 function firstPaneId(layout: MosaicLayoutNode): string | null {
   if (typeof layout === 'string') return layout
-  if (layout.type === 'split') return firstPaneId(layout.children[0])
-  if (layout.type === 'tabs') return layout.tabs[0] ?? null
-  return null
+  return firstPaneId(layout.first)
 }
 
 function WorkspaceItem({ workspace }: { workspace: Workspace }) {
