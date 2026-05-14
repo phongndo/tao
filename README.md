@@ -16,10 +16,11 @@ Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAs
 ## Quick Start
 
 ```bash
+nix develop          # Enter the reproducible dev shell
 pnpm install
-pnpm dev          # Terminal with HMR
-pnpm build        # Production build
-pnpm start        # Run production build
+pnpm dev             # Terminal with HMR
+pnpm build           # Production build
+pnpm start           # Run production build
 ```
 
 ## Performance

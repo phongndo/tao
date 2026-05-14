@@ -14,7 +14,7 @@
         };
       in
       {
-        # ── Dev shell (nix develop or direnv) ──
+        # ── Dev shell (nix develop) ──
         devShells.default = pkgs.mkShell {
           name = "tau";
 
@@ -26,31 +26,32 @@
           ];
 
           # Runtime dependencies for Electron
-          buildInputs = with pkgs; [
-            # Electron runtime deps on Linux
-            atk
-            cairo
-            cups
-            dbus
-            expat
-            gdk-pixbuf
-            glib
-            gtk3
-            libdrm
-            libxkbcommon
-            mesa
-            nspr
-            nss
-            pango
-            udev
-            xorg.libX11
-            xorg.libXcomposite
-            xorg.libXdamage
-            xorg.libXext
-            xorg.libXfixes
-            xorg.libXrandr
-            xorg.libxcb
-          ];
+          # Linux-specific; macOS/Windows use system frameworks
+          buildInputs = with pkgs;
+            lib.optionals stdenv.isLinux [
+              atk
+              cairo
+              cups
+              dbus
+              expat
+              gdk-pixbuf
+              glib
+              gtk3
+              libdrm
+              libxkbcommon
+              mesa
+              nspr
+              nss
+              pango
+              udev
+              xorg.libX11
+              xorg.libXcomposite
+              xorg.libXdamage
+              xorg.libXext
+              xorg.libXfixes
+              xorg.libXrandr
+              xorg.libxcb
+            ];
 
           shellHook = ''
             echo "🖥  Tau Terminal dev shell"
