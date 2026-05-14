@@ -9,6 +9,7 @@ const SIDEBAR_COLLAPSED_WIDTH = 52
 const SIDEBAR_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_COLLAPSE_THRESHOLD = 120
+const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
@@ -148,11 +149,13 @@ function ResizeShell({
 
     document.addEventListener('pointermove', handlePointerMove)
     document.addEventListener('pointerup', handlePointerUp)
+    document.addEventListener('pointercancel', handlePointerUp)
     document.body.classList.add('sidebar-resizing')
 
     return () => {
       document.removeEventListener('pointermove', handlePointerMove)
       document.removeEventListener('pointerup', handlePointerUp)
+      document.removeEventListener('pointercancel', handlePointerUp)
       document.body.classList.remove('sidebar-resizing')
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current)
@@ -176,13 +179,41 @@ function ResizeShell({
         aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
         aria-valuemax={SIDEBAR_MAX_WIDTH}
         aria-valuenow={width}
+        aria-label="Resize sidebar"
         tabIndex={0}
         className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
         onPointerDown={(event) => {
           event.preventDefault()
+          event.currentTarget.setPointerCapture(event.pointerId)
           startXRef.current = event.clientX
           startWidthRef.current = width
           setIsResizing(true)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') {
+            event.preventDefault()
+            onResize(width - SIDEBAR_KEYBOARD_RESIZE_STEP)
+            return
+          }
+          if (event.key === 'ArrowRight') {
+            event.preventDefault()
+            onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : width + SIDEBAR_KEYBOARD_RESIZE_STEP)
+            return
+          }
+          if (event.key === 'Home') {
+            event.preventDefault()
+            onResize(SIDEBAR_COLLAPSED_WIDTH)
+            return
+          }
+          if (event.key === 'End') {
+            event.preventDefault()
+            onResize(SIDEBAR_MAX_WIDTH)
+            return
+          }
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : SIDEBAR_COLLAPSED_WIDTH)
+          }
         }}
         onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
       />
@@ -237,16 +268,19 @@ export function App() {
     })
   }
 
-  function handleResizeSidebar(nextWidth: number) {
-    if (nextWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
-      setSidebarExpanded(false)
-      return
-    }
+  const handleResizeSidebar = useCallback(
+    (nextWidth: number) => {
+      if (nextWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
+        setSidebarExpanded(false)
+        return
+      }
 
-    const clampedWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth))
-    setSidebarWidth(clampedWidth)
-    setSidebarExpanded(true)
-  }
+      const clampedWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth))
+      setSidebarWidth(clampedWidth)
+      setSidebarExpanded(true)
+    },
+    [setSidebarExpanded, setSidebarWidth],
+  )
 
   const sortedWorkspaces = [...workspaces].sort((a, b) => a.order - b.order)
 
