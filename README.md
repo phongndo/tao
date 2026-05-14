@@ -4,7 +4,6 @@
   <img src="https://img.shields.io/github/actions/workflow/status/phongndo/tau/ci.yml?branch=main&label=CI" alt="CI">
   <img src="https://img.shields.io/github/license/phongndo/tau?label=license" alt="License">
   <img src="https://img.shields.io/badge/parser-Ghostty%20WASM%20(Zig)-blue" alt="Parser">
-  <img src="https://img.shields.io/badge/renderer-Canvas%202D%20%E2%86%92%20WebGL%20(planned)-orange" alt="Renderer">
 </p>
 
 A super-performant terminal emulator built with **Electron** + **Ghostty's WASM-based VT parser** + **node-pty**.
