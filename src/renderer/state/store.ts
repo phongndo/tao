@@ -14,6 +14,7 @@ export interface TauState {
   removeWorkspace(workspaceId: string): void
   selectWorkspace(workspaceId: string): void
   toggleSidebar(): void
+  setSidebarExpanded(expanded: boolean): void
   setSidebarWidth(width: number): void
 }
 
@@ -64,7 +65,7 @@ export const useTauStore = create<TauState>()(
       activeTabId: null,
       panes: [],
       sidebarExpanded: true,
-      sidebarWidth: 22,
+      sidebarWidth: 240,
       addWorkspace: (workspace) =>
         set((state) => {
           const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)
@@ -96,6 +97,7 @@ export const useTauStore = create<TauState>()(
         }),
       selectWorkspace: (workspaceId) => set({ activeWorkspaceId: workspaceId }),
       toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
+      setSidebarExpanded: (expanded) => set({ sidebarExpanded: expanded }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
     }),
     {

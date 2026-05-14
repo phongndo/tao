@@ -1,12 +1,14 @@
-import { FolderPlus, GitBranch, Trash2 } from 'lucide-react'
-import { useEffect } from 'react'
-import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
+import { FolderPlus, GitBranch, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTauStore, type Workspace } from '../state/store'
 import { useGitBranch, useGitWorktrees } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 
-const SIDEBAR_MIN_SIZE = 18
-const SIDEBAR_MAX_SIZE = 34
+const SIDEBAR_DEFAULT_WIDTH = 240
+const SIDEBAR_COLLAPSED_WIDTH = 52
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 360
+const SIDEBAR_COLLAPSE_THRESHOLD = 120
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
@@ -67,18 +69,147 @@ function WorkspaceItem({ workspace }: { workspace: Workspace }) {
   )
 }
 
+function CollapsedWorkspaceItem({ workspace }: { workspace: Workspace }) {
+  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
+  const selectWorkspace = useTauStore((state) => state.selectWorkspace)
+  const isActive = activeWorkspaceId === workspace.id
+  const label = workspace.name.trim().slice(0, 1).toUpperCase() || 'W'
+
+  return (
+    <button
+      type="button"
+      className={
+        isActive
+          ? 'collapsed-workspace-button collapsed-workspace-button-active'
+          : 'collapsed-workspace-button'
+      }
+      title={workspace.name}
+      aria-label={workspace.name}
+      aria-pressed={isActive}
+      onClick={() => selectWorkspace(workspace.id)}
+    >
+      <span>{label}</span>
+    </button>
+  )
+}
+
+function ResizeShell({
+  children,
+  width,
+  isCollapsed,
+  onResize,
+}: {
+  children: ReactNode
+  width: number
+  isCollapsed: boolean
+  onResize(width: number): void
+}) {
+  const [isResizing, setIsResizing] = useState(false)
+  const startXRef = useRef(0)
+  const startWidthRef = useRef(0)
+  const pendingWidthRef = useRef<number | null>(null)
+  const frameRef = useRef<number | null>(null)
+
+  const flushPendingWidth = useCallback(() => {
+    const nextWidth = pendingWidthRef.current
+    pendingWidthRef.current = null
+    if (nextWidth === null) return
+    onResize(nextWidth)
+  }, [onResize])
+
+  const handlePointerMove = useCallback(
+    (event: PointerEvent) => {
+      if (!isResizing) return
+
+      pendingWidthRef.current = startWidthRef.current + event.clientX - startXRef.current
+      if (frameRef.current !== null) return
+
+      frameRef.current = window.requestAnimationFrame(() => {
+        frameRef.current = null
+        flushPendingWidth()
+      })
+    },
+    [flushPendingWidth, isResizing],
+  )
+
+  const handlePointerUp = useCallback(() => {
+    if (!isResizing) return
+
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current)
+      frameRef.current = null
+    }
+    flushPendingWidth()
+    setIsResizing(false)
+  }, [flushPendingWidth, isResizing])
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    document.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('pointerup', handlePointerUp)
+    document.body.classList.add('sidebar-resizing')
+
+    return () => {
+      document.removeEventListener('pointermove', handlePointerMove)
+      document.removeEventListener('pointerup', handlePointerUp)
+      document.body.classList.remove('sidebar-resizing')
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current)
+        frameRef.current = null
+      }
+      pendingWidthRef.current = null
+    }
+  }, [handlePointerMove, handlePointerUp, isResizing])
+
+  return (
+    <aside
+      className={isCollapsed ? 'tau-sidebar tau-sidebar-collapsed' : 'tau-sidebar'}
+      style={{ width }}
+      aria-label="Workspaces"
+    >
+      {children}
+      {/* biome-ignore lint/a11y/useSemanticElements: <hr> is not appropriate for an interactive resize handle. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
+        aria-valuemax={SIDEBAR_MAX_WIDTH}
+        aria-valuenow={width}
+        tabIndex={0}
+        className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
+        onPointerDown={(event) => {
+          event.preventDefault()
+          startXRef.current = event.clientX
+          startWidthRef.current = width
+          setIsResizing(true)
+        }}
+        onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
+      />
+    </aside>
+  )
+}
+
 export function App() {
-  const sidebarPanelRef = usePanelRef()
   const workspaces = useTauStore((state) => state.workspaces)
   const sidebarExpanded = useTauStore((state) => state.sidebarExpanded)
   const sidebarWidth = useTauStore((state) => state.sidebarWidth)
-  const sidebarSize = Math.min(
-    SIDEBAR_MAX_SIZE,
-    Math.max(SIDEBAR_MIN_SIZE, sidebarWidth > 100 ? 22 : sidebarWidth),
-  )
   const addWorkspace = useTauStore((state) => state.addWorkspace)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
+  const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
+  const sidebarSize = useMemo(
+    () =>
+      Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(
+          SIDEBAR_MIN_WIDTH,
+          sidebarWidth >= SIDEBAR_MIN_WIDTH ? sidebarWidth : SIDEBAR_DEFAULT_WIDTH,
+        ),
+      ),
+    [sidebarWidth],
+  )
+  const renderedSidebarWidth = sidebarExpanded ? sidebarSize : SIDEBAR_COLLAPSED_WIDTH
 
   useEffect(() => {
     const unsubscribeToggleSidebar = window.electronAPI.onToggleSidebar(toggleSidebar)
@@ -87,14 +218,6 @@ export function App() {
       unsubscribeToggleSidebar()
     }
   }, [toggleSidebar])
-
-  useEffect(() => {
-    if (sidebarExpanded) {
-      sidebarPanelRef.current?.expand()
-    } else {
-      sidebarPanelRef.current?.collapse()
-    }
-  }, [sidebarExpanded, sidebarPanelRef])
 
   async function handleAddWorkspace() {
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
@@ -114,54 +237,96 @@ export function App() {
     })
   }
 
+  function handleResizeSidebar(nextWidth: number) {
+    if (nextWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
+      setSidebarExpanded(false)
+      return
+    }
+
+    const clampedWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth))
+    setSidebarWidth(clampedWidth)
+    setSidebarExpanded(true)
+  }
+
+  const sortedWorkspaces = [...workspaces].sort((a, b) => a.order - b.order)
+
   return (
-    <Group orientation="horizontal" className="tau-shell">
-      <Panel
-        panelRef={sidebarPanelRef}
-        defaultSize={sidebarSize}
-        minSize={SIDEBAR_MIN_SIZE}
-        maxSize={SIDEBAR_MAX_SIZE}
-        collapsedSize={0}
-        collapsible
-        className="tau-sidebar"
-        onResize={(size) => {
-          if (size.asPercentage > 0) setSidebarWidth(size.asPercentage)
-        }}
+    <div className="tau-shell">
+      <ResizeShell
+        width={renderedSidebarWidth}
+        isCollapsed={!sidebarExpanded}
+        onResize={handleResizeSidebar}
       >
-        <aside className="sidebar-content" aria-label="Workspaces">
-          <div className="sidebar-header">
-            <span className="sidebar-title">Tau</span>
-            <button
-              type="button"
-              className="icon-button add-workspace-button"
-              aria-label="Add workspace"
-              onClick={handleAddWorkspace}
-            >
-              <FolderPlus size={15} />
-            </button>
-          </div>
-          {workspaces.length > 0 ? (
-            <div className="workspace-list">
-              {[...workspaces]
-                .sort((a, b) => a.order - b.order)
-                .map((workspace) => (
+        {sidebarExpanded ? (
+          <div className="sidebar-content">
+            <div className="sidebar-header">
+              <span className="sidebar-title">Tau</span>
+              <div className="sidebar-header-actions">
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                  onClick={() => setSidebarExpanded(false)}
+                >
+                  <PanelLeftClose size={15} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button add-workspace-button"
+                  aria-label="Add workspace"
+                  onClick={handleAddWorkspace}
+                >
+                  <FolderPlus size={15} />
+                </button>
+              </div>
+            </div>
+            {workspaces.length > 0 ? (
+              <div className="workspace-list">
+                {sortedWorkspaces.map((workspace) => (
                   <WorkspaceItem key={workspace.id} workspace={workspace} />
                 ))}
+              </div>
+            ) : (
+              <div className="workspace-placeholder">
+                <span className="workspace-name">No workspaces</span>
+                <span className="workspace-meta">Add a project directory</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="collapsed-sidebar-content">
+            <button
+              type="button"
+              className="collapsed-sidebar-toggle"
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              onClick={() => setSidebarExpanded(true)}
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+            <button
+              type="button"
+              className="collapsed-sidebar-toggle"
+              aria-label="Add workspace"
+              title="Add workspace"
+              onClick={handleAddWorkspace}
+            >
+              <FolderPlus size={16} />
+            </button>
+            <div className="collapsed-workspace-list">
+              {sortedWorkspaces.map((workspace) => (
+                <CollapsedWorkspaceItem key={workspace.id} workspace={workspace} />
+              ))}
             </div>
-          ) : (
-            <div className="workspace-placeholder">
-              <span className="workspace-name">No workspaces</span>
-              <span className="workspace-meta">Add a project directory</span>
-            </div>
-          )}
-        </aside>
-      </Panel>
-      <Separator className="resize-handle" />
-      <Panel minSize="50%" className="tau-main">
+          </div>
+        )}
+      </ResizeShell>
+      <section className="tau-main">
         <main className="main-content">
           <TerminalPane />
         </main>
-      </Panel>
-    </Group>
+      </section>
+    </div>
   )
 }
