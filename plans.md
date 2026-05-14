@@ -448,6 +448,7 @@ must wrap this carefully:
 - [x] Keep raw shell command execution inside the Effect service layer
 
 ### Phase 3: Tabs + Pane Layout
+
 - [x] Tab bar with tab switching
 - [x] New tab (Cmd+T)
 - [x] Close tab (Cmd+W)
