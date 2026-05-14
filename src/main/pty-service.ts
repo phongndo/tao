@@ -1,6 +1,11 @@
+import { Schema } from 'effect'
 import type { MessagePortMain } from 'electron'
 import { PtyManager } from './pty'
-import type { PtyClientMessage, PtyServiceMessage } from './pty-protocol'
+import {
+  type PtyClientMessage,
+  PtyClientMessageSchema,
+  type PtyServiceMessage,
+} from './pty-protocol'
 
 type ParentPort = {
   once(
@@ -169,12 +174,7 @@ function handleClientMessage(message: PtyClientMessage) {
 }
 
 function isClientMessage(message: unknown): message is PtyClientMessage {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    'type' in message &&
-    typeof (message as { type: unknown }).type === 'string'
-  )
+  return Schema.decodeUnknownEither(PtyClientMessageSchema)(message)._tag === 'Right'
 }
 
 const parentPort = (process as typeof process & { parentPort?: ParentPort | null }).parentPort

@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { WorktreeInfo } from '../../shared/workspace'
 
 export interface TauState {
   workspaces: Workspace[]
@@ -8,7 +10,11 @@ export interface TauState {
   panes: Pane[]
   sidebarExpanded: boolean
   sidebarWidth: number
+  addWorkspace(workspace: Workspace): void
+  removeWorkspace(workspaceId: string): void
+  selectWorkspace(workspaceId: string): void
   toggleSidebar(): void
+  setSidebarWidth(width: number): void
 }
 
 export interface Workspace {
@@ -18,13 +24,6 @@ export interface Workspace {
   branch?: string
   worktrees?: WorktreeInfo[]
   order: number
-}
-
-export interface WorktreeInfo {
-  path: string
-  branch: string
-  hash: string
-  isBare: boolean
 }
 
 export interface Tab {
@@ -56,13 +55,57 @@ export interface Pane {
 export type PaneType = 'terminal' | 'webview'
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 
-export const useTauStore = create<TauState>((set) => ({
-  workspaces: [],
-  activeWorkspaceId: null,
-  tabs: [],
-  activeTabId: null,
-  panes: [],
-  sidebarExpanded: true,
-  sidebarWidth: 240,
-  toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
-}))
+export const useTauStore = create<TauState>()(
+  persist(
+    (set) => ({
+      workspaces: [],
+      activeWorkspaceId: null,
+      tabs: [],
+      activeTabId: null,
+      panes: [],
+      sidebarExpanded: true,
+      sidebarWidth: 22,
+      addWorkspace: (workspace) =>
+        set((state) => {
+          const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)
+          if (existingWorkspace) {
+            return { activeWorkspaceId: existingWorkspace.id }
+          }
+
+          const orderedWorkspace = {
+            ...workspace,
+            order: state.workspaces.length,
+          }
+
+          return {
+            workspaces: [...state.workspaces, orderedWorkspace],
+            activeWorkspaceId: orderedWorkspace.id,
+          }
+        }),
+      removeWorkspace: (workspaceId) =>
+        set((state) => {
+          const workspaces = state.workspaces
+            .filter(({ id }) => id !== workspaceId)
+            .map((workspace, order) => ({ ...workspace, order }))
+          const activeWorkspaceId =
+            state.activeWorkspaceId === workspaceId
+              ? (workspaces.find(({ order }) => order === 0)?.id ?? null)
+              : state.activeWorkspaceId
+
+          return { workspaces, activeWorkspaceId }
+        }),
+      selectWorkspace: (workspaceId) => set({ activeWorkspaceId: workspaceId }),
+      toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
+      setSidebarWidth: (width) => set({ sidebarWidth: width }),
+    }),
+    {
+      name: 'tau-workspaces',
+      partialize: (state) => ({
+        workspaces: state.workspaces,
+        activeWorkspaceId: state.activeWorkspaceId,
+        sidebarExpanded: state.sidebarExpanded,
+        sidebarWidth: state.sidebarWidth,
+      }),
+    },
+  ),
+)

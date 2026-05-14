@@ -17,8 +17,9 @@
  */
 
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, MessageChannelMain, utilityProcess } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, utilityProcess } from 'electron'
 import ptyServicePath from './pty-service?modulePath'
+import { getGitBranch, getGitWorktrees } from './workspace-service'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
 
@@ -242,6 +243,31 @@ ipcMain.on('renderer:ready', (event) => {
 ipcMain.on('pty:requestPort', (event) => {
   if (event.sender !== mainWindow?.webContents) return
   sendPtyPortToRenderer()
+})
+
+ipcMain.handle('workspace:pickDirectory', async (event): Promise<string | null> => {
+  if (event.sender !== mainWindow?.webContents || !mainWindow) return null
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Add Workspace',
+  })
+
+  if (result.canceled) return null
+  return result.filePaths[0] ?? null
+})
+
+ipcMain.handle(
+  'workspace:getGitBranch',
+  async (event, workspacePath: unknown): Promise<string | null> => {
+    if (event.sender !== mainWindow?.webContents || typeof workspacePath !== 'string') return null
+    return getGitBranch(workspacePath)
+  },
+)
+
+ipcMain.handle('workspace:getGitWorktrees', async (event, workspacePath: unknown) => {
+  if (event.sender !== mainWindow?.webContents || typeof workspacePath !== 'string') return []
+  return getGitWorktrees(workspacePath)
 })
 
 // ─── App Lifecycle ───
