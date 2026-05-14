@@ -183,6 +183,7 @@ function ResizeShell({
         tabIndex={0}
         className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
         onPointerDown={(event) => {
+          if (!event.isPrimary || event.button !== 0) return
           event.preventDefault()
           event.currentTarget.setPointerCapture(event.pointerId)
           startXRef.current = event.clientX
