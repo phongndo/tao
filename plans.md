@@ -401,21 +401,21 @@ must wrap this carefully:
 ## 8. Implementation Phases
 
 ### Phase 1: Foundation (React + Zustand + Layout)
-- [ ] Add React 19, React DOM, Zustand to project
-- [ ] Add Effect.ts (`effect`) and define the runtime/service boundary
-- [ ] Create empty Zustand store with workspace/tab/pane types
-- [ ] Create typed Effect errors and schemas for workspace and PTY contracts
-- [ ] Wire `react-resizable-panels` for sidebar + main layout
-- [ ] Render placeholder sidebar and main area
-- [ ] Ensure ghostty-web terminal still works inside a React component
+- [x] Add React 19, React DOM, Zustand to project
+- [x] Add Effect.ts (`effect`) and define the runtime/service boundary
+- [x] Create empty Zustand store with workspace/tab/pane types
+- [x] Create typed Effect errors and schemas for workspace and PTY contracts
+- [x] Wire `react-resizable-panels` for sidebar + main layout
+- [x] Render placeholder sidebar and main area
+- [x] Ensure ghostty-web terminal still works inside a React component
 
 ### Phase 2: Sidebar + Workspaces
-- [ ] Workspace list UI in sidebar
-- [ ] Add workspace (project directory)
-- [ ] Remove workspace
-- [ ] Git branch display via `WorkspaceService.getGitBranch`
-- [ ] Worktree list via `WorkspaceService.getGitWorktrees`
-- [ ] Keep raw shell command execution inside the Effect service layer
+- [x] Workspace list UI in sidebar
+- [x] Add workspace (project directory)
+- [x] Remove workspace
+- [x] Git branch display via `WorkspaceService.getGitBranch`
+- [x] Worktree list via `WorkspaceService.getGitWorktrees`
+- [x] Keep raw shell command execution inside the Effect service layer
 
 ### Phase 3: Tabs + Pane Layout
 - [ ] Tab bar with tab switching

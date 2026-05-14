@@ -1,10 +1,8 @@
+import { Schema } from 'effect'
 import { contextBridge, ipcRenderer } from 'electron'
-import type {
-  PtyClientMessage,
-  PtyExitInfo,
-  PtyServiceMessage,
-  PtySize,
-} from '../main/pty-protocol'
+import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
+import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
+import type { WorktreeInfo } from '../shared/workspace'
 
 type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
@@ -123,12 +121,7 @@ function handlePtyMessage(message: PtyServiceMessage) {
 }
 
 function isPtyServiceMessage(message: unknown): message is PtyServiceMessage {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    'type' in message &&
-    typeof (message as { type: unknown }).type === 'string'
-  )
+  return Schema.decodeUnknownEither(PtyServiceMessageSchema)(message)._tag === 'Right'
 }
 
 ipcRenderer.on('pty:port', (event) => {
@@ -239,6 +232,21 @@ const electronAPI = {
     return () => {
       ipcRenderer.removeListener('app:toggle-sidebar', listener)
     }
+  },
+
+  pickWorkspaceDirectory(): Promise<string | null> {
+    return ipcRenderer.invoke('workspace:pickDirectory')
+  },
+
+  getGitBranch(workspacePath: string): Promise<string | null> {
+    if (typeof workspacePath !== 'string' || workspacePath.length === 0)
+      return Promise.resolve(null)
+    return ipcRenderer.invoke('workspace:getGitBranch', workspacePath)
+  },
+
+  getGitWorktrees(workspacePath: string): Promise<WorktreeInfo[]> {
+    if (typeof workspacePath !== 'string' || workspacePath.length === 0) return Promise.resolve([])
+    return ipcRenderer.invoke('workspace:getGitWorktrees', workspacePath)
   },
 }
 

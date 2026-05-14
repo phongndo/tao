@@ -50,12 +50,47 @@ body {
   min-height: 32px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .sidebar-title {
   color: #cac9dd;
   font-size: 13px;
   font-weight: 700;
+}
+
+.icon-button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #9699a8;
+  background: transparent;
+  cursor: default;
+}
+
+.icon-button:hover,
+.icon-button:focus-visible {
+  color: #cac9dd;
+  border-color: #38383d;
+  background: #242428;
+  outline: none;
+}
+
+.add-workspace-button {
+  flex: 0 0 auto;
+}
+
+.workspace-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
 }
 
 .workspace-placeholder {
@@ -77,6 +112,110 @@ body {
 .workspace-meta {
   color: #9699a8;
   font-size: 11px;
+}
+
+.workspace-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  text-align: left;
+}
+
+.workspace-item:hover {
+  border-color: #303035;
+  background: #1f1f22;
+}
+
+.workspace-item-active {
+  border-color: #424246;
+  background: #242428;
+}
+
+.workspace-row,
+.workspace-meta-row,
+.worktree-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.workspace-row {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workspace-select-button {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  text-align: left;
+}
+
+.workspace-select-button:focus-visible {
+  outline: 1px solid #424246;
+  outline-offset: 2px;
+}
+
+.workspace-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #c9c7cd;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-path {
+  overflow: hidden;
+  color: #747783;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-meta-row {
+  gap: 5px;
+  color: #9699a8;
+  font-size: 11px;
+}
+
+.workspace-meta-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 17px;
+}
+
+.worktree-item {
+  gap: 6px;
+  color: #9699a8;
+  font-size: 10px;
+}
+
+.worktree-branch {
+  min-width: 0;
+  overflow: hidden;
+  color: #747783;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resize-handle {

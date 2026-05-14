@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot } from 'react-dom/client'
 import { App } from './ui/App'
 import './styles.css'
@@ -23,4 +24,10 @@ if (!rootElement) {
   throw new Error('Missing #root element')
 }
 
-createRoot(rootElement).render(<App />)
+const queryClient = new QueryClient()
+
+createRoot(rootElement).render(
+  <QueryClientProvider client={queryClient}>
+    <App />
+  </QueryClientProvider>,
+)
