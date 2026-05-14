@@ -35,7 +35,10 @@ jobs:
               return
             }
 
-            const requiredAuthors = new Set(['coderabbitai', 'greptileai'])
+            const requiredReviewers = {
+              CodeRabbit: new Set(['coderabbitai', 'coderabbitai[bot]']),
+              Greptile: new Set(['greptileai', 'greptileai[bot]', 'greptile-apps[bot]']),
+            }
             const seenAuthors = new Set()
 
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
@@ -46,7 +49,7 @@ jobs:
             })
 
             for (const review of reviews) {
-              if (review.user?.login && requiredAuthors.has(review.user.login)) {
+              if (review.user?.login) {
                 seenAuthors.add(review.user.login)
               }
             }
@@ -59,12 +62,14 @@ jobs:
             })
 
             for (const comment of comments) {
-              if (comment.user?.login && requiredAuthors.has(comment.user.login)) {
+              if (comment.user?.login) {
                 seenAuthors.add(comment.user.login)
               }
             }
 
-            const missing = [...requiredAuthors].filter((author) => !seenAuthors.has(author))
+            const missing = Object.entries(requiredReviewers)
+              .filter(([, aliases]) => ![...aliases].some((alias) => seenAuthors.has(alias)))
+              .map(([reviewer]) => reviewer)
 
             if (missing.length > 0) {
               core.setFailed(`Missing required AI review activity from: ${missing.join(', ')}`)

@@ -1,0 +1,18 @@
+{
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "includeBranches": ["main"],
+  "include": [
+    "src/**",
+    "docs/**",
+    "bench/**",
+    "tau-gl/**",
+    "*.md",
+    "*.json",
+    "*.ts",
+    "*.tsx",
+    "*.yaml",
+    "*.yml"
+  ],
+  "exclude": ["pnpm-lock.yaml", "out/**", "dist/**", "public/ghostty-vt.wasm", "node_modules/**"]
+}
