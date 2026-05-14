@@ -16,7 +16,8 @@ zero-copy rendering, dedicated PTY utility process).
 | **Shell** | Electron 42 + electron-vite | Already in use; same as Superset |
 | **Rendering** | React 19 + React DOM | Ecosystem: react-mosaic-component, TanStack Query, lucide-react |
 | **UI State** | Zustand 5 | Tiny, fast, synchronous — handles active tab, pane layout, workspace order |
-| **Async State** | TanStack Query | Cached auto-refetch for git branch, worktrees, PR info — data that changes outside the app |
+| **Effect Runtime** | Effect.ts (`effect`) | Typed side-effect boundary for shell commands, IPC, persistence, cancellation, retries, and testable services |
+| **Async Cache** | TanStack Query | Renderer cache over Effect-backed reads: git branch, worktrees, PR info — data that changes outside the app |
 | **Pane Layout** | react-mosaic-component | Battle-tested recursive split tiling (same lib Superset uses) |
 | **Sidebar / Main Split** | react-resizable-panels | Resizable left sidebar + main content area |
 | **Icons** | lucide-react | Consistent icon set, tree-shakeable |
@@ -28,11 +29,18 @@ zero-copy rendering, dedicated PTY utility process).
 - **Router**: Tau is a single-screen app. Navigation is state-driven (`activeWorkspaceId`, `activeTabId`), not URL-driven.
 - **Table / Virtual / Form**: Not needed for initial UI. Can add later if required.
 
-### Zustand vs TanStack Query boundary
+### Zustand vs Effect vs TanStack Query boundary
+```text
+Zustand:        "which tab is active right now"     (ephemeral UI state)
+Effect:         "run git safely and return typed errors" (fallible side effects)
+TanStack Query: "cache branch for this workspace"   (renderer cache / refetch policy)
 ```
-Zustand:     "which tab is active right now"    (ephemeral UI state)
-Query:       "what branch is this workspace on"  (async, external data)
-```
+
+Effect is the only place for fallible external work. React components and
+Zustand actions should not call shell commands, Electron IPC, storage, or PTY
+operations directly. They call narrow Effect-backed services, and the renderer
+adapters decide whether to run those programs directly or expose them through
+TanStack Query.
 
 ---
 
@@ -124,11 +132,95 @@ type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 ### TanStack Query (Async / External State)
 
 ```typescript
-// Sidebar data — fetched from shell commands
-useGitBranch(workspacePath: string): Promise<string | null>
-useGitWorktrees(workspacePath: string): Promise<WorktreeInfo[]>
-useGitStatus(workspacePath: string): Promise<{ changed: number, staged: number }>
-useWorkspacePorts(workspacePath: string): Promise<PortInfo[]>
+import { UseQueryResult } from '@tanstack/react-query'
+
+// Sidebar data — fetched through Effect-backed services
+useGitBranch(workspacePath: string): UseQueryResult<string | null, Error>
+useGitWorktrees(workspacePath: string): UseQueryResult<WorktreeInfo[], Error>
+useGitStatus(workspacePath: string): UseQueryResult<{ changed: number, staged: number }, Error>
+useWorkspacePorts(workspacePath: string): UseQueryResult<PortInfo[], Error>
+```
+
+### Effect Services (Side-Effect Boundary)
+
+```typescript
+import { Effect, Context } from 'effect'
+
+class WorkspaceService extends Context.Tag('WorkspaceService')<
+  WorkspaceService,
+  {
+    readonly getGitBranch: (
+      workspacePath: string
+    ) => Effect.Effect<string | null, WorkspaceError>
+    readonly getGitWorktrees: (
+      workspacePath: string
+    ) => Effect.Effect<WorktreeInfo[], WorkspaceError>
+    readonly getGitStatus: (
+      workspacePath: string
+    ) => Effect.Effect<GitStatus, WorkspaceError>
+    readonly getWorkspacePorts: (
+      workspacePath: string
+    ) => Effect.Effect<PortInfo[], WorkspaceError>
+  }
+>() {}
+
+class PtyService extends Context.Tag('PtyService')<
+  PtyService,
+  {
+    readonly spawn: (
+      request: SpawnPtyRequest
+    ) => Effect.Effect<PtySize, PtyError>
+    readonly write: (
+      sessionId: string,
+      data: string
+    ) => Effect.Effect<void, PtyError>
+    readonly resize: (
+      sessionId: string,
+      size: PtySize
+    ) => Effect.Effect<void, PtyError>
+    readonly kill: (sessionId: string) => Effect.Effect<void, PtyError>
+  }
+>() {}
+```
+
+Effect service consumers see the third type parameter (requirements `R`):
+
+```typescript
+// getGitBranch has type:
+//   Effect.Effect<string | null, WorkspaceError, WorkspaceService>
+//
+// Any effect requiring WorkspaceService will not compile unless the
+// service is provided to the Effect runtime before execution.
+```
+
+Effect services must own:
+- Shell process execution and parsing
+- Electron IPC request/response wrappers
+- PTY lifecycle commands and cancellation
+- Persistence reads/writes for workspace layout
+- Runtime validation with `Schema` at process and IPC boundaries
+- Typed domain errors instead of thrown `unknown`
+
+Renderer hooks stay thin:
+
+```typescript
+import { UseQueryResult, useQuery } from '@tanstack/react-query'
+import { Effect } from 'effect'
+
+// runAppEffect is the renderer adapter over Tau's configured Effect runtime.
+const useGitBranch = (
+  workspacePath: string
+): UseQueryResult<string | null, Error> =>
+  useQuery({
+    queryKey: ['workspace', workspacePath, 'branch'],
+    queryFn: () =>
+      runAppEffect(
+        Effect.gen(function* () {
+          const svc = yield* WorkspaceService
+          return yield* svc.getGitBranch(workspacePath)
+        })
+      ),
+  })
 ```
 
 ---
@@ -170,6 +262,31 @@ type PtyServiceMessage =
   | { type: 'data'; sessionId: string; data: string }
   | { type: 'error'; sessionId: string; error: string }
   | { type: 'exit'; sessionId: string; info: PtyExitInfo }
+```
+
+Use Effect `Schema` for the runtime message contract before messages cross the
+renderer, main process, and PTY utility-process boundary. Invalid IPC payloads
+must become typed protocol errors, not uncaught exceptions.
+
+```typescript
+import { Schema } from 'effect'
+
+// Example: runtime validation for the spawn message
+const SpawnSchema = Schema.Struct({
+  type: Schema.Literal('spawn'),
+  sessionId: Schema.String,
+  cols: Schema.Number,
+  rows: Schema.Number,
+})
+const PtyClientMessageSchema = Schema.Union(
+  SpawnSchema,
+  Schema.Struct({ type: Schema.Literal('write'), sessionId: Schema.String, data: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('resize'), sessionId: Schema.String, cols: Schema.Number, rows: Schema.Number }),
+  Schema.Struct({ type: Schema.Literal('kill'), sessionId: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('renderer-ready') }),
+)
+
+type PtyClientMessage = Schema.Schema.Type<typeof PtyClientMessageSchema>
 ```
 
 ---
@@ -285,7 +402,9 @@ must wrap this carefully:
 
 ### Phase 1: Foundation (React + Zustand + Layout)
 - [ ] Add React 19, React DOM, Zustand to project
+- [ ] Add Effect.ts (`effect`) and define the runtime/service boundary
 - [ ] Create empty Zustand store with workspace/tab/pane types
+- [ ] Create typed Effect errors and schemas for workspace and PTY contracts
 - [ ] Wire `react-resizable-panels` for sidebar + main layout
 - [ ] Render placeholder sidebar and main area
 - [ ] Ensure ghostty-web terminal still works inside a React component
@@ -294,8 +413,9 @@ must wrap this carefully:
 - [ ] Workspace list UI in sidebar
 - [ ] Add workspace (project directory)
 - [ ] Remove workspace
-- [ ] Git branch display (shell: `git branch --show-current`)
-- [ ] Worktree list (shell: `git worktree list`)
+- [ ] Git branch display via `WorkspaceService.getGitBranch`
+- [ ] Worktree list via `WorkspaceService.getGitWorktrees`
+- [ ] Keep raw shell command execution inside the Effect service layer
 
 ### Phase 3: Tabs + Pane Layout
 - [ ] Tab bar with tab switching
@@ -311,6 +431,8 @@ must wrap this carefully:
 - [ ] Spawn/kill PTY per terminal pane
 - [ ] Route data by sessionId
 - [ ] Handle PTY exit per session
+- [ ] Wrap renderer ↔ PTY utility-process IPC in Effect services
+- [ ] Validate PTY protocol messages with Effect `Schema`
 
 ### Phase 5: Key Bindings + Navigation
 - [ ] Cmd+1..0 workspace switching
@@ -322,7 +444,7 @@ must wrap this carefully:
 ### Phase 6: Polish
 - [ ] Tab auto-title (scan terminal output for OSC title sequences)
 - [ ] Pane status indicators (agent lifecycle rings)
-- [ ] Workspace persistence (localStorage)
+- [ ] Workspace persistence through an Effect-backed storage service (localStorage for MVP)
 - [ ] Drag-and-drop tab reorder
 - [ ] Drag-and-drop workspace reorder
 
@@ -335,6 +457,7 @@ must wrap this carefully:
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "effect": "^3.0.0",
     "zustand": "^5.0.0",
     "@tanstack/react-query": "^5.0.0",
     "react-mosaic-component": "^6.0.0",
@@ -352,6 +475,13 @@ must wrap this carefully:
 
 The existing `electron-vite` config needs a `@vitejs/plugin-react` plugin added
 to the renderer build config.
+
+> The dependencies listed above are planned additions tracked by the
+> implementation phases in [§8](#8-implementation-phases). The `effect` package
+> will be added to `package.json` when Phase 1 begins, alongside the Effect
+> runtime initialization. This PR is limited to the architecture document; no
+> dependency changes are made beyond the existing `react`/`react-dom` version
+> pinning (see `package.json`).
 
 ---
 
