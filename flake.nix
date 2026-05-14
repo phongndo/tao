@@ -14,7 +14,7 @@
         };
       in
       {
-        # ── Dev shell (nix develop or direnv) ──
+        # ── Dev shell (nix develop) ──
         devShells.default = pkgs.mkShell {
           name = "tau";
 
