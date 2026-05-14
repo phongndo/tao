@@ -3,7 +3,7 @@ name: Review Gates
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, review_submitted]
+    types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
