@@ -64,7 +64,7 @@ export const useTauStore = create<TauState>()(
       activeTabId: null,
       panes: [],
       sidebarExpanded: true,
-      sidebarWidth: 240,
+      sidebarWidth: 22,
       addWorkspace: (workspace) =>
         set((state) => {
           const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)

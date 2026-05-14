@@ -5,6 +5,9 @@ import { useTauStore, type Workspace } from '../state/store'
 import { useGitBranch, useGitWorktrees } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 
+const SIDEBAR_MIN_SIZE = 18
+const SIDEBAR_MAX_SIZE = 34
+
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
 }
@@ -69,6 +72,10 @@ export function App() {
   const workspaces = useTauStore((state) => state.workspaces)
   const sidebarExpanded = useTauStore((state) => state.sidebarExpanded)
   const sidebarWidth = useTauStore((state) => state.sidebarWidth)
+  const sidebarSize = Math.min(
+    SIDEBAR_MAX_SIZE,
+    Math.max(SIDEBAR_MIN_SIZE, sidebarWidth > 100 ? 22 : sidebarWidth),
+  )
   const addWorkspace = useTauStore((state) => state.addWorkspace)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
@@ -111,14 +118,14 @@ export function App() {
     <Group orientation="horizontal" className="tau-shell">
       <Panel
         panelRef={sidebarPanelRef}
-        defaultSize={`${sidebarWidth}px`}
-        minSize="180px"
-        maxSize="34%"
+        defaultSize={sidebarSize}
+        minSize={SIDEBAR_MIN_SIZE}
+        maxSize={SIDEBAR_MAX_SIZE}
         collapsedSize={0}
         collapsible
         className="tau-sidebar"
         onResize={(size) => {
-          if (typeof size === 'number' && size > 0) setSidebarWidth(size)
+          if (size.asPercentage > 0) setSidebarWidth(size.asPercentage)
         }}
       >
         <aside className="sidebar-content" aria-label="Workspaces">
