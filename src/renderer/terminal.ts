@@ -29,6 +29,9 @@ const THEME = {
   brightWhite: '#cac9dd',
 }
 
+const terminalFontFamily =
+  '"Symbols Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "SF Mono", Menlo, Monaco, monospace'
+
 function updateStatus(msg: string) {
   const container = document.getElementById('terminal-container')
   if (container && !container.querySelector('canvas')) {
@@ -66,7 +69,7 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
     cols: initialCols,
     rows: initialRows,
     fontSize: 14,
-    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    fontFamily: terminalFontFamily,
     theme: THEME,
     cursorBlink: false,
     cursorStyle: 'block',

@@ -27,15 +27,25 @@ body {
 }
 
 .tau-shell {
+  display: flex;
   width: 100%;
   height: 100%;
   background: #151515;
+  overflow: hidden;
 }
 
 .tau-sidebar {
-  min-width: 180px;
+  position: relative;
+  height: 100%;
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
   background: #191919;
   border-right: 1px solid #28282c;
+}
+
+.tau-sidebar-collapsed {
+  background: #18181a;
 }
 
 .sidebar-content {
@@ -58,6 +68,12 @@ body {
   color: #cac9dd;
   font-size: 13px;
   font-weight: 700;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .icon-button {
@@ -83,6 +99,72 @@ body {
 
 .add-workspace-button {
   flex: 0 0 auto;
+}
+
+.collapsed-sidebar-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 6px;
+}
+
+.collapsed-sidebar-toggle,
+.collapsed-workspace-button {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #9699a8;
+  background: transparent;
+  cursor: pointer;
+}
+
+.collapsed-sidebar-toggle:hover,
+.collapsed-sidebar-toggle:focus-visible,
+.collapsed-workspace-button:hover,
+.collapsed-workspace-button:focus-visible {
+  color: #cac9dd;
+  border-color: #38383d;
+  background: #242428;
+  outline: none;
+}
+
+.collapsed-workspace-list {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  overflow: auto;
+}
+
+.collapsed-workspace-button {
+  position: relative;
+  color: #c9c7cd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.collapsed-workspace-button-active {
+  border-color: #424246;
+  background: #242428;
+}
+
+.collapsed-workspace-button-active::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: -6px;
+  width: 2px;
+  border-radius: 999px;
+  background: #cac9dd;
+  content: "";
 }
 
 .workspace-list {
@@ -225,18 +307,45 @@ body {
 }
 
 .resize-handle {
-  width: 4px;
-  background: #202024;
+  position: absolute;
+  top: 0;
+  right: -8px;
+  z-index: 10;
+  width: 16px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
   outline: none;
 }
 
+.resize-handle::after {
+  position: absolute;
+  top: 0;
+  left: 7px;
+  width: 1px;
+  height: 100%;
+  background: transparent;
+  content: "";
+}
+
 .resize-handle:hover,
-.resize-handle[data-resize-handle-active] {
+.resize-handle-active {
+  background: transparent;
+}
+
+.resize-handle:hover::after,
+.resize-handle-active::after {
   background: #424246;
+}
+
+.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .tau-main,
 .main-content {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   background: #151515;
