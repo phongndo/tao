@@ -61,7 +61,7 @@
     "node-pty": "^1.1.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-mosaic-component": "7.0.0-beta0",
+    "react-mosaic-component": "6.2.0",
     "react-resizable-panels": "^4.11.1",
     "zustand": "^5.0.13"
   }
