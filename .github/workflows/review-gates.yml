@@ -1,0 +1,74 @@
+name: Review Gates
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, review_submitted]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  pull-requests: read
+  issues: read
+
+jobs:
+  require-ai-reviews:
+    name: require-ai-reviews
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require CodeRabbit and Greptile review activity
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const pull_number =
+              context.payload.pull_request?.number ?? context.payload.issue?.number
+
+            if (!pull_number) {
+              core.setFailed('Could not determine pull request number.')
+              return
+            }
+
+            const requiredAuthors = new Set(['coderabbitai', 'greptileai'])
+            const seenAuthors = new Set()
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            })
+
+            for (const review of reviews) {
+              if (review.user?.login && requiredAuthors.has(review.user.login)) {
+                seenAuthors.add(review.user.login)
+              }
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pull_number,
+              per_page: 100,
+            })
+
+            for (const comment of comments) {
+              if (comment.user?.login && requiredAuthors.has(comment.user.login)) {
+                seenAuthors.add(comment.user.login)
+              }
+            }
+
+            const missing = [...requiredAuthors].filter((author) => !seenAuthors.has(author))
+
+            if (missing.length > 0) {
+              core.setFailed(`Missing required AI review activity from: ${missing.join(', ')}`)
+              return
+            }
+
+            core.info(`Found required AI review activity from: ${[...seenAuthors].join(', ')}`)
