@@ -25,13 +25,13 @@ pnpm start           # Run production build
 
 ## Performance
 
-| Metric | Tau (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup |
-|---|---|---|---|
-| VT parser throughput (10MB) | 42.8 MB/s | 22.8 MB/s | **1.9×** |
-| Input latency (avg) | 0.04 ms | 1.20 ms | **30×** |
-| Burst writes (1000) | 266 ms | 1646 ms | **6.2×** |
-| Renderer init | ~50 ms | ~500 ms | **10×** |
-| Full redraw (1920 cells) | ~5 ms | ~15 ms | **3×** |
+| Metric                      | Tau (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup  |
+| --------------------------- | ---------------------- | ---------------------------- | -------- |
+| VT parser throughput (10MB) | 42.8 MB/s              | 22.8 MB/s                    | **1.9×** |
+| Input latency (avg)         | 0.04 ms                | 1.20 ms                      | **30×**  |
+| Burst writes (1000)         | 266 ms                 | 1646 ms                      | **6.2×** |
+| Renderer init               | ~50 ms                 | ~500 ms                      | **10×**  |
+| Full redraw (1920 cells)    | ~5 ms                  | ~15 ms                       | **3×**   |
 
 See [PLAN.md](PLAN.md) for methodology and full comparison.
 

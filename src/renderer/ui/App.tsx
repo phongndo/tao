@@ -195,7 +195,6 @@ function ResizeShell({
       aria-label="Workspaces"
     >
       {children}
-      {/* biome-ignore lint/a11y/useSemanticElements: <hr> is not appropriate for an interactive resize handle. */}
       <div
         role="separator"
         aria-orientation="vertical"

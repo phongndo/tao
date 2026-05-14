@@ -11,25 +11,27 @@ zero-copy rendering, dedicated PTY utility process).
 
 ## 1. Tech Stack (Current + Target)
 
-| Layer | Choice | Rationale |
-|-------|--------|-----------|
-| **Shell** | Electron 42 + electron-vite | Already in use; same as Superset |
-| **Rendering** | React 19 + React DOM | Ecosystem: react-mosaic-component, lucide-react; TanStack Query is only a temporary renderer cache |
-| **UI State** | Zustand 5 | Tiny, fast, synchronous — handles active tab, pane layout, workspace order |
-| **Effect Runtime** | Effect.ts (`effect`) | Primary backend/runtime model for shell commands, IPC, persistence, cancellation, retries, streaming, typed errors, and testable services |
-| **Async Cache** | TanStack Query (transitional) | Current renderer cache over Effect-backed reads; target is an Effect-owned request/cache/subscription layer so this dependency can be removed later |
-| **Pane Layout** | react-mosaic-component | Battle-tested recursive split tiling (same lib Superset uses) |
-| **Sidebar / Main Split** | react-resizable-panels | Resizable left sidebar + main content area |
-| **Icons** | lucide-react | Consistent icon set, tree-shakeable |
-| **Key Bindings** | react-hotkeys-hook | Declarative shortcut handling |
-| **Terminal Renderer** | ghostty-web (unchanged) | WASM canvas — zero framework involvement, stays in its own rAF loop |
-| **PTY Backend** | PtyPool (evolved PtyManager) | One PTY instance per terminal pane, multiplexed on MessagePort |
+| Layer                    | Choice                        | Rationale                                                                                                                                           |
+| ------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shell**                | Electron 42 + electron-vite   | Already in use; same as Superset                                                                                                                    |
+| **Rendering**            | React 19 + React DOM          | Ecosystem: react-mosaic-component, lucide-react; TanStack Query is only a temporary renderer cache                                                  |
+| **UI State**             | Zustand 5                     | Tiny, fast, synchronous — handles active tab, pane layout, workspace order                                                                          |
+| **Effect Runtime**       | Effect.ts (`effect`)          | Primary backend/runtime model for shell commands, IPC, persistence, cancellation, retries, streaming, typed errors, and testable services           |
+| **Async Cache**          | TanStack Query (transitional) | Current renderer cache over Effect-backed reads; target is an Effect-owned request/cache/subscription layer so this dependency can be removed later |
+| **Pane Layout**          | react-mosaic-component        | Battle-tested recursive split tiling (same lib Superset uses)                                                                                       |
+| **Sidebar / Main Split** | react-resizable-panels        | Resizable left sidebar + main content area                                                                                                          |
+| **Icons**                | lucide-react                  | Consistent icon set, tree-shakeable                                                                                                                 |
+| **Key Bindings**         | react-hotkeys-hook            | Declarative shortcut handling                                                                                                                       |
+| **Terminal Renderer**    | ghostty-web (unchanged)       | WASM canvas — zero framework involvement, stays in its own rAF loop                                                                                 |
+| **PTY Backend**          | PtyPool (evolved PtyManager)  | One PTY instance per terminal pane, multiplexed on MessagePort                                                                                      |
 
 ### Why not TanStack Router / Table / Virtual / Form?
+
 - **Router**: Tau is a single-screen app. Navigation is state-driven (`activeWorkspaceId`, `activeTabId`), not URL-driven.
 - **Table / Virtual / Form**: Not needed for initial UI. Can add later if required.
 
 ### Zustand vs Effect vs TanStack Query boundary
+
 ```text
 Zustand:        "which tab is active right now"     (ephemeral UI state)
 Effect:         "run git safely and return typed errors" (fallible side effects)
@@ -71,11 +73,13 @@ cancellation, remove TanStack Query instead of expanding it.
 ```
 
 ### Single-window design
+
 All competitors (Superset, cmux, VS Code, iTerm2) use single-window as the
 primary model. Simplifies state management + PTY routing. Multi-window can be
 added later via Electron.
 
 ### Right sidebar
+
 Reserved layout space (CSS grid column) but not implemented yet.
 
 ---
@@ -102,10 +106,10 @@ interface TauState {
 interface Workspace {
   id: string
   name: string
-  projectPath: string       // absolute path
-  branch?: string            // git branch (pulled via Query)
+  projectPath: string // absolute path
+  branch?: string // git branch (pulled via Query)
   worktrees?: WorktreeInfo[] // git worktrees (pulled via Query)
-  order: number              // sidebar sort order
+  order: number // sidebar sort order
 }
 
 interface WorktreeInfo {
@@ -118,18 +122,18 @@ interface WorktreeInfo {
 interface Tab {
   id: string
   workspaceId: string
-  name: string               // display name (auto-title or user-set)
+  name: string // display name (auto-title or user-set)
   layout: MosaicNode<string> // react-mosaic layout tree (leaf IDs are paneIds)
-  order: number              // tab bar sort order
+  order: number // tab bar sort order
 }
 
 interface Pane {
   id: string
   tabId: string
-  type: PaneType              // 'terminal' | 'webview' (terminal only for now)
+  type: PaneType // 'terminal' | 'webview' (terminal only for now)
   name: string
-  cwd?: string                // current working directory
-  status?: PaneStatus         // agent lifecycle: 'idle' | 'working' | 'permission' | 'review'
+  cwd?: string // current working directory
+  status?: PaneStatus // agent lifecycle: 'idle' | 'working' | 'permission' | 'review'
 }
 
 type PaneType = 'terminal' | 'webview'
@@ -161,35 +165,21 @@ import { Effect, Context } from 'effect'
 class WorkspaceService extends Context.Tag('WorkspaceService')<
   WorkspaceService,
   {
-    readonly getGitBranch: (
-      workspacePath: string
-    ) => Effect.Effect<string | null, WorkspaceError>
+    readonly getGitBranch: (workspacePath: string) => Effect.Effect<string | null, WorkspaceError>
     readonly getGitWorktrees: (
-      workspacePath: string
+      workspacePath: string,
     ) => Effect.Effect<WorktreeInfo[], WorkspaceError>
-    readonly getGitStatus: (
-      workspacePath: string
-    ) => Effect.Effect<GitStatus, WorkspaceError>
-    readonly getWorkspacePorts: (
-      workspacePath: string
-    ) => Effect.Effect<PortInfo[], WorkspaceError>
+    readonly getGitStatus: (workspacePath: string) => Effect.Effect<GitStatus, WorkspaceError>
+    readonly getWorkspacePorts: (workspacePath: string) => Effect.Effect<PortInfo[], WorkspaceError>
   }
 >() {}
 
 class PtyService extends Context.Tag('PtyService')<
   PtyService,
   {
-    readonly spawn: (
-      request: SpawnPtyRequest
-    ) => Effect.Effect<PtySize, PtyError>
-    readonly write: (
-      sessionId: string,
-      data: string
-    ) => Effect.Effect<void, PtyError>
-    readonly resize: (
-      sessionId: string,
-      size: PtySize
-    ) => Effect.Effect<void, PtyError>
+    readonly spawn: (request: SpawnPtyRequest) => Effect.Effect<PtySize, PtyError>
+    readonly write: (sessionId: string, data: string) => Effect.Effect<void, PtyError>
+    readonly resize: (sessionId: string, size: PtySize) => Effect.Effect<void, PtyError>
     readonly kill: (sessionId: string) => Effect.Effect<void, PtyError>
   }
 >() {}
@@ -206,6 +196,7 @@ Effect service consumers see the third type parameter (requirements `R`):
 ```
 
 Effect services must own:
+
 - Shell process execution and parsing
 - Electron IPC request/response wrappers
 - PTY lifecycle commands and cancellation
@@ -216,6 +207,7 @@ Effect services must own:
   temporary TanStack Query adapter
 
 Effect-first implementation rules:
+
 - New shell, git, workspace, PTY, persistence, and agent-facing code should
   expose typed `Effect.Effect<A, E, R>` programs at the service boundary.
 - Use `Context.Tag` + `Layer` for dependencies instead of importing singleton
@@ -233,9 +225,7 @@ import { UseQueryResult, useQuery } from '@tanstack/react-query'
 import { Effect } from 'effect'
 
 // runAppEffect is the renderer adapter over Tau's configured Effect runtime.
-const useGitBranch = (
-  workspacePath: string
-): UseQueryResult<string | null, Error> =>
+const useGitBranch = (workspacePath: string): UseQueryResult<string | null, Error> =>
   useQuery({
     queryKey: ['workspace', workspacePath, 'branch'],
     queryFn: () =>
@@ -243,7 +233,7 @@ const useGitBranch = (
         Effect.gen(function* () {
           const svc = yield* WorkspaceService
           return yield* svc.getGitBranch(workspacePath)
-        })
+        }),
       ),
   })
 ```
@@ -265,7 +255,7 @@ utility process:
 │  ┌──────┐ ┌──────┐ ┌──────┐     │
 │  │ PTY 1│ │ PTY 2│ │ PTY 3│     │
 │  │ bash │ │ zsh  │ │ cc   │     │
-│  └──────┘ └──────┘ └──────┘     │ 
+│  └──────┘ └──────┘ └──────┘     │
 │       ▲        ▲        ▲       │
 │       │  session-id multiplex   │
 │       │  on shared MessagePort  │
@@ -309,7 +299,12 @@ const SpawnSchema = Schema.Struct({
 const PtyClientMessageSchema = Schema.Union(
   SpawnSchema,
   Schema.Struct({ type: Schema.Literal('write'), sessionId: Schema.String, data: Schema.String }),
-  Schema.Struct({ type: Schema.Literal('resize'), sessionId: Schema.String, cols: Schema.Number, rows: Schema.Number }),
+  Schema.Struct({
+    type: Schema.Literal('resize'),
+    sessionId: Schema.String,
+    cols: Schema.Number,
+    rows: Schema.Number,
+  }),
   Schema.Struct({ type: Schema.Literal('kill'), sessionId: Schema.String }),
   Schema.Struct({ type: Schema.Literal('renderer-ready') }),
 )
@@ -334,7 +329,9 @@ Cmd+Shift+N   New workspace
 ```
 
 ### Multi-pane navigation
+
 `Ctrl+HJKL` navigates the pane boundary grid:
+
 - `Ctrl+H` → left pane
 - `Ctrl+J` → pane below
 - `Ctrl+K` → pane above
@@ -380,13 +377,14 @@ Cmd+Shift+N   New workspace
 ```
 
 ### MosaicNode Layout (Pane Splits)
+
 react-mosaic-component uses a recursive tree structure:
 
 ```typescript
 type MosaicNode<T> = T | MosaicParent<T>
 
 interface MosaicParent<T> {
-  direction: 'row' | 'column'   // row = horizontal split, column = vertical split
+  direction: 'row' | 'column' // row = horizontal split, column = vertical split
   first: MosaicNode<T>
   second: MosaicNode<T>
   splitPercentage: number
@@ -394,6 +392,7 @@ interface MosaicParent<T> {
 ```
 
 Example — two panes split vertically (Cmd+D in default configuration):
+
 ```
 'row' 50%
 ├── first:  'pane-1'
@@ -419,6 +418,7 @@ TerminalPane
 
 The `<canvas>` element is created by ghostty-web's `term.open(container)`. We
 must wrap this carefully:
+
 - Use `useRef<HTMLDivElement>` for the container
 - Call `term.open(ref.current!)` in a `useEffect` that runs once
 - Call `term.dispose()` on cleanup
@@ -429,6 +429,7 @@ must wrap this carefully:
 ## 8. Implementation Phases
 
 ### Phase 1: Foundation (React + Zustand + Layout)
+
 - [x] Add React 19, React DOM, Zustand to project
 - [x] Add Effect.ts (`effect`) and define the runtime/service boundary
 - [x] Create empty Zustand store with workspace/tab/pane types
@@ -438,6 +439,7 @@ must wrap this carefully:
 - [x] Ensure ghostty-web terminal still works inside a React component
 
 ### Phase 2: Sidebar + Workspaces
+
 - [x] Workspace list UI in sidebar
 - [x] Add workspace (project directory)
 - [x] Remove workspace
@@ -459,6 +461,7 @@ PTY-backed terminal mounted while other panes are layout placeholders.
 Independent PTY sessions per pane remain Phase 4.
 
 ### Phase 4: PTY Pool
+
 - [ ] Evolve PTY service to PtyPool (session-based multiplexing)
 - [ ] Spawn/kill PTY per terminal pane
 - [ ] Route data by sessionId
@@ -467,6 +470,7 @@ Independent PTY sessions per pane remain Phase 4.
 - [ ] Validate PTY protocol messages with Effect `Schema`
 
 ### Phase 5: Key Bindings + Navigation
+
 - [ ] Cmd+1..0 workspace switching
 - [ ] Ctrl+1..0 tab switching
 - [ ] Ctrl+HJKL pane navigation
@@ -474,6 +478,7 @@ Independent PTY sessions per pane remain Phase 4.
 - [ ] All keyboard shortcuts via react-hotkeys-hook
 
 ### Phase 6: Polish
+
 - [ ] Tab auto-title (scan terminal output for OSC title sequences)
 - [ ] Pane status indicators (agent lifecycle rings)
 - [ ] Workspace persistence through an Effect-backed storage service (localStorage for MVP)
@@ -481,6 +486,7 @@ Independent PTY sessions per pane remain Phase 4.
 - [ ] Drag-and-drop workspace reorder
 
 ### Phase 7: Effect-First Backend + TanStack Exit
+
 - [ ] Introduce a configured app Effect runtime for main/preload/renderer
       adapters
 - [ ] Convert workspace and git helpers from Promise-returning functions into
@@ -508,13 +514,13 @@ Independent PTY sessions per pane remain Phase 4.
     "react-mosaic-component": "^6.0.0",
     "react-resizable-panels": "^3.0.0",
     "react-hotkeys-hook": "^5.0.0",
-    "lucide-react": "^0.560.0"
+    "lucide-react": "^0.560.0",
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.0.0"
-  }
+    "@vitejs/plugin-react": "^5.0.0",
+  },
 }
 ```
 

@@ -14,17 +14,17 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
-    base_branches: ["main"]
+    base_branches: ['main']
 
   # Skip generated files and binaries
   path_filters:
-    - "!pnpm-lock.yaml"
-    - "!out/**"
-    - "!dist/**"
-    - "!public/ghostty-vt.wasm"
-    - "!*.png"
-    - "!*.svg"
-    - "!*.wasm"
+    - '!pnpm-lock.yaml'
+    - '!out/**'
+    - '!dist/**'
+    - '!public/ghostty-vt.wasm'
+    - '!*.png'
+    - '!*.svg'
+    - '!*.wasm'
 
 # ── Issue Analysis ──
 # Coderabbit can analyze issues and suggest fixes
@@ -32,7 +32,7 @@ issue_analysis:
   enabled: true
   auto_analyze:
     enabled: true
-    labels: ["bug", "enhancement"]
+    labels: ['bug', 'enhancement']
 
 # ── Knowledge Base ──
 knowledge:
