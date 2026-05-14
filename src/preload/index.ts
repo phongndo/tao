@@ -8,6 +8,7 @@ type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppShortcutCallback = () => void
+type AppCommand = 'new-tab' | 'close-tab' | 'split-pane-vertical' | 'split-pane-horizontal'
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
 
@@ -231,6 +232,20 @@ const electronAPI = {
     ipcRenderer.on('app:toggle-sidebar', listener)
     return () => {
       ipcRenderer.removeListener('app:toggle-sidebar', listener)
+    }
+  },
+
+  /**
+   * Register a callback for a tab/pane command handled before terminal input.
+   */
+  onAppCommand(command: AppCommand, callback: AppShortcutCallback): () => void {
+    const channel = `app:${command}`
+    const listener = () => {
+      callback()
+    }
+    ipcRenderer.on(channel, listener)
+    return () => {
+      ipcRenderer.removeListener(channel, listener)
     }
   },
 

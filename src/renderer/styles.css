@@ -54,6 +54,7 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 12px;
+  padding-top: 44px;
 }
 
 .sidebar-header {
@@ -108,6 +109,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px 6px;
+  padding-top: 44px;
 }
 
 .collapsed-sidebar-toggle,
@@ -355,12 +357,232 @@ body {
   width: 100%;
   height: 100%;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tab-bar {
+  height: 36px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #242428;
+  background: #18181a;
+  -webkit-app-region: drag;
+}
+
+.tau-sidebar-collapsed + .tau-main .tab-bar {
+  padding-left: 52px;
+}
+
+.tab-list {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-app-region: no-drag;
+}
+
+.tab-item {
+  min-width: 108px;
+  max-width: 220px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+}
+
+.tab-item:hover {
+  border-color: #303035;
+  background: #1f1f22;
+}
+
+.tab-item-active {
+  border-color: #424246;
+  background: #242428;
+}
+
+.tab-select-button,
+.tab-close-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  -webkit-app-region: no-drag;
+}
+
+.tab-select-button {
+  min-width: 0;
+  height: 100%;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  color: #c9c7cd;
+  cursor: pointer;
+}
+
+.tab-select-button span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close-button {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 2px;
+  border-radius: 4px;
+  color: #747783;
+  cursor: pointer;
+}
+
+.tab-close-button:hover,
+.tab-close-button:focus-visible {
+  color: #cac9dd;
+  background: #303035;
+  outline: none;
+}
+
+.pane-grid {
+  --pane-divider: #28282c;
+  --pane-divider-hover: #4a4a50;
+  min-height: 0;
+  flex: 1 1 auto;
+  position: relative;
+  padding: 0;
+  background: #151515;
+}
+
+.tau-mosaic {
+  padding: 0;
+  background: #151515;
+}
+
+.tau-mosaic .mosaic-root {
+  inset: 0;
+}
+
+.tau-mosaic .mosaic-tile {
+  margin: 0;
+}
+
+.tau-mosaic .mosaic-split,
+.tau-mosaic .mosaic-split:hover {
+  background: transparent;
+}
+
+.tau-mosaic .mosaic-split.-row {
+  margin-left: -4px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.tau-mosaic .mosaic-split.-column {
+  margin-top: -4px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.tau-mosaic .mosaic-split.-row .mosaic-split-line {
+  top: 0;
+  right: auto;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--pane-divider);
+}
+
+.tau-mosaic .mosaic-split.-column .mosaic-split-line {
+  top: 4px;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  height: 1px;
+  background: var(--pane-divider);
+}
+
+.tau-mosaic .mosaic-split:hover .mosaic-split-line {
+  background: var(--pane-divider-hover);
+}
+
+.pane-tile {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #151515;
+  outline: none;
+}
+
+.pane-tile-active {
+  box-shadow: none;
+}
+
+.pane-tile-missing {
+  background: #18181a;
+}
+
+.pane-standby,
+.pane-grid-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #424246;
+}
+
+.empty-new-tab-button {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #303035;
+  border-radius: 6px;
+  background: #1f1f22;
+  color: #9699a8;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.tab-bar > .icon-button {
+  -webkit-app-region: no-drag;
+}
+
+.empty-new-tab-button:hover,
+.empty-new-tab-button:focus-visible {
+  border-color: #424246;
+  color: #cac9dd;
+  outline: none;
 }
 
 /* ── Terminal container fills the window ── */
 #terminal-container {
   width: 100%;
   height: 100%;
+  padding: 0;
+  border-radius: 0;
   /*
    * CSS containment: tells the browser this subtree is self-contained.
    * Enables aggressive optimizations: skip layout/recalc outside this

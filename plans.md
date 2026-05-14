@@ -418,13 +418,16 @@ must wrap this carefully:
 - [x] Keep raw shell command execution inside the Effect service layer
 
 ### Phase 3: Tabs + Pane Layout
-- [ ] Tab bar with tab switching
-- [ ] New tab (Cmd+T)
-- [ ] Close tab (Cmd+W)
-- [ ] Integrate react-mosaic-component for pane grid
-- [ ] Split pane vertically (Cmd+D)
-- [ ] Split pane horizontally (Cmd+Shift+D)
-- [ ] Close pane
+- [x] Tab bar with tab switching
+- [x] New tab (Cmd+T)
+- [x] Close tab (Cmd+W)
+- [x] Integrate react-mosaic-component for pane grid
+- [x] Split pane vertically (Cmd+D)
+- [x] Split pane horizontally (Cmd+Shift+D)
+- [x] Close pane
+
+Phase 3 is layout-only: the selected pane mounts the existing singleton PTY-backed
+terminal. Independent PTY sessions per pane remain Phase 4.
 
 ### Phase 4: PTY Pool
 - [ ] Evolve PTY service to PtyPool (session-based multiplexing)
