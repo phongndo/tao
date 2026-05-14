@@ -132,31 +132,65 @@ type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 ### TanStack Query (Async / External State)
 
 ```typescript
+import { UseQueryResult } from '@tanstack/react-query'
+
 // Sidebar data — fetched through Effect-backed services
-useGitBranch(workspacePath: string): Promise<string | null>
-useGitWorktrees(workspacePath: string): Promise<WorktreeInfo[]>
-useGitStatus(workspacePath: string): Promise<{ changed: number, staged: number }>
-useWorkspacePorts(workspacePath: string): Promise<PortInfo[]>
+useGitBranch(workspacePath: string): UseQueryResult<string | null, Error>
+useGitWorktrees(workspacePath: string): UseQueryResult<WorktreeInfo[], Error>
+useGitStatus(workspacePath: string): UseQueryResult<{ changed: number, staged: number }, Error>
+useWorkspacePorts(workspacePath: string): UseQueryResult<PortInfo[], Error>
 ```
 
 ### Effect Services (Side-Effect Boundary)
 
 ```typescript
-import { Effect, Schema } from 'effect'
+import { Effect, Context } from 'effect'
 
-interface WorkspaceService {
-  readonly getGitBranch: (workspacePath: string) => Effect.Effect<string | null, WorkspaceError>
-  readonly getGitWorktrees: (workspacePath: string) => Effect.Effect<WorktreeInfo[], WorkspaceError>
-  readonly getGitStatus: (workspacePath: string) => Effect.Effect<GitStatus, WorkspaceError>
-  readonly getWorkspacePorts: (workspacePath: string) => Effect.Effect<PortInfo[], WorkspaceError>
-}
+class WorkspaceService extends Context.Tag('WorkspaceService')<
+  WorkspaceService,
+  {
+    readonly getGitBranch: (
+      workspacePath: string
+    ) => Effect.Effect<string | null, WorkspaceError>
+    readonly getGitWorktrees: (
+      workspacePath: string
+    ) => Effect.Effect<WorktreeInfo[], WorkspaceError>
+    readonly getGitStatus: (
+      workspacePath: string
+    ) => Effect.Effect<GitStatus, WorkspaceError>
+    readonly getWorkspacePorts: (
+      workspacePath: string
+    ) => Effect.Effect<PortInfo[], WorkspaceError>
+  }
+>() {}
 
-interface PtyService {
-  readonly spawn: (request: SpawnPtyRequest) => Effect.Effect<PtySize, PtyError>
-  readonly write: (sessionId: string, data: string) => Effect.Effect<void, PtyError>
-  readonly resize: (sessionId: string, size: PtySize) => Effect.Effect<void, PtyError>
-  readonly kill: (sessionId: string) => Effect.Effect<void, PtyError>
-}
+class PtyService extends Context.Tag('PtyService')<
+  PtyService,
+  {
+    readonly spawn: (
+      request: SpawnPtyRequest
+    ) => Effect.Effect<PtySize, PtyError>
+    readonly write: (
+      sessionId: string,
+      data: string
+    ) => Effect.Effect<void, PtyError>
+    readonly resize: (
+      sessionId: string,
+      size: PtySize
+    ) => Effect.Effect<void, PtyError>
+    readonly kill: (sessionId: string) => Effect.Effect<void, PtyError>
+  }
+>() {}
+```
+
+Effect service consumers see the third type parameter (requirements `R`):
+
+```typescript
+// getGitBranch has type:
+//   Effect.Effect<string | null, WorkspaceError, WorkspaceService>
+//
+// Any effect requiring WorkspaceService will not compile unless the
+// service is provided to the Effect runtime before execution.
 ```
 
 Effect services must own:
@@ -170,11 +204,22 @@ Effect services must own:
 Renderer hooks stay thin:
 
 ```typescript
+import { UseQueryResult, useQuery } from '@tanstack/react-query'
+import { Effect } from 'effect'
+
 // runAppEffect is the renderer adapter over Tau's configured Effect runtime.
-const useGitBranch = (workspacePath: string) =>
+const useGitBranch = (
+  workspacePath: string
+): UseQueryResult<string | null, Error> =>
   useQuery({
     queryKey: ['workspace', workspacePath, 'branch'],
-    queryFn: () => runAppEffect(WorkspaceService.getGitBranch(workspacePath))
+    queryFn: () =>
+      runAppEffect(
+        Effect.gen(function* () {
+          const svc = yield* WorkspaceService
+          return yield* svc.getGitBranch(workspacePath)
+        })
+      ),
   })
 ```
 
@@ -205,8 +250,6 @@ utility process:
 output to the correct terminal pane.
 
 ```typescript
-import { Schema } from 'effect'
-
 type PtyClientMessage =
   | { type: 'spawn'; sessionId: string; cols: number; rows: number }
   | { type: 'write'; sessionId: string; data: string }
@@ -224,6 +267,27 @@ type PtyServiceMessage =
 Use Effect `Schema` for the runtime message contract before messages cross the
 renderer, main process, and PTY utility-process boundary. Invalid IPC payloads
 must become typed protocol errors, not uncaught exceptions.
+
+```typescript
+import { Schema } from 'effect'
+
+// Example: runtime validation for the spawn message
+const SpawnSchema = Schema.Struct({
+  type: Schema.Literal('spawn'),
+  sessionId: Schema.String,
+  cols: Schema.Number,
+  rows: Schema.Number,
+})
+const PtyClientMessageSchema = Schema.Union(
+  SpawnSchema,
+  Schema.Struct({ type: Schema.Literal('write'), sessionId: Schema.String, data: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('resize'), sessionId: Schema.String, cols: Schema.Number, rows: Schema.Number }),
+  Schema.Struct({ type: Schema.Literal('kill'), sessionId: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('renderer-ready') }),
+)
+
+type PtyClientMessage = Schema.Schema.Type<typeof PtyClientMessageSchema>
+```
 
 ---
 
@@ -411,6 +475,13 @@ must wrap this carefully:
 
 The existing `electron-vite` config needs a `@vitejs/plugin-react` plugin added
 to the renderer build config.
+
+> The dependencies listed above are planned additions tracked by the
+> implementation phases in [§8](#8-implementation-phases). The `effect` package
+> will be added to `package.json` when Phase 1 begins, alongside the Effect
+> runtime initialization. This PR is limited to the architecture document; no
+> dependency changes are made beyond the existing `react`/`react-dom` version
+> pinning (see `package.json`).
 
 ---
 
