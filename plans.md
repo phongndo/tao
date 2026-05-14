@@ -463,12 +463,12 @@ Independent PTY sessions per pane remain Phase 4.
 
 ### Phase 4: PTY Pool
 
-- [ ] Evolve PTY service to PtyPool (session-based multiplexing)
-- [ ] Spawn/kill PTY per terminal pane
-- [ ] Route data by sessionId
-- [ ] Handle PTY exit per session
-- [ ] Wrap renderer ↔ PTY utility-process IPC in Effect services
-- [ ] Validate PTY protocol messages with Effect `Schema`
+- [x] Evolve PTY service to PtyPool (session-based multiplexing)
+- [x] Spawn/kill PTY per terminal pane
+- [x] Route data by sessionId
+- [x] Handle PTY exit per session
+- [x] Wrap renderer ↔ PTY utility-process IPC in Effect services
+- [x] Validate PTY protocol messages with Effect `Schema`
 
 ### Phase 5: Key Bindings + Navigation
 

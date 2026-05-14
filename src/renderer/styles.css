@@ -613,7 +613,7 @@ body {
 }
 
 /* ── Terminal container fills the window ── */
-#terminal-container {
+.terminal-container {
   width: 100%;
   height: 100%;
   padding: 0;
@@ -637,7 +637,7 @@ body {
 }
 
 /* ── Canvas: crisp text, GPU layer ── */
-#terminal-container canvas {
+.terminal-container canvas {
   display: block;
   image-rendering: auto;
   /*
@@ -655,14 +655,14 @@ body {
 }
 
 /* ── Hidden textarea (for focus/IME) ── */
-#terminal-container textarea {
+.terminal-container textarea {
   opacity: 0;
   position: absolute;
   pointer-events: none;
 }
 
 /* ── Selection color overrides ── */
-#terminal-container ::selection {
+.terminal-container ::selection {
   background: #2a2a2d;
   color: #c1c0d4;
 }

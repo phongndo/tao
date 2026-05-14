@@ -8,7 +8,7 @@ type TerminalError = {
   detail?: string
 }
 
-export function TerminalPane() {
+export function TerminalPane({ sessionId }: { sessionId: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
@@ -30,7 +30,7 @@ export function TerminalPane() {
 
       try {
         setTerminalError(null)
-        const terminal = await createTerminal(container)
+        const terminal = await createTerminal(container, sessionId)
         if (disposed) {
           terminal.dispose()
           return
@@ -58,10 +58,10 @@ export function TerminalPane() {
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
-  }, [])
+  }, [sessionId])
 
   return (
-    <div id="terminal-container" ref={containerRef}>
+    <div className="terminal-container" ref={containerRef}>
       {terminalError ? (
         <div className="terminal-error">
           {terminalError.title ? <h2>{terminalError.title}</h2> : null}

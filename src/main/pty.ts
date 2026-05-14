@@ -18,7 +18,10 @@ export class PtyManager {
   private cols = DEFAULT_COLS
   private rows = DEFAULT_ROWS
 
-  constructor(shell: string) {
+  constructor(shell: string, initialSize?: { cols: number; rows: number }) {
+    this.cols = sanitizeCols(initialSize?.cols)
+    this.rows = sanitizeRows(initialSize?.rows)
+
     const env = Object.assign({}, process.env as Record<string, string>, {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
@@ -96,4 +99,14 @@ export class PtyManager {
     this.dataCallbacks = []
     this.exitCallbacks = []
   }
+}
+
+function sanitizeCols(cols: number | undefined): number {
+  if (cols === undefined || !Number.isFinite(cols)) return DEFAULT_COLS
+  return Math.max(2, Math.floor(cols))
+}
+
+function sanitizeRows(rows: number | undefined): number {
+  if (rows === undefined || !Number.isFinite(rows)) return DEFAULT_ROWS
+  return Math.max(1, Math.floor(rows))
 }

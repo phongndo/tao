@@ -20,53 +20,50 @@ const PTY_MAX_BUFFER_CHARS = 64 * 1024 // cap per IPC payload to avoid renderer 
 const PTY_INTERACTIVE_WINDOW_MS = 32
 const PTY_INTERACTIVE_CHARS = 256
 
+type PtySession = {
+  manager: PtyManager
+  chunks: string[]
+  bufferedChars: number
+  flushTimer: ReturnType<typeof setTimeout> | null
+  flushTimerDelay: number
+  lastInputAt: number
+}
+
 // MessagePort/native PTY handles can be insufficient to keep an Electron
 // utility process alive on every platform/build. Keep the service process
 // explicitly alive until the main process kills it during app shutdown.
 const keepAliveTimer = setInterval(() => {}, 60_000)
 
 let rendererReadyForPty = false
-let ptyManager: PtyManager | null = null
 let port: MessagePortMain | null = null
-let ptyChunks: string[] = []
-let ptyBufferedChars = 0
-let ptyFlushTimer: ReturnType<typeof setTimeout> | null = null
-let ptyFlushTimerDelay = 0
-let lastPtyInputAt = 0
+const sessions = new Map<string, PtySession>()
 
 function postToClient(message: PtyServiceMessage) {
   port?.postMessage(message)
 }
 
-function postOrQueueServiceMessage(message: PtyServiceMessage) {
-  // Control messages must be delivered before the renderer marks itself ready:
-  // the renderer waits for `ready` to learn the initial PTY size before it can
-  // create the terminal and send `renderer-ready` back.
-  postToClient(message)
-}
-
-function clearPtyFlushTimer() {
-  if (ptyFlushTimer !== null) {
-    clearTimeout(ptyFlushTimer)
-    ptyFlushTimer = null
-    ptyFlushTimerDelay = 0
+function clearPtyFlushTimer(session: PtySession) {
+  if (session.flushTimer !== null) {
+    clearTimeout(session.flushTimer)
+    session.flushTimer = null
+    session.flushTimerDelay = 0
   }
 }
 
-function takePtyBuffer(): string {
-  const data = ptyChunks.length === 1 ? ptyChunks[0] : ptyChunks.join('')
-  ptyChunks = []
-  ptyBufferedChars = 0
+function takePtyBuffer(session: PtySession): string {
+  const data = session.chunks.length === 1 ? session.chunks[0] : session.chunks.join('')
+  session.chunks = []
+  session.bufferedChars = 0
   return data
 }
 
-function resetPtyBuffer() {
-  clearPtyFlushTimer()
-  ptyChunks = []
-  ptyBufferedChars = 0
+function resetPtyBuffer(session: PtySession) {
+  clearPtyFlushTimer(session)
+  session.chunks = []
+  session.bufferedChars = 0
 }
 
-function sendPtyData(data: string) {
+function sendPtyData(sessionId: string, data: string) {
   if (data.length === 0) return
 
   for (let start = 0; start < data.length; ) {
@@ -77,86 +74,121 @@ function sendPtyData(data: string) {
       if (code >= 0xdc00 && code <= 0xdfff) end--
     }
 
-    postToClient({ type: 'data', data: data.slice(start, end) })
+    postToClient({ type: 'data', sessionId, data: data.slice(start, end) })
     start = end
   }
 }
 
-function flushPtyBuffer() {
-  clearPtyFlushTimer()
-  if (ptyBufferedChars === 0 || !rendererReadyForPty) return
+function flushPtyBuffer(sessionId: string) {
+  const session = sessions.get(sessionId)
+  if (!session) return
 
-  sendPtyData(takePtyBuffer())
+  clearPtyFlushTimer(session)
+  if (session.bufferedChars === 0 || !rendererReadyForPty) return
+
+  sendPtyData(sessionId, takePtyBuffer(session))
 }
 
-function schedulePtyFlush(delay: number) {
+function schedulePtyFlush(sessionId: string, session: PtySession, delay: number) {
   if (!rendererReadyForPty) return
-  if (ptyFlushTimer !== null && delay >= ptyFlushTimerDelay) return
+  if (session.flushTimer !== null && delay >= session.flushTimerDelay) return
 
-  clearPtyFlushTimer()
-  ptyFlushTimerDelay = delay
-  ptyFlushTimer = setTimeout(flushPtyBuffer, delay)
+  clearPtyFlushTimer(session)
+  session.flushTimerDelay = delay
+  session.flushTimer = setTimeout(() => flushPtyBuffer(sessionId), delay)
 }
 
-function bufferPtyData(data: string) {
-  if (data.length === 0) return
+function bufferPtyData(sessionId: string, data: string) {
+  const session = sessions.get(sessionId)
+  if (!session || data.length === 0) return
 
-  ptyChunks.push(data)
-  ptyBufferedChars += data.length
+  session.chunks.push(data)
+  session.bufferedChars += data.length
 
   // Keep shell startup output until the renderer has registered its port listener.
   if (!rendererReadyForPty) return
 
-  if (ptyBufferedChars >= PTY_MAX_BUFFER_CHARS) {
-    flushPtyBuffer()
+  if (session.bufferedChars >= PTY_MAX_BUFFER_CHARS) {
+    flushPtyBuffer(sessionId)
     return
   }
 
   const isInteractiveEcho =
-    data.length <= PTY_INTERACTIVE_CHARS && Date.now() - lastPtyInputAt <= PTY_INTERACTIVE_WINDOW_MS
+    data.length <= PTY_INTERACTIVE_CHARS &&
+    Date.now() - session.lastInputAt <= PTY_INTERACTIVE_WINDOW_MS
 
-  schedulePtyFlush(isInteractiveEcho ? PTY_INTERACTIVE_FLUSH_INTERVAL : PTY_FLUSH_INTERVAL)
+  schedulePtyFlush(
+    sessionId,
+    session,
+    isInteractiveEcho ? PTY_INTERACTIVE_FLUSH_INTERVAL : PTY_FLUSH_INTERVAL,
+  )
 }
 
-function setupPty() {
+function spawnPty(sessionId: string, cols: number, rows: number) {
+  const existingSession = sessions.get(sessionId)
+  if (existingSession) {
+    existingSession.manager.resize(cols, rows)
+    postToClient({ type: 'ready', sessionId, size: existingSession.manager.getColsRows() })
+    flushPtyBuffer(sessionId)
+    return
+  }
+
   const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
-  console.log(`[pty-service] Spawning PTY with shell: ${shell}`)
+  console.log(`[pty-service] Spawning PTY ${sessionId} with shell: ${shell}`)
 
   try {
-    ptyManager = new PtyManager(shell)
-    ptyManager.onData(bufferPtyData)
-    ptyManager.onExit(({ exitCode, signal }) => {
-      flushPtyBuffer()
-      console.log(`[pty-service] PTY exited with code ${exitCode}, signal ${signal}`)
-      ptyManager = null
-      postOrQueueServiceMessage({ type: 'exit', info: { exitCode, signal } })
+    const manager = new PtyManager(shell, { cols, rows })
+    const session: PtySession = {
+      manager,
+      chunks: [],
+      bufferedChars: 0,
+      flushTimer: null,
+      flushTimerDelay: 0,
+      lastInputAt: 0,
+    }
+    sessions.set(sessionId, session)
+
+    manager.onData((data) => bufferPtyData(sessionId, data))
+    manager.onExit(({ exitCode, signal }) => {
+      flushPtyBuffer(sessionId)
+      console.log(`[pty-service] PTY ${sessionId} exited with code ${exitCode}, signal ${signal}`)
+      sessions.delete(sessionId)
+      postToClient({ type: 'exit', sessionId, info: { exitCode, signal } })
     })
-    postOrQueueServiceMessage({ type: 'ready', size: ptyManager.getColsRows() })
+    postToClient({ type: 'ready', sessionId, size: manager.getColsRows() })
   } catch (err) {
-    console.error('[pty-service] Failed to spawn PTY:', err)
-    postOrQueueServiceMessage({ type: 'error', error: String(err) })
+    console.error(`[pty-service] Failed to spawn PTY ${sessionId}:`, err)
+    postToClient({ type: 'error', sessionId, error: String(err) })
   }
 }
 
-function disposePty() {
-  flushPtyBuffer()
-  resetPtyBuffer()
-  ptyManager?.dispose()
-  ptyManager = null
+function killPty(sessionId: string) {
+  const session = sessions.get(sessionId)
+  if (!session) return
+
+  flushPtyBuffer(sessionId)
+  resetPtyBuffer(session)
+  session.manager.dispose()
+  sessions.delete(sessionId)
+}
+
+function killAllPtys() {
+  while (sessions.size > 0) {
+    const sessionId = sessions.keys().next().value
+    if (!sessionId) return
+    killPty(sessionId)
+  }
 }
 
 function handleClientMessage(message: PtyClientMessage) {
   switch (message.type) {
     case 'renderer-ready':
       rendererReadyForPty = true
-      flushPtyBuffer()
+      for (const sessionId of sessions.keys()) {
+        flushPtyBuffer(sessionId)
+      }
       break
-    case 'write':
-      if (typeof message.data !== 'string' || message.data.length === 0) return
-      lastPtyInputAt = Date.now()
-      ptyManager?.write(message.data)
-      break
-    case 'resize':
+    case 'spawn':
       if (
         !Number.isInteger(message.cols) ||
         !Number.isInteger(message.rows) ||
@@ -165,16 +197,37 @@ function handleClientMessage(message: PtyClientMessage) {
       ) {
         return
       }
-      ptyManager?.resize(message.cols, message.rows)
+      spawnPty(message.sessionId, message.cols, message.rows)
       break
-    case 'dispose':
-      disposePty()
+    case 'write': {
+      if (message.data.length === 0) return
+      const session = sessions.get(message.sessionId)
+      if (!session) return
+      session.lastInputAt = Date.now()
+      session.manager.write(message.data)
+      break
+    }
+    case 'resize': {
+      if (
+        !Number.isInteger(message.cols) ||
+        !Number.isInteger(message.rows) ||
+        message.cols <= 0 ||
+        message.rows <= 0
+      ) {
+        return
+      }
+      sessions.get(message.sessionId)?.manager.resize(message.cols, message.rows)
+      break
+    }
+    case 'kill':
+      killPty(message.sessionId)
       break
   }
 }
 
-function isClientMessage(message: unknown): message is PtyClientMessage {
-  return Schema.decodeUnknownOption(PtyClientMessageSchema)(message)._tag === 'Some'
+function decodeClientMessage(message: unknown): PtyClientMessage | null {
+  const decoded = Schema.decodeUnknownOption(PtyClientMessageSchema)(message)
+  return decoded._tag === 'Some' ? decoded.value : null
 }
 
 const parentPort = (process as typeof process & { parentPort?: ParentPort | null }).parentPort
@@ -191,15 +244,14 @@ parentPort.once('message', (event) => {
 
   port = receivedPort
   port.on('message', (messageEvent) => {
-    if (!isClientMessage(messageEvent.data)) return
-    handleClientMessage(messageEvent.data)
+    const message = decodeClientMessage(messageEvent.data)
+    if (!message) return
+    handleClientMessage(message)
   })
   port.start()
-
-  setupPty()
 })
 
 process.once('exit', () => {
   clearInterval(keepAliveTimer)
-  disposePty()
+  killAllPtys()
 })

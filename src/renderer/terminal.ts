@@ -33,78 +33,89 @@ const terminalFontFamily =
   '"Symbols Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "SF Mono", Menlo, Monaco, monospace'
 
 function updateStatus(msg: string) {
-  const container = document.getElementById('terminal-container')
-  if (container && !container.querySelector('canvas')) {
-    container.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;font-family:monospace;padding:2rem;">
-        <pre style="color:#9ece6a;text-align:center;max-width:90%;overflow:auto;">${msg}</pre>
-        <p style="margin-top:1rem;color:#9699a8;font-size:12px;">Tau Terminal — Ghostty WASM + node-pty</p>
-      </div>
-    `
-  }
+  console.log(`[terminal] ${msg}`)
 }
 
-export async function createTerminal(container: HTMLElement): Promise<Terminal> {
+function renderTerminalError(container: HTMLElement, err: unknown) {
+  const errorNode = document.createElement('div')
+  errorNode.style.color = '#f7768e'
+  errorNode.style.padding = '2rem'
+  errorNode.style.fontFamily = 'monospace'
+  errorNode.textContent = `Error opening terminal: ${String(err)}`
+  container.replaceChildren(errorNode)
+}
+
+export async function createTerminal(container: HTMLElement, sessionId: string): Promise<Terminal> {
   // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
   const wasmUrl = new URL('ghostty-vt.wasm', window.location.href).href
   console.log(`[terminal] Loading Ghostty WASM from ${wasmUrl}...`)
 
   const t0 = performance.now()
-  const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
-    Ghostty.load(wasmUrl),
-    window.electronAPI.getInitialColsRows(),
-  ])
-  console.log(
-    `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
-  )
-  console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
-
-  // Step 2: Create terminal instance (with pre-loaded Ghostty)
-  updateStatus('Creating terminal...')
-  console.log('[terminal] Creating Terminal instance...')
-
-  const term = new Terminal({
-    ghostty, // Pass the pre-loaded Ghostty instance for instant open
-    cols: initialCols,
-    rows: initialRows,
-    fontSize: 14,
-    fontFamily: terminalFontFamily,
-    theme: THEME,
-    cursorBlink: false,
-    cursorStyle: 'block',
-    scrollback: 10000,
-    allowTransparency: false,
-  })
-
-  // Step 3: Clear container and open terminal
-  updateStatus('Opening terminal...')
-  console.log('[terminal] Opening terminal...')
-
-  // Clear any previous content (status messages, old terminal instances)
-  while (container.firstChild) {
-    container.removeChild(container.firstChild)
-  }
+  const ptyReady = window.electronAPI.spawnPty(sessionId, 80, 24)
+  let term: Terminal | null = null
 
   try {
+    const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
+      Ghostty.load(wasmUrl),
+      ptyReady,
+    ])
+    console.log(
+      `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
+    )
+    console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
+
+    // Step 2: Create terminal instance (with pre-loaded Ghostty)
+    updateStatus('Creating terminal...')
+    console.log('[terminal] Creating Terminal instance...')
+
+    term = new Terminal({
+      ghostty, // Pass the pre-loaded Ghostty instance for instant open
+      cols: initialCols,
+      rows: initialRows,
+      fontSize: 14,
+      fontFamily: terminalFontFamily,
+      theme: THEME,
+      cursorBlink: false,
+      cursorStyle: 'block',
+      scrollback: 10000,
+      allowTransparency: false,
+    })
+
+    // Step 3: Clear container and open terminal
+    updateStatus('Opening terminal...')
+    console.log('[terminal] Opening terminal...')
+
+    // Clear any previous content (status messages, old terminal instances)
+    while (container.firstChild) {
+      container.removeChild(container.firstChild)
+    }
+
     term.open(container)
     console.log('[terminal] Terminal opened')
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
-    container.innerHTML = `<div style="color:#f7768e;padding:2rem;font-family:monospace;">Error opening terminal: ${err}</div>`
+    term?.dispose()
+    window.electronAPI.killPty(sessionId)
+    renderTerminalError(container, err)
     throw err
+  }
+
+  if (!term) {
+    window.electronAPI.killPty(sessionId)
+    throw new Error('Terminal failed to initialize')
   }
 
   // Step 4: Wire IPC
   console.log('[terminal] Wiring IPC...')
 
-  const unsubPtyData = window.electronAPI.onPtyData((data: string) => {
+  const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
     term.write(data)
   })
 
   // Terminal input → PTY (no debug overhead)
   term.onData((data: string) => {
-    window.electronAPI.sendPtyInput(data)
+    window.electronAPI.sendPtyInput(sessionId, data)
   })
 
   let pendingResize: { cols: number; rows: number } | null = null
@@ -119,17 +130,18 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
       const nextResize = pendingResize
       pendingResize = null
       if (nextResize) {
-        window.electronAPI.resizePty(nextResize.cols, nextResize.rows)
+        window.electronAPI.resizePty(sessionId, nextResize.cols, nextResize.rows)
       }
     })
   })
 
-  const unsubPtyError = window.electronAPI.onPtyError((error: string) => {
+  const unsubPtyError = window.electronAPI.onPtyError(sessionId, (error: string) => {
     console.error('[terminal] PTY error:', error)
     term.write(`\r\n\x1b[31m[PTY Error: ${error}]\x1b[0m\r\n`)
   })
 
   const unsubPtyExit = window.electronAPI.onPtyExit(
+    sessionId,
     (info: { exitCode: number; signal?: number }) => {
       const msg =
         info.signal != null
