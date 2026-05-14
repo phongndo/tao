@@ -523,6 +523,7 @@ body {
 }
 
 .pane-tile {
+  position: relative;
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -531,6 +532,36 @@ body {
   border: 0;
   border-radius: 0;
   background: #151515;
+  outline: none;
+}
+
+.pane-close-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #303035;
+  border-radius: 4px;
+  background: #18181a;
+  color: #747783;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.pane-tile:hover .pane-close-button,
+.pane-close-button:focus-visible {
+  opacity: 1;
+}
+
+.pane-close-button:hover,
+.pane-close-button:focus-visible {
+  border-color: #424246;
+  color: #cac9dd;
   outline: none;
 }
 

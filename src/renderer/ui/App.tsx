@@ -12,6 +12,7 @@ import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState
 import { Mosaic, type MosaicNode } from 'react-mosaic-component'
 import {
   LOCAL_WORKSPACE_ID,
+  type MosaicLayoutNode,
   type Pane,
   type Tab,
   useTauStore,
@@ -29,6 +30,13 @@ const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
+}
+
+function firstPaneId(layout: MosaicLayoutNode): string | null {
+  if (typeof layout === 'string') return layout
+  if (layout.type === 'split') return firstPaneId(layout.children[0])
+  if (layout.type === 'tabs') return layout.tabs[0] ?? null
+  return null
 }
 
 function WorkspaceItem({ workspace }: { workspace: Workspace }) {
@@ -298,11 +306,13 @@ const PaneTile = memo(function PaneTile({
   pane,
   isActive,
   isLiveTerminal,
+  onClose,
   onSelect,
 }: {
   pane: Pane
   isActive: boolean
   isLiveTerminal: boolean
+  onClose(): void
   onSelect(): void
 }) {
   return (
@@ -311,6 +321,18 @@ const PaneTile = memo(function PaneTile({
       data-pane-id={pane.id}
       onPointerDownCapture={onSelect}
     >
+      <button
+        type="button"
+        className="pane-close-button"
+        aria-label={`Close ${pane.name}`}
+        title="Close pane"
+        onClick={(event) => {
+          event.stopPropagation()
+          onClose()
+        }}
+      >
+        <X size={12} />
+      </button>
       {isLiveTerminal ? (
         <TerminalPane />
       ) : (
@@ -322,11 +344,12 @@ const PaneTile = memo(function PaneTile({
   )
 })
 
-function PaneGrid({
+const PaneGrid = memo(function PaneGrid({
   tab,
   panesById,
   activePaneId,
   livePaneId,
+  onClosePane,
   onLayoutRelease,
   onSelectPane,
 }: {
@@ -334,6 +357,7 @@ function PaneGrid({
   panesById: Map<string, Pane>
   activePaneId: string | null
   livePaneId: string | null
+  onClosePane(paneId: string): void
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
 }) {
@@ -367,11 +391,12 @@ function PaneGrid({
           pane={pane}
           isActive={pane.id === activePaneId}
           isLiveTerminal={pane.id === livePaneId}
+          onClose={() => onClosePane(pane.id)}
           onSelect={() => onSelectPane(pane.id)}
         />
       )
     },
-    [activePaneId, livePaneId, onSelectPane, panesById],
+    [activePaneId, livePaneId, onClosePane, onSelectPane, panesById],
   )
 
   return (
@@ -385,7 +410,7 @@ function PaneGrid({
       zeroStateView={<div className="pane-grid-empty" />}
     />
   )
-}
+})
 
 export function App() {
   const workspaces = useTauStore((state) => state.workspaces)
@@ -405,6 +430,7 @@ export function App() {
   const setTabLayout = useTauStore((state) => state.setTabLayout)
   const selectPane = useTauStore((state) => state.selectPane)
   const splitActivePane = useTauStore((state) => state.splitActivePane)
+  const closePane = useTauStore((state) => state.closePane)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
@@ -433,7 +459,10 @@ export function App() {
     [activeTabId, workspaceTabs],
   )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
-  const livePaneId = activeTab?.id === activeTabId ? activePaneId : null
+  const livePaneId = useMemo(() => {
+    if (!activeTab || activeTab.id !== activeTabId) return null
+    return firstPaneId(activeTab.layout)
+  }, [activeTab, activeTabId])
 
   useEffect(() => {
     ensureWorkspaceTab(activeWorkspaceKey)
@@ -445,6 +474,9 @@ export function App() {
       newTab(activeWorkspaceKey)
     })
     const unsubscribeCloseTab = window.electronAPI.onAppCommand('close-tab', closeActiveTab)
+    const unsubscribeClosePane = window.electronAPI.onAppCommand('close-pane', () => {
+      if (activePaneId) closePane(activePaneId)
+    })
     const unsubscribeSplitVertical = window.electronAPI.onAppCommand('split-pane-vertical', () => {
       splitActivePane('row')
     })
@@ -459,10 +491,19 @@ export function App() {
       unsubscribeToggleSidebar()
       unsubscribeNewTab()
       unsubscribeCloseTab()
+      unsubscribeClosePane()
       unsubscribeSplitVertical()
       unsubscribeSplitHorizontal()
     }
-  }, [activeWorkspaceKey, closeActiveTab, newTab, splitActivePane, toggleSidebar])
+  }, [
+    activePaneId,
+    activeWorkspaceKey,
+    closeActiveTab,
+    closePane,
+    newTab,
+    splitActivePane,
+    toggleSidebar,
+  ])
 
   async function handleAddWorkspace() {
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
@@ -586,6 +627,7 @@ export function App() {
                 panesById={panesById}
                 activePaneId={activePaneId}
                 livePaneId={livePaneId}
+                onClosePane={closePane}
                 onLayoutRelease={setTabLayout}
                 onSelectPane={selectPane}
               />

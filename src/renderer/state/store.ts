@@ -69,7 +69,21 @@ export type PaneType = 'terminal' | 'webview'
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 
 function createId(prefix: string): string {
-  return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+  const randomUUID = globalThis.crypto?.randomUUID?.()
+  if (randomUUID) return `${prefix}-${randomUUID}`
+
+  if (globalThis.crypto?.getRandomValues) {
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+    bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'))
+
+    return `${prefix}-${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex
+      .slice(6, 8)
+      .join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`
+  }
+
+  return `${prefix}-${Math.random().toString(36).slice(2)}`
 }
 
 function createTerminalPane(tabId: string, index: number): Pane {
@@ -148,6 +162,17 @@ function splitLayoutNode(
       children: layout.children.map((child) =>
         splitLayoutNode(child, paneId, newPaneId, direction),
       ),
+    }
+  }
+
+  if (isTabsNode(layout)) {
+    if (!layout.tabs.includes(paneId)) return layout
+
+    return {
+      type: 'split',
+      direction,
+      children: [layout, newPaneId],
+      splitPercentages: [50, 50],
     }
   }
 
@@ -237,11 +262,17 @@ function closeTabState(state: TauState, tabId: string): Partial<TauState> {
 }
 
 function ensureWorkspaceTabState(state: TauState, workspaceId: string): Partial<TauState> {
-  const existingTab = getWorkspaceTabs(state.tabs, workspaceId)[0]
+  const workspaceTabs = getWorkspaceTabs(state.tabs, workspaceId)
+  const existingTab = workspaceTabs.find((tab) => tab.id === state.activeTabId) ?? workspaceTabs[0]
   if (existingTab) {
+    const activePaneId =
+      state.activePaneId && layoutContainsPane(existingTab.layout, state.activePaneId)
+        ? state.activePaneId
+        : getFirstPaneId(existingTab.layout)
+
     return {
       activeTabId: existingTab.id,
-      activePaneId: getFirstPaneId(existingTab.layout),
+      activePaneId,
     }
   }
 

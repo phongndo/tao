@@ -158,6 +158,12 @@ function createWindow() {
       return
     }
 
+    if (key === 'w' && input.shift) {
+      event.preventDefault()
+      mainWindow?.webContents.send('app:close-pane')
+      return
+    }
+
     if (key === 'd') {
       event.preventDefault()
       mainWindow?.webContents.send(

@@ -2,13 +2,13 @@ import { Schema } from 'effect'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
+import type { AppCommand } from '../shared/app-command'
 import type { WorktreeInfo } from '../shared/workspace'
 
 type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppShortcutCallback = () => void
-type AppCommand = 'new-tab' | 'close-tab' | 'split-pane-vertical' | 'split-pane-horizontal'
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
 

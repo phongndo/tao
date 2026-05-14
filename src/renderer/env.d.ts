@@ -3,9 +3,8 @@
  * These types describe the API exposed by the preload script via contextBridge.
  */
 
+import type { AppCommand } from '../shared/app-command'
 import type { WorktreeInfo } from '../shared/workspace'
-
-type AppCommand = 'new-tab' | 'close-tab' | 'split-pane-vertical' | 'split-pane-horizontal'
 
 export interface ElectronAPI {
   sendPtyInput(data: string): void
