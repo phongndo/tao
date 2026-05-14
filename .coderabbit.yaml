@@ -2,8 +2,6 @@
 # Docs: https://docs.coderabbit.ai
 # FREE for public repos — no quota, no API keys.
 
-version: 1
-
 # ── PR Reviews ──
 reviews:
   request_changes_workflow: true
@@ -14,34 +12,17 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
-    base_branches: ["main"]
+    base_branches: ['main']
 
   # Skip generated files and binaries
   path_filters:
-    - "!pnpm-lock.yaml"
-    - "!out/**"
-    - "!dist/**"
-    - "!public/ghostty-vt.wasm"
-    - "!*.png"
-    - "!*.svg"
-    - "!*.wasm"
-
-# ── Issue Analysis ──
-# Coderabbit can analyze issues and suggest fixes
-issue_analysis:
-  enabled: true
-  auto_analyze:
-    enabled: true
-    labels: ["bug", "enhancement"]
-
-# ── Knowledge Base ──
-knowledge:
-  primary_docs:
-    - PLAN.md
-    - docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md
-    - docs/WEBGL_RENDERER_PLAN.md
-    - CONTRIBUTING.md
-    - README.md
+    - '!pnpm-lock.yaml'
+    - '!out/**'
+    - '!dist/**'
+    - '!public/ghostty-vt.wasm'
+    - '!*.png'
+    - '!*.svg'
+    - '!*.wasm'
 
 # ── Chat ──
 chat:

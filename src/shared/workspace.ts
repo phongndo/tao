@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-export const WorkspacePathSchema = Schema.NonEmptyTrimmedString
+export const WorkspacePathSchema = Schema.Trim.check(Schema.isNonEmpty())
 
 export const WorktreeInfoSchema = Schema.Struct({
   path: Schema.NonEmptyString,

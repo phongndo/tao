@@ -1,3 +1,6 @@
+@import 'tailwindcss/theme.css';
+@import 'tailwindcss/utilities.css';
+
 /* ── Reset & full-bleed layout ── */
 *,
 *::before,
@@ -14,7 +17,7 @@ body {
   overflow: hidden;
   background: #151515;
   color: #c9c7cd;
-  font-family: Menlo, Monaco, "Courier New", monospace;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* Prevent the browser from doing scroll bounce (rubber-banding) */
@@ -166,7 +169,7 @@ body {
   width: 2px;
   border-radius: 999px;
   background: #cac9dd;
-  content: "";
+  content: '';
 }
 
 .workspace-list {
@@ -327,7 +330,7 @@ body {
   width: 1px;
   height: 100%;
   background: transparent;
-  content: "";
+  content: '';
 }
 
 .resize-handle:hover,
@@ -671,7 +674,7 @@ body {
   justify-content: center;
   flex-direction: column;
   padding: 2rem;
-  font-family: Menlo, Monaco, "Courier New", monospace;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
   color: #9699a8;
 }
 

@@ -188,6 +188,55 @@ function ResizeShell({
     }
   }, [handlePointerMove, handlePointerUp, isResizing])
 
+  const resizeHandle = (
+    <div
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+      role="separator"
+      aria-orientation="vertical"
+      aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
+      aria-valuemax={SIDEBAR_MAX_WIDTH}
+      aria-valuenow={width}
+      aria-label="Resize sidebar"
+      tabIndex={0}
+      className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
+      onPointerDown={(event) => {
+        if (!event.isPrimary || event.button !== 0) return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        startXRef.current = event.clientX
+        startWidthRef.current = width
+        setIsResizing(true)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault()
+          onResize(width - SIDEBAR_KEYBOARD_RESIZE_STEP)
+          return
+        }
+        if (event.key === 'ArrowRight') {
+          event.preventDefault()
+          onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : width + SIDEBAR_KEYBOARD_RESIZE_STEP)
+          return
+        }
+        if (event.key === 'Home') {
+          event.preventDefault()
+          onResize(SIDEBAR_COLLAPSED_WIDTH)
+          return
+        }
+        if (event.key === 'End') {
+          event.preventDefault()
+          onResize(SIDEBAR_MAX_WIDTH)
+          return
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : SIDEBAR_COLLAPSED_WIDTH)
+        }
+      }}
+      onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
+    />
+  )
+
   return (
     <aside
       className={isCollapsed ? 'tau-sidebar tau-sidebar-collapsed' : 'tau-sidebar'}
@@ -195,52 +244,7 @@ function ResizeShell({
       aria-label="Workspaces"
     >
       {children}
-      {/* biome-ignore lint/a11y/useSemanticElements: <hr> is not appropriate for an interactive resize handle. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
-        aria-valuemax={SIDEBAR_MAX_WIDTH}
-        aria-valuenow={width}
-        aria-label="Resize sidebar"
-        tabIndex={0}
-        className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
-        onPointerDown={(event) => {
-          if (!event.isPrimary || event.button !== 0) return
-          event.preventDefault()
-          event.currentTarget.setPointerCapture(event.pointerId)
-          startXRef.current = event.clientX
-          startWidthRef.current = width
-          setIsResizing(true)
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowLeft') {
-            event.preventDefault()
-            onResize(width - SIDEBAR_KEYBOARD_RESIZE_STEP)
-            return
-          }
-          if (event.key === 'ArrowRight') {
-            event.preventDefault()
-            onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : width + SIDEBAR_KEYBOARD_RESIZE_STEP)
-            return
-          }
-          if (event.key === 'Home') {
-            event.preventDefault()
-            onResize(SIDEBAR_COLLAPSED_WIDTH)
-            return
-          }
-          if (event.key === 'End') {
-            event.preventDefault()
-            onResize(SIDEBAR_MAX_WIDTH)
-            return
-          }
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : SIDEBAR_COLLAPSED_WIDTH)
-          }
-        }}
-        onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
-      />
+      {resizeHandle}
     </aside>
   )
 }

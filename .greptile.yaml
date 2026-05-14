@@ -12,11 +12,11 @@ repository:
     - docs/**
     - bench/**
     - tau-gl/**
-    - "*.md"
-    - "*.json"
-    - "*.ts"
-    - "*.yaml"
-    - "*.yml"
+    - '*.md'
+    - '*.json'
+    - '*.ts'
+    - '*.yaml'
+    - '*.yml'
 
   exclude:
     - pnpm-lock.yaml
@@ -28,7 +28,7 @@ repository:
 # ── Indexing ──
 indexing:
   # What to include in the vector index
-  chunk_size: 800   # characters per chunk
+  chunk_size: 800 # characters per chunk
   chunk_overlap: 100
 
   # Prioritize architecture docs for Q&A accuracy

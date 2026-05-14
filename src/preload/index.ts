@@ -122,7 +122,7 @@ function handlePtyMessage(message: PtyServiceMessage) {
 }
 
 function isPtyServiceMessage(message: unknown): message is PtyServiceMessage {
-  return Schema.decodeUnknownEither(PtyServiceMessageSchema)(message)._tag === 'Right'
+  return Schema.decodeUnknownOption(PtyServiceMessageSchema)(message)._tag === 'Some'
 }
 
 ipcRenderer.on('pty:port', (event) => {

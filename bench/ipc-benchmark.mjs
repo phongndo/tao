@@ -94,7 +94,9 @@ function printSummary({ legacy, port }) {
 
   console.log('')
   if (port.medianControlStalls16 < legacy.medianControlStalls16) {
-    console.log('PASS: MessagePort caused fewer median >16ms control IPC stalls during bulk output.')
+    console.log(
+      'PASS: MessagePort caused fewer median >16ms control IPC stalls during bulk output.',
+    )
   } else {
     console.log('WARN: MessagePort did not reduce median >16ms control IPC stalls in this run.')
   }

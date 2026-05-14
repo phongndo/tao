@@ -174,7 +174,7 @@ function handleClientMessage(message: PtyClientMessage) {
 }
 
 function isClientMessage(message: unknown): message is PtyClientMessage {
-  return Schema.decodeUnknownEither(PtyClientMessageSchema)(message)._tag === 'Right'
+  return Schema.decodeUnknownOption(PtyClientMessageSchema)(message)._tag === 'Some'
 }
 
 const parentPort = (process as typeof process & { parentPort?: ParentPort | null }).parentPort
