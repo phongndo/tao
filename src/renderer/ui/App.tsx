@@ -34,6 +34,7 @@ function workspaceNameFromPath(projectPath: string): string {
 
 function firstPaneId(layout: MosaicLayoutNode): string | null {
   if (typeof layout === 'string') return layout
+  if (!layout.first) return null
   return firstPaneId(layout.first)
 }
 
@@ -317,7 +318,9 @@ const PaneTile = memo(function PaneTile({
     <div
       className={isActive ? 'pane-tile pane-tile-active' : 'pane-tile'}
       data-pane-id={pane.id}
-      onPointerDownCapture={onSelect}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onSelect()
+      }}
     >
       <button
         type="button"

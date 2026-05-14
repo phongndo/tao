@@ -241,6 +241,24 @@ function ensureWorkspaceTabState(state: TauState, workspaceId: string): Partial<
 
 const initialLocalTab = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function repairPersistedState(state: TauState): TauState {
+  const hasActiveWorkspace =
+    state.activeWorkspaceId !== null &&
+    state.workspaces.some((workspace) => workspace.id === state.activeWorkspaceId)
+  const activeWorkspaceId = hasActiveWorkspace ? state.activeWorkspaceId : null
+  const nextState = { ...state, activeWorkspaceId }
+  const targetWorkspaceId = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+
+  return {
+    ...nextState,
+    ...ensureWorkspaceTabState(nextState, targetWorkspaceId),
+  }
+}
+
 export const useTauStore = create<TauState>()(
   persist(
     (set) => ({
@@ -456,9 +474,17 @@ export const useTauStore = create<TauState>()(
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
+        tabs: state.tabs,
+        activeTabId: state.activeTabId,
+        panes: state.panes,
+        activePaneId: state.activePaneId,
         sidebarExpanded: state.sidebarExpanded,
         sidebarWidth: state.sidebarWidth,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = isRecord(persistedState) ? persistedState : {}
+        return repairPersistedState({ ...currentState, ...persisted })
+      },
     },
   ),
 )
