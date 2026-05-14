@@ -30,7 +30,7 @@ zero-copy rendering, dedicated PTY utility process).
 - **Table / Virtual / Form**: Not needed for initial UI. Can add later if required.
 
 ### Zustand vs Effect vs TanStack Query boundary
-```
+```text
 Zustand:        "which tab is active right now"     (ephemeral UI state)
 Effect:         "run git safely and return typed errors" (fallible side effects)
 TanStack Query: "cache branch for this workspace"   (renderer cache / refetch policy)
