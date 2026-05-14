@@ -33,18 +33,10 @@ const terminalFontFamily =
   '"Symbols Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "SF Mono", Menlo, Monaco, monospace'
 
 function updateStatus(msg: string) {
-  const container = document.getElementById('terminal-container')
-  if (container && !container.querySelector('canvas')) {
-    container.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;font-family:monospace;padding:2rem;">
-        <pre style="color:#9ece6a;text-align:center;max-width:90%;overflow:auto;">${msg}</pre>
-        <p style="margin-top:1rem;color:#9699a8;font-size:12px;">Tau Terminal — Ghostty WASM + node-pty</p>
-      </div>
-    `
-  }
+  console.log(`[terminal] ${msg}`)
 }
 
-export async function createTerminal(container: HTMLElement): Promise<Terminal> {
+export async function createTerminal(container: HTMLElement, sessionId: string): Promise<Terminal> {
   // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
   const wasmUrl = new URL('ghostty-vt.wasm', window.location.href).href
@@ -53,7 +45,7 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
   const t0 = performance.now()
   const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
     Ghostty.load(wasmUrl),
-    window.electronAPI.getInitialColsRows(),
+    window.electronAPI.spawnPty(sessionId, 80, 24),
   ])
   console.log(
     `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
@@ -98,13 +90,13 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
   // Step 4: Wire IPC
   console.log('[terminal] Wiring IPC...')
 
-  const unsubPtyData = window.electronAPI.onPtyData((data: string) => {
+  const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
     term.write(data)
   })
 
   // Terminal input → PTY (no debug overhead)
   term.onData((data: string) => {
-    window.electronAPI.sendPtyInput(data)
+    window.electronAPI.sendPtyInput(sessionId, data)
   })
 
   let pendingResize: { cols: number; rows: number } | null = null
@@ -119,17 +111,18 @@ export async function createTerminal(container: HTMLElement): Promise<Terminal> 
       const nextResize = pendingResize
       pendingResize = null
       if (nextResize) {
-        window.electronAPI.resizePty(nextResize.cols, nextResize.rows)
+        window.electronAPI.resizePty(sessionId, nextResize.cols, nextResize.rows)
       }
     })
   })
 
-  const unsubPtyError = window.electronAPI.onPtyError((error: string) => {
+  const unsubPtyError = window.electronAPI.onPtyError(sessionId, (error: string) => {
     console.error('[terminal] PTY error:', error)
     term.write(`\r\n\x1b[31m[PTY Error: ${error}]\x1b[0m\r\n`)
   })
 
   const unsubPtyExit = window.electronAPI.onPtyExit(
+    sessionId,
     (info: { exitCode: number; signal?: number }) => {
       const msg =
         info.signal != null

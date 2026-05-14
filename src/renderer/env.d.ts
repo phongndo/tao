@@ -7,12 +7,16 @@ import type { AppCommand } from '../shared/app-command'
 import type { WorktreeInfo } from '../shared/workspace'
 
 export interface ElectronAPI {
-  sendPtyInput(data: string): void
-  resizePty(cols: number, rows: number): void
-  getInitialColsRows(): Promise<{ cols: number; rows: number }>
-  onPtyData(callback: (data: string) => void): () => void
-  onPtyError(callback: (error: string) => void): () => void
-  onPtyExit(callback: (info: { exitCode: number; signal?: number }) => void): () => void
+  spawnPty(sessionId: string, cols: number, rows: number): Promise<{ cols: number; rows: number }>
+  sendPtyInput(sessionId: string, data: string): void
+  resizePty(sessionId: string, cols: number, rows: number): void
+  killPty(sessionId: string): void
+  onPtyData(sessionId: string, callback: (data: string) => void): () => void
+  onPtyError(sessionId: string, callback: (error: string) => void): () => void
+  onPtyExit(
+    sessionId: string,
+    callback: (info: { exitCode: number; signal?: number }) => void,
+  ): () => void
   signalReady(): void
   onToggleSidebar(callback: () => void): () => void
   onAppCommand(command: AppCommand, callback: () => void): () => void

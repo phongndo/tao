@@ -10,18 +10,39 @@ export const PtyExitInfoSchema = Schema.Struct({
   signal: Schema.optional(Schema.Number),
 })
 
+const SessionIdSchema = Schema.Trim.check(Schema.isNonEmpty())
+
 export const PtyClientMessageSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal('renderer-ready') }),
-  Schema.Struct({ type: Schema.Literal('write'), data: Schema.String }),
-  Schema.Struct({ type: Schema.Literal('resize'), cols: Schema.Number, rows: Schema.Number }),
-  Schema.Struct({ type: Schema.Literal('dispose') }),
+  Schema.Struct({
+    type: Schema.Literal('spawn'),
+    sessionId: SessionIdSchema,
+    cols: Schema.Number,
+    rows: Schema.Number,
+  }),
+  Schema.Struct({ type: Schema.Literal('write'), sessionId: SessionIdSchema, data: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal('resize'),
+    sessionId: SessionIdSchema,
+    cols: Schema.Number,
+    rows: Schema.Number,
+  }),
+  Schema.Struct({ type: Schema.Literal('kill'), sessionId: SessionIdSchema }),
 ])
 
 export const PtyServiceMessageSchema = Schema.Union([
-  Schema.Struct({ type: Schema.Literal('ready'), size: PtySizeSchema }),
-  Schema.Struct({ type: Schema.Literal('data'), data: Schema.String }),
-  Schema.Struct({ type: Schema.Literal('error'), error: Schema.String }),
-  Schema.Struct({ type: Schema.Literal('exit'), info: PtyExitInfoSchema }),
+  Schema.Struct({ type: Schema.Literal('ready'), sessionId: SessionIdSchema, size: PtySizeSchema }),
+  Schema.Struct({ type: Schema.Literal('data'), sessionId: SessionIdSchema, data: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal('error'),
+    sessionId: SessionIdSchema,
+    error: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('exit'),
+    sessionId: SessionIdSchema,
+    info: PtyExitInfoSchema,
+  }),
 ])
 
 export type PtySize = Schema.Schema.Type<typeof PtySizeSchema>

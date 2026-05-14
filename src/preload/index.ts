@@ -10,26 +10,78 @@ type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppShortcutCallback = () => void
 
+type ReadyState = {
+  size: PtySize | null
+  promise: Promise<PtySize>
+  resolve: ((size: PtySize) => void) | null
+  reject: ((err: Error) => void) | null
+  timeout: ReturnType<typeof setTimeout> | null
+}
+
 const INITIAL_SIZE_TIMEOUT_MS = 5000
 
 let ptyPort: MessagePort | null = null
-let readySize: PtySize | null = null
-let readyResolve: ((size: PtySize) => void) | null = null
-let readyReject: ((err: Error) => void) | null = null
-let readyTimeout: ReturnType<typeof setTimeout> | null = null
 let pendingClientMessages: PtyClientMessage[] = []
-let pendingData: string[] = []
-let ptyDataCallbacks: PtyDataCallback[] = []
-let ptyErrorCallbacks: PtyErrorCallback[] = []
-let ptyExitCallbacks: PtyExitCallback[] = []
+const readyStates = new Map<string, ReadyState>()
+const pendingData = new Map<string, string[]>()
+const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
+const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
+const ptyExitCallbacks = new Map<string, PtyExitCallback[]>()
 
-const readyPromise = new Promise<PtySize>((resolve, reject) => {
-  readyResolve = resolve
-  readyReject = reject
-  readyTimeout = setTimeout(() => {
-    rejectReady(new Error('Timed out waiting for PTY service to become ready'))
+function createReadyState(sessionId: string): ReadyState {
+  let resolveReady: ((size: PtySize) => void) | null = null
+  let rejectReady: ((err: Error) => void) | null = null
+  const state: ReadyState = {
+    size: null,
+    promise: new Promise<PtySize>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    }),
+    resolve: null,
+    reject: null,
+    timeout: null,
+  }
+
+  state.resolve = resolveReady
+  state.reject = rejectReady
+  state.timeout = setTimeout(() => {
+    rejectPtyReady(sessionId, new Error(`Timed out waiting for PTY ${sessionId} to become ready`))
   }, INITIAL_SIZE_TIMEOUT_MS)
-})
+
+  return state
+}
+
+function getReadyState(sessionId: string): ReadyState {
+  const existingState = readyStates.get(sessionId)
+  if (existingState) return existingState
+
+  const state = createReadyState(sessionId)
+  readyStates.set(sessionId, state)
+  return state
+}
+
+function clearReadyTimeout(state: ReadyState) {
+  if (state.timeout === null) return
+  clearTimeout(state.timeout)
+  state.timeout = null
+}
+
+function rejectPtyReady(sessionId: string, error: Error) {
+  const state = getReadyState(sessionId)
+  clearReadyTimeout(state)
+  state.reject?.(error)
+  state.resolve = null
+  state.reject = null
+}
+
+function resolvePtyReady(sessionId: string, size: PtySize) {
+  const state = getReadyState(sessionId)
+  state.size = size
+  clearReadyTimeout(state)
+  state.resolve?.(size)
+  state.resolve = null
+  state.reject = null
+}
 
 function postToPty(message: PtyClientMessage): boolean {
   if (!ptyPort) return false
@@ -52,36 +104,37 @@ function flushPendingClientMessages() {
   }
 }
 
-function rejectReady(error: Error) {
-  clearReadyTimeout()
-  readyReject?.(error)
-  readyResolve = null
-  readyReject = null
+function callbacksFor<T>(callbacksBySession: Map<string, T[]>, sessionId: string): T[] {
+  const callbacks = callbacksBySession.get(sessionId)
+  if (callbacks) return callbacks
+
+  const nextCallbacks: T[] = []
+  callbacksBySession.set(sessionId, nextCallbacks)
+  return nextCallbacks
 }
 
-function clearReadyTimeout() {
-  if (readyTimeout === null) return
-  clearTimeout(readyTimeout)
-  readyTimeout = null
-}
+function flushPendingData(sessionId: string) {
+  const chunks = pendingData.get(sessionId)
+  const callbacks = ptyDataCallbacks.get(sessionId)
+  if (!chunks || chunks.length === 0 || !callbacks || callbacks.length === 0) return
 
-function flushPendingData() {
-  if (pendingData.length === 0 || ptyDataCallbacks.length === 0) return
-
-  const data = pendingData.length === 1 ? pendingData[0] : pendingData.join('')
-  pendingData = []
-  for (const callback of ptyDataCallbacks) {
+  const data = chunks.length === 1 ? chunks[0] : chunks.join('')
+  pendingData.set(sessionId, [])
+  for (const callback of callbacks) {
     callback(data)
   }
 }
 
-function handlePtyData(data: string) {
-  if (ptyDataCallbacks.length === 0) {
-    pendingData.push(data)
+function handlePtyData(sessionId: string, data: string) {
+  const callbacks = ptyDataCallbacks.get(sessionId)
+  if (!callbacks || callbacks.length === 0) {
+    const chunks = pendingData.get(sessionId) ?? []
+    chunks.push(data)
+    pendingData.set(sessionId, chunks)
     return
   }
 
-  for (const callback of ptyDataCallbacks) {
+  for (const callback of callbacks) {
     callback(data)
   }
 }
@@ -89,35 +142,36 @@ function handlePtyData(data: string) {
 function handlePtyMessage(message: PtyServiceMessage) {
   switch (message.type) {
     case 'ready':
-      readySize = message.size
-      readyResolve?.(message.size)
-      clearReadyTimeout()
-      readyResolve = null
-      readyReject = null
+      resolvePtyReady(message.sessionId, message.size)
       break
     case 'data':
-      handlePtyData(message.data)
+      handlePtyData(message.sessionId, message.data)
       break
     case 'error':
-      rejectReady(new Error(message.error))
-      for (const callback of ptyErrorCallbacks) {
+      rejectPtyReady(message.sessionId, new Error(message.error))
+      readyStates.delete(message.sessionId)
+      for (const callback of ptyErrorCallbacks.get(message.sessionId) ?? []) {
         callback(message.error)
       }
       break
-    case 'exit':
-      if (!readySize) {
-        rejectReady(
+    case 'exit': {
+      const state = readyStates.get(message.sessionId)
+      if (!state?.size) {
+        rejectPtyReady(
+          message.sessionId,
           new Error(
-            `PTY exited before ready (exitCode=${message.info.exitCode}, signal=${
-              message.info.signal ?? 'none'
-            })`,
+            `PTY ${message.sessionId} exited before ready (exitCode=${
+              message.info.exitCode
+            }, signal=${message.info.signal ?? 'none'})`,
           ),
         )
       }
-      for (const callback of ptyExitCallbacks) {
+      for (const callback of ptyExitCallbacks.get(message.sessionId) ?? []) {
         callback(message.info)
       }
+      readyStates.delete(message.sessionId)
       break
+    }
   }
 }
 
@@ -139,9 +193,13 @@ ipcRenderer.on('pty:port', (event) => {
 })
 
 ipcRenderer.on('pty:service-error', (_event, error: string) => {
-  rejectReady(new Error(error))
-  for (const callback of ptyErrorCallbacks) {
-    callback(error)
+  for (const sessionId of readyStates.keys()) {
+    rejectPtyReady(sessionId, new Error(error))
+  }
+  for (const callbacks of ptyErrorCallbacks.values()) {
+    for (const callback of callbacks) {
+      callback(error)
+    }
   }
 })
 
@@ -153,68 +211,77 @@ ipcRenderer.send('pty:requestPort')
  * these specific methods, nothing else.
  */
 const electronAPI = {
-  /**
-   * Send keystroke data to the PTY (shell input)
-   */
-  sendPtyInput(data: string): void {
+  spawnPty(sessionId: string, cols: number, rows: number): Promise<PtySize> {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return Promise.reject(new Error('PTY sessionId is required'))
+    }
+    if (typeof cols !== 'number' || typeof rows !== 'number') {
+      return Promise.reject(new Error('PTY size must be numeric'))
+    }
+
+    const state = getReadyState(sessionId)
+    queuePtyMessage({ type: 'spawn', sessionId, cols, rows })
+    return state.size ? Promise.resolve(state.size) : state.promise
+  },
+
+  sendPtyInput(sessionId: string, data: string): void {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
     if (typeof data !== 'string' || data.length === 0) return
-    queuePtyMessage({ type: 'write', data })
+    queuePtyMessage({ type: 'write', sessionId, data })
   },
 
-  /**
-   * Resize the PTY when the terminal dimensions change
-   */
-  resizePty(cols: number, rows: number): void {
+  resizePty(sessionId: string, cols: number, rows: number): void {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
     if (typeof cols !== 'number' || typeof rows !== 'number') return
-    queuePtyMessage({ type: 'resize', cols, rows })
+    queuePtyMessage({ type: 'resize', sessionId, cols, rows })
   },
 
-  /**
-   * Get the initial PTY dimensions (needed for ghostty-web init)
-   */
-  getInitialColsRows(): Promise<{ cols: number; rows: number }> {
-    return readySize ? Promise.resolve(readySize) : readyPromise
+  killPty(sessionId: string): void {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    queuePtyMessage({ type: 'kill', sessionId })
+    readyStates.delete(sessionId)
+    pendingData.delete(sessionId)
+    ptyDataCallbacks.delete(sessionId)
+    ptyErrorCallbacks.delete(sessionId)
+    ptyExitCallbacks.delete(sessionId)
   },
 
-  /**
-   * Register a callback for PTY output data
-   */
-  onPtyData(callback: (data: string) => void): () => void {
-    ptyDataCallbacks.push(callback)
-    flushPendingData()
+  onPtyData(sessionId: string, callback: (data: string) => void): () => void {
+    const callbacks = callbacksFor(ptyDataCallbacks, sessionId)
+    callbacks.push(callback)
+    flushPendingData(sessionId)
     return () => {
-      ptyDataCallbacks = ptyDataCallbacks.filter((registeredCallback) => {
-        return registeredCallback !== callback
-      })
+      ptyDataCallbacks.set(
+        sessionId,
+        callbacks.filter((registeredCallback) => registeredCallback !== callback),
+      )
+    }
+  },
+
+  onPtyError(sessionId: string, callback: (error: string) => void): () => void {
+    const callbacks = callbacksFor(ptyErrorCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => {
+      ptyErrorCallbacks.set(
+        sessionId,
+        callbacks.filter((registeredCallback) => registeredCallback !== callback),
+      )
+    }
+  },
+
+  onPtyExit(sessionId: string, callback: (info: PtyExitInfo) => void): () => void {
+    const callbacks = callbacksFor(ptyExitCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => {
+      ptyExitCallbacks.set(
+        sessionId,
+        callbacks.filter((registeredCallback) => registeredCallback !== callback),
+      )
     }
   },
 
   /**
-   * Register a callback for PTY errors
-   */
-  onPtyError(callback: (error: string) => void): () => void {
-    ptyErrorCallbacks.push(callback)
-    return () => {
-      ptyErrorCallbacks = ptyErrorCallbacks.filter((registeredCallback) => {
-        return registeredCallback !== callback
-      })
-    }
-  },
-
-  /**
-   * Register a callback for PTY exit
-   */
-  onPtyExit(callback: (info: { exitCode: number; signal?: number }) => void): () => void {
-    ptyExitCallbacks.push(callback)
-    return () => {
-      ptyExitCallbacks = ptyExitCallbacks.filter((registeredCallback) => {
-        return registeredCallback !== callback
-      })
-    }
-  },
-
-  /**
-   * Signal the main process that the renderer is ready (terminal loaded).
+   * Signal the main process that the renderer has mounted.
    * This triggers the window to be shown for an instant-open feel.
    */
   signalReady(): void {
