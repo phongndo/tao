@@ -24,7 +24,15 @@ if (!rootElement) {
   throw new Error('Missing #root element')
 }
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      gcTime: 10 * 60 * 1000,
+      retry: 1,
+      staleTime: 5 * 60 * 1000,
+    },
+  },
+})
 
 createRoot(rootElement).render(
   <QueryClientProvider client={queryClient}>

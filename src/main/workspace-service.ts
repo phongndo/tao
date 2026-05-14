@@ -19,7 +19,12 @@ type MutableWorktreeInfo = {
 }
 
 async function runGit(workspacePath: string, args: string[]): Promise<string> {
-  const path = Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath)
+  let path: string
+  try {
+    path = Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath)
+  } catch (error) {
+    throw new WorkspaceError('invalid-path', error instanceof Error ? error.message : String(error))
+  }
 
   const program = Effect.tryPromise({
     try: async () => {

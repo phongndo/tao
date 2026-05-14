@@ -13,9 +13,12 @@ function WorkspaceItem({ workspace }: { workspace: Workspace }) {
   const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTauStore((state) => state.selectWorkspace)
   const removeWorkspace = useTauStore((state) => state.removeWorkspace)
-  const branch = useGitBranch(workspace.projectPath)
-  const worktrees = useGitWorktrees(workspace.projectPath)
   const isActive = activeWorkspaceId === workspace.id
+  const branch = useGitBranch(workspace.projectPath, isActive)
+  const worktrees = useGitWorktrees(workspace.projectPath, isActive)
+  const branchLabel = branch.isError
+    ? 'git error'
+    : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
 
   return (
     <div className={isActive ? 'workspace-item workspace-item-active' : 'workspace-item'}>
@@ -43,9 +46,11 @@ function WorkspaceItem({ workspace }: { workspace: Workspace }) {
       <span className="workspace-path">{workspace.projectPath}</span>
       <span className="workspace-meta-row">
         <GitBranch size={12} />
-        <span>{branch.data ?? (branch.isLoading ? 'loading' : 'no git branch')}</span>
+        <span>{branchLabel}</span>
       </span>
-      {worktrees.data && worktrees.data.length > 1 ? (
+      {worktrees.isError ? (
+        <span className="worktree-error">worktrees unavailable</span>
+      ) : worktrees.data && worktrees.data.length > 1 ? (
         <span className="worktree-list">
           {worktrees.data.map((worktree) => (
             <span className="worktree-item" key={worktree.path}>
@@ -87,6 +92,12 @@ export function App() {
   async function handleAddWorkspace() {
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
     if (!projectPath) return
+    if (
+      workspaces.some(
+        (workspace) => workspace.id === projectPath || workspace.projectPath === projectPath,
+      )
+    )
+      return
 
     addWorkspace({
       id: projectPath,
