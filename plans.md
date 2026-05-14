@@ -296,7 +296,7 @@ const SpawnSchema = Schema.Struct({
   cols: Schema.Number,
   rows: Schema.Number,
 })
-const PtyClientMessageSchema = Schema.Union(
+const PtyClientMessageSchema = Schema.Union([
   SpawnSchema,
   Schema.Struct({ type: Schema.Literal('write'), sessionId: Schema.String, data: Schema.String }),
   Schema.Struct({
@@ -307,7 +307,7 @@ const PtyClientMessageSchema = Schema.Union(
   }),
   Schema.Struct({ type: Schema.Literal('kill'), sessionId: Schema.String }),
   Schema.Struct({ type: Schema.Literal('renderer-ready') }),
-)
+])
 
 type PtyClientMessage = Schema.Schema.Type<typeof PtyClientMessageSchema>
 ```

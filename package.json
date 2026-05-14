@@ -28,7 +28,7 @@
     "fmt:check": "oxfmt --check .",
     "lint": "oxlint . --jsx-a11y-plugin --deny-warnings --report-unused-disable-directives",
     "lint:fix": "oxlint . --jsx-a11y-plugin --fix",
-    "check": "pnpm lint && pnpm fmt:check",
+    "check": "pnpm lint && pnpm fmt:check && pnpm tsc",
     "check:fix": "pnpm lint:fix && pnpm fmt",
     "tsc": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
