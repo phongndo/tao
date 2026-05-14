@@ -509,18 +509,22 @@ Independent PTY sessions per pane remain Phase 4.
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "effect": "^3.0.0",
+    "effect": "4.0.0-beta.66",
     "zustand": "^5.0.0",
     "@tanstack/react-query": "^5.0.0",
     "react-mosaic-component": "^6.0.0",
-    "react-resizable-panels": "^3.0.0",
+    "react-resizable-panels": "^4.11.1",
     "react-hotkeys-hook": "^5.0.0",
-    "lucide-react": "^0.560.0",
+    "lucide-react": "^1.16.0",
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.0.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "oxfmt": "^0.49.0",
+    "oxlint": "^1.64.0",
+    "tailwindcss": "^4.3.0",
   },
 }
 ```
@@ -532,8 +536,8 @@ phases. `package.json` remains the source of truth for what has landed.
 metadata hooks need a renderer cache, but do not treat it as part of the final
 Tau backend architecture. The target backend architecture is Effect-first.
 
-The existing `electron-vite` config needs a `@vitejs/plugin-react` plugin in
-the renderer build config.
+The existing `electron-vite` config already wires `@vitejs/plugin-react` and
+`@tailwindcss/vite` into the renderer build config.
 
 ---
 

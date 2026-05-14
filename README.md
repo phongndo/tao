@@ -11,7 +11,7 @@ A super-performant terminal emulator built with **Electron** + **Ghostty's WASM-
 
 Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
 
-**2.6× faster VT parsing than xterm.js. 30× lower input latency. 6.2× faster burst writes.**
+**1.9× faster VT parsing than xterm.js. 30× lower input latency. 6.2× faster burst writes.**
 
 ## Quick Start
 

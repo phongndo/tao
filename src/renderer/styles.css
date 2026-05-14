@@ -1,4 +1,5 @@
-@import 'tailwindcss';
+@import 'tailwindcss/theme.css';
+@import 'tailwindcss/utilities.css';
 
 /* ── Reset & full-bleed layout ── */
 *,

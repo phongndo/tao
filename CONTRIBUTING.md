@@ -56,7 +56,7 @@ See [PLAN.md](PLAN.md) for the full architecture deep-dive.
 
 ## Code Style
 
-- **TypeScript**: Biome (format + lint). `pnpm fmt` to auto-format.
+- **TypeScript**: `oxlint` for linting and `oxfmt` for formatting. `pnpm fmt` to auto-format.
 - **Commit messages**: [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## License
