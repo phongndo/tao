@@ -11,6 +11,7 @@ export interface ElectronAPI {
   onPtyError(callback: (error: string) => void): () => void
   onPtyExit(callback: (info: { exitCode: number; signal?: number }) => void): () => void
   signalReady(): void
+  onToggleSidebar(callback: () => void): () => void
 }
 
 declare global {

@@ -9,6 +9,7 @@ import type {
 type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
+type AppShortcutCallback = () => void
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
 
@@ -225,6 +226,19 @@ const electronAPI = {
   signalReady(): void {
     queuePtyMessage({ type: 'renderer-ready' })
     ipcRenderer.send('renderer:ready')
+  },
+
+  /**
+   * Register a callback for app-owned shortcuts handled before terminal input.
+   */
+  onToggleSidebar(callback: AppShortcutCallback): () => void {
+    const listener = () => {
+      callback()
+    }
+    ipcRenderer.on('app:toggle-sidebar', listener)
+    return () => {
+      ipcRenderer.removeListener('app:toggle-sidebar', listener)
+    }
   },
 }
 
