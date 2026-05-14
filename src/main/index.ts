@@ -133,6 +133,15 @@ function createWindow() {
   // Remove menu bar (cleaner look, fewer resources)
   mainWindow.setMenuBarVisibility(false)
 
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    if (input.key.toLowerCase() !== 'b') return
+    if (!input.meta || input.shift || input.alt || input.control) return
+
+    event.preventDefault()
+    mainWindow?.webContents.send('app:toggle-sidebar')
+  })
+
   // Load the renderer
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)

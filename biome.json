@@ -6,6 +6,7 @@
     "lineWidth": 100,
     "includes": [
       "src/**/*.ts",
+      "src/**/*.tsx",
       "src/**/*.js",
       "src/**/*.json",
       "src/**/*.css",
@@ -29,7 +30,7 @@
         "noExplicitAny": "off"
       }
     },
-    "includes": ["src/**/*.ts", "src/**/*.js", "bench/**/*.ts", "*.ts"]
+    "includes": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "bench/**/*.ts", "*.ts"]
   },
   "javascript": {
     "formatter": {

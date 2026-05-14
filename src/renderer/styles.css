@@ -21,6 +21,88 @@ body {
   overscroll-behavior: none;
 }
 
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+.tau-shell {
+  width: 100%;
+  height: 100%;
+  background: #151515;
+}
+
+.tau-sidebar {
+  min-width: 180px;
+  background: #191919;
+  border-right: 1px solid #28282c;
+}
+
+.sidebar-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.sidebar-header {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-title {
+  color: #cac9dd;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workspace-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid #303035;
+  border-radius: 6px;
+  background: #1f1f22;
+}
+
+.workspace-name {
+  color: #c9c7cd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workspace-meta {
+  color: #9699a8;
+  font-size: 11px;
+}
+
+.resize-handle {
+  width: 4px;
+  background: #202024;
+  outline: none;
+}
+
+.resize-handle:hover,
+.resize-handle[data-resize-handle-active] {
+  background: #424246;
+}
+
+.tau-main,
+.main-content {
+  min-width: 0;
+  min-height: 0;
+  background: #151515;
+}
+
+.main-content {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
 /* ── Terminal container fills the window ── */
 #terminal-container {
   width: 100%;
@@ -72,4 +154,27 @@ body {
 #terminal-container ::selection {
   background: #2a2a2d;
   color: #c1c0d4;
+}
+
+.terminal-error {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 2rem;
+  font-family: Menlo, Monaco, "Courier New", monospace;
+  color: #9699a8;
+}
+
+.terminal-error h2,
+.terminal-error pre {
+  max-width: 80%;
+  overflow: auto;
+  color: #f5a191;
+}
+
+.terminal-error p {
+  margin-top: 1rem;
+  color: #9699a8;
 }
