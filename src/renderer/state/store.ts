@@ -27,6 +27,7 @@ export interface TauState {
   splitPane(paneId: string, direction: MosaicDirection): void
   splitActivePane(direction: MosaicDirection): void
   closePane(paneId: string): void
+  closeActivePane(): void
   toggleSidebar(): void
   setSidebarExpanded(expanded: boolean): void
   setSidebarWidth(width: number): void
@@ -212,6 +213,31 @@ function closeTabState(state: TauState, tabId: string): Partial<TauState> {
     panes: nextPanes,
     activeTabId: nextActiveTab?.id ?? null,
     activePaneId: nextActiveTab ? getFirstPaneId(nextActiveTab.layout) : null,
+  }
+}
+
+function closePaneState(state: TauState, paneId: string): Partial<TauState> {
+  const pane = state.panes.find((candidate) => candidate.id === paneId)
+  const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
+  if (!pane || !tab) return {}
+
+  const result = removePaneFromLayout(tab.layout, pane.id)
+  if (!result.removed) return {}
+  if (!result.layout) return closeTabState(state, tab.id)
+
+  const layout = result.layout
+  const nextPaneIds = new Set(getPaneIdsInLayout(layout))
+  const activePaneId =
+    state.activePaneId === pane.id ? (getPaneIdsInLayout(layout)[0] ?? null) : state.activePaneId
+
+  return {
+    tabs: state.tabs.map((candidate) =>
+      candidate.id === tab.id ? { ...candidate, layout } : candidate,
+    ),
+    panes: state.panes.filter(
+      (candidate) => candidate.tabId !== tab.id || nextPaneIds.has(candidate.id),
+    ),
+    activePaneId,
   }
 }
 
@@ -438,33 +464,9 @@ export const useTauStore = create<TauState>()(
             activePaneId: pane.id,
           }
         }),
-      closePane: (paneId) =>
-        set((state) => {
-          const pane = state.panes.find((candidate) => candidate.id === paneId)
-          const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
-          if (!pane || !tab) return {}
-
-          const result = removePaneFromLayout(tab.layout, pane.id)
-          if (!result.removed) return {}
-          if (!result.layout) return closeTabState(state, tab.id)
-
-          const layout = result.layout
-          const nextPaneIds = new Set(getPaneIdsInLayout(layout))
-          const activePaneId =
-            state.activePaneId === pane.id
-              ? (getPaneIdsInLayout(layout)[0] ?? null)
-              : state.activePaneId
-
-          return {
-            tabs: state.tabs.map((candidate) =>
-              candidate.id === tab.id ? { ...candidate, layout } : candidate,
-            ),
-            panes: state.panes.filter(
-              (candidate) => candidate.tabId !== tab.id || nextPaneIds.has(candidate.id),
-            ),
-            activePaneId,
-          }
-        }),
+      closePane: (paneId) => set((state) => closePaneState(state, paneId)),
+      closeActivePane: () =>
+        set((state) => (state.activePaneId ? closePaneState(state, state.activePaneId) : {})),
       toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
       setSidebarExpanded: (expanded) => set({ sidebarExpanded: expanded }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),

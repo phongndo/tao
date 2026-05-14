@@ -319,7 +319,7 @@ const PaneTile = memo(function PaneTile({
       className={isActive ? 'pane-tile pane-tile-active' : 'pane-tile'}
       data-pane-id={pane.id}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onSelect()
+        if (event.target instanceof Node && event.currentTarget.contains(event.target)) onSelect()
       }}
     >
       <button
@@ -327,6 +327,9 @@ const PaneTile = memo(function PaneTile({
         className="pane-close-button"
         aria-label={`Close ${pane.name}`}
         title="Close pane"
+        onPointerDown={(event) => {
+          event.stopPropagation()
+        }}
         onClick={(event) => {
           event.stopPropagation()
           onClose()
@@ -432,6 +435,7 @@ export function App() {
   const selectPane = useTauStore((state) => state.selectPane)
   const splitActivePane = useTauStore((state) => state.splitActivePane)
   const closePane = useTauStore((state) => state.closePane)
+  const closeActivePane = useTauStore((state) => state.closeActivePane)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
@@ -475,9 +479,7 @@ export function App() {
       newTab(activeWorkspaceKey)
     })
     const unsubscribeCloseTab = window.electronAPI.onAppCommand('close-tab', closeActiveTab)
-    const unsubscribeClosePane = window.electronAPI.onAppCommand('close-pane', () => {
-      if (activePaneId) closePane(activePaneId)
-    })
+    const unsubscribeClosePane = window.electronAPI.onAppCommand('close-pane', closeActivePane)
     const unsubscribeSplitVertical = window.electronAPI.onAppCommand('split-pane-vertical', () => {
       splitActivePane('row')
     })
@@ -496,15 +498,7 @@ export function App() {
       unsubscribeSplitVertical()
       unsubscribeSplitHorizontal()
     }
-  }, [
-    activePaneId,
-    activeWorkspaceKey,
-    closeActiveTab,
-    closePane,
-    newTab,
-    splitActivePane,
-    toggleSidebar,
-  ])
+  }, [activeWorkspaceKey, closeActivePane, closeActiveTab, newTab, splitActivePane, toggleSidebar])
 
   async function handleAddWorkspace() {
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
@@ -624,6 +618,7 @@ export function App() {
           <div className="pane-grid">
             {activeTab ? (
               <PaneGrid
+                key={activeTab.id}
                 tab={activeTab}
                 panesById={panesById}
                 activePaneId={activePaneId}
