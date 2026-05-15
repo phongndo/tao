@@ -26,7 +26,7 @@ Tau is a pnpm workspace. Root scripts delegate to `apps/desktop`, leaving room f
 
 ## Workspace Layout
 
-```
+```text
 tau/
 ├── apps/desktop/   # Electron terminal app
 ├── packages/       # Shared workspace packages

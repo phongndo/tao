@@ -20,6 +20,7 @@ import {
 } from '@tau/shared/workspace'
 
 const WORKSPACE_METADATA_STALE_MS = 5 * 60 * 1000
+const RENDERER_WORKSPACE_IPC_TIMEOUT_MS = WORKSPACE_IPC_TIMEOUT_MS * 2
 
 type WorkspaceResourceKind = 'branch' | 'worktrees' | 'status' | 'ports' | 'pull-request'
 type WorkspaceResourceListener = () => void
@@ -156,12 +157,12 @@ function invokeWorkspaceIpc<T, R extends WorkspaceIpcResponse<T>>(
       catch: (error) => workspaceErrorFromUnknown(error, 'ipc-failed'),
     }).pipe(
       Effect.timeoutOrElse({
-        duration: WORKSPACE_IPC_TIMEOUT_MS,
+        duration: RENDERER_WORKSPACE_IPC_TIMEOUT_MS,
         orElse: () =>
           Effect.fail(
             new WorkspaceError(
               'ipc-timeout',
-              `${channelName} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
+              `${channelName} timed out after ${RENDERER_WORKSPACE_IPC_TIMEOUT_MS}ms`,
             ),
           ),
       }),
@@ -279,13 +280,18 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
       }
       notifyResource(entry as WorkspaceResourceEntry<unknown>)
 
+      const clearInFlight = Effect.sync(() => {
+        if (entry.refreshVersion === refreshVersion) {
+          entry.inFlight = false
+        }
+      })
+
       return yield* fetch(decodedPath).pipe(
         Effect.matchEffect({
           onFailure: (error) =>
             Effect.sync(() => {
               if (entry.refreshVersion !== refreshVersion) return
 
-              entry.inFlight = false
               entry.snapshot = {
                 status: 'error',
                 data: entry.snapshot.data,
@@ -298,7 +304,6 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
             Effect.sync(() => {
               if (entry.refreshVersion !== refreshVersion) return
 
-              entry.inFlight = false
               entry.snapshot = {
                 status: 'success',
                 data,
@@ -308,6 +313,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
               notifyResource(entry as WorkspaceResourceEntry<unknown>)
             }),
         }),
+        Effect.ensuring(clearInFlight),
       )
     })
   }
