@@ -141,6 +141,8 @@ function useWorkspaceResource<A>(
       return
     }
 
+    if (snapshot.status !== 'idle') return
+
     setOperationError(null)
     void runRendererEffect(adapter.refresh(workspacePath))
       .then(() => setOperationError(null))
@@ -148,7 +150,7 @@ function useWorkspaceResource<A>(
         console.warn('[workspace] Failed to refresh metadata:', error)
         setOperationError(workspaceErrorFromUnknown(error, 'ipc-failed'))
       })
-  }, [adapter, enabled, workspacePath])
+  }, [adapter, enabled, snapshot.status, workspacePath])
 
   const refetch = useCallback(() => {
     if (!workspacePath) return
