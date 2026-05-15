@@ -39,6 +39,7 @@ type WorkspaceResourceEntry<A> = {
   snapshot: WorkspaceResourceSnapshot<A>
   readonly listeners: Set<WorkspaceResourceListener>
   inFlight: boolean
+  refreshVersion: number
 }
 
 export class WorkspaceIpcClient extends Context.Service<
@@ -230,6 +231,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
       snapshot: idleSnapshot as WorkspaceResourceSnapshot<A>,
       listeners: new Set(),
       inFlight: false,
+      refreshVersion: 0,
     }
     entries.set(key, entry as WorkspaceResourceEntry<unknown>)
     return entry
@@ -300,6 +302,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
       }
 
       entry.inFlight = true
+      const refreshVersion = ++entry.refreshVersion
       entry.snapshot = {
         status: 'loading',
         data: entry.snapshot.data,
@@ -312,6 +315,8 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
         Effect.matchEffect({
           onFailure: (error) =>
             Effect.sync(() => {
+              if (entry.refreshVersion !== refreshVersion) return
+
               entry.inFlight = false
               entry.snapshot = {
                 status: 'error',
@@ -323,6 +328,8 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
             }).pipe(Effect.flatMap(() => Effect.fail(error))),
           onSuccess: (data) =>
             Effect.sync(() => {
+              if (entry.refreshVersion !== refreshVersion) return
+
               entry.inFlight = false
               entry.snapshot = {
                 status: 'success',
@@ -393,6 +400,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
           if (!entry) continue
 
           entry.inFlight = false
+          entry.refreshVersion += 1
           entry.snapshot = idleSnapshot
           notifyResource(entry)
         }
