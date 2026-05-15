@@ -1,6 +1,6 @@
 import type { Terminal } from 'ghostty-web'
 import { useEffect, useRef, useState } from 'react'
-import { createTerminal } from '../terminal'
+import { createTerminal, setTerminalCursorVisible } from '../terminal'
 
 type TerminalError = {
   title?: string
@@ -45,6 +45,12 @@ export function TerminalPane({
         }
 
         terminalRef.current = terminal
+        setTerminalCursorVisible(terminal, isActive)
+        if (isActive) {
+          terminal.focus()
+        } else {
+          terminal.blur()
+        }
         console.log('[renderer] Terminal ready')
         window.electronAPI.signalReady()
       } catch (err) {
@@ -69,8 +75,14 @@ export function TerminalPane({
   }, [sessionId])
 
   useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+
+    setTerminalCursorVisible(terminal, isActive)
     if (isActive) {
-      terminalRef.current?.focus()
+      terminal.focus()
+    } else {
+      terminal.blur()
     }
   }, [focusToken, isActive])
 

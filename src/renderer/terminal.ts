@@ -45,6 +45,18 @@ function renderTerminalError(container: HTMLElement, err: unknown) {
   container.replaceChildren(errorNode)
 }
 
+export function setTerminalCursorVisible(term: Terminal, visible: boolean) {
+  term.renderer?.setTheme({
+    ...THEME,
+    cursor: visible ? THEME.cursor : THEME.background,
+    cursorAccent: visible ? THEME.cursorAccent : THEME.background,
+  })
+
+  if (term.renderer && term.wasmTerm) {
+    term.renderer.render(term.wasmTerm, true, term.viewportY, term)
+  }
+}
+
 export async function createTerminal(container: HTMLElement, sessionId: string): Promise<Terminal> {
   // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
@@ -173,7 +185,6 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
     originalDispose()
   }
 
-  term.focus()
   console.log('[terminal] Setup complete ✓')
   return term
 }
