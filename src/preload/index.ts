@@ -3,7 +3,15 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
 import type { AppCommand } from '../shared/app-command'
-import type { WorktreeInfo } from '../shared/workspace'
+import {
+  workspaceIpcFailure,
+  type WorkspaceGitBranchResponse,
+  type WorkspaceGitStatusResponse,
+  type WorkspaceGitWorktreesResponse,
+  type WorkspacePortsResponse,
+  type WorkspacePullRequestResponse,
+} from '../shared/workspace'
+import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
 type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
@@ -363,15 +371,34 @@ const electronAPI = {
     return ipcRenderer.invoke('workspace:pickDirectory')
   },
 
-  getGitBranch(workspacePath: string): Promise<string | null> {
-    if (typeof workspacePath !== 'string' || workspacePath.length === 0)
-      return Promise.resolve(null)
-    return ipcRenderer.invoke('workspace:getGitBranch', workspacePath)
+  getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse> {
+    return runPreloadEffect(
+      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getGitBranch(workspacePath)),
+    ).catch((error) => workspaceIpcFailure(error) as WorkspaceGitBranchResponse)
   },
 
-  getGitWorktrees(workspacePath: string): Promise<WorktreeInfo[]> {
-    if (typeof workspacePath !== 'string' || workspacePath.length === 0) return Promise.resolve([])
-    return ipcRenderer.invoke('workspace:getGitWorktrees', workspacePath)
+  getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse> {
+    return runPreloadEffect(
+      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getGitWorktrees(workspacePath)),
+    ).catch((error) => workspaceIpcFailure(error) as WorkspaceGitWorktreesResponse)
+  },
+
+  getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse> {
+    return runPreloadEffect(
+      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getGitStatus(workspacePath)),
+    ).catch((error) => workspaceIpcFailure(error) as WorkspaceGitStatusResponse)
+  },
+
+  getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse> {
+    return runPreloadEffect(
+      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getWorkspacePorts(workspacePath)),
+    ).catch((error) => workspaceIpcFailure(error) as WorkspacePortsResponse)
+  },
+
+  getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse> {
+    return runPreloadEffect(
+      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getPullRequestInfo(workspacePath)),
+    ).catch((error) => workspaceIpcFailure(error) as WorkspacePullRequestResponse)
   },
 }
 

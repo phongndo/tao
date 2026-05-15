@@ -17,10 +17,26 @@
  */
 
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, utilityProcess } from 'electron'
+import { Effect } from 'effect'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+  MessageChannelMain,
+  utilityProcess,
+} from 'electron'
 import ptyServicePath from './pty-service?modulePath'
-import { getGitBranch, getGitWorktrees } from './workspace-service'
+import { disposeMainRuntime, runMainEffect } from './runtime'
+import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '../shared/app-command'
+import {
+  WorkspaceError,
+  workspaceIpcFailure,
+  workspaceIpcSuccess,
+  type WorkspaceIpcResponse,
+} from '../shared/workspace'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
 
@@ -298,6 +314,48 @@ function notifyPtyServiceError(error: string) {
   mainWindow.webContents.send('pty:service-error', error)
 }
 
+function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, WorkspaceError> {
+  if (event.sender === mainWindow?.webContents) return Effect.void
+
+  return Effect.fail(new WorkspaceError('unauthorized', 'IPC request came from an unknown sender'))
+}
+
+function workspacePathFromUnknown(workspacePath: unknown): Effect.Effect<string, WorkspaceError> {
+  if (typeof workspacePath === 'string') return Effect.succeed(workspacePath)
+
+  return Effect.fail(new WorkspaceError('invalid-path', 'workspacePath must be a string'))
+}
+
+async function runWorkspaceRequest<A>(
+  event: IpcMainInvokeEvent,
+  program: Effect.Effect<A, WorkspaceError, WorkspaceService>,
+): Promise<WorkspaceIpcResponse<A>> {
+  try {
+    const value = await runMainEffect(authorizeRenderer(event).pipe(Effect.flatMap(() => program)))
+    return workspaceIpcSuccess(value)
+  } catch (error) {
+    return workspaceIpcFailure(error)
+  }
+}
+
+function workspaceServiceRequest<A>(
+  event: IpcMainInvokeEvent,
+  workspacePath: unknown,
+  run: (
+    service: typeof WorkspaceService.Service,
+    workspacePath: string,
+  ) => Effect.Effect<A, WorkspaceError>,
+): Promise<WorkspaceIpcResponse<A>> {
+  return runWorkspaceRequest(
+    event,
+    WorkspaceService.use((service) =>
+      workspacePathFromUnknown(workspacePath).pipe(
+        Effect.flatMap((decodedWorkspacePath) => run(service, decodedWorkspacePath)),
+      ),
+    ),
+  )
+}
+
 // ─── IPC Handlers ───
 
 ipcMain.on('renderer:ready', (event) => {
@@ -325,17 +383,32 @@ ipcMain.handle('workspace:pickDirectory', async (event): Promise<string | null> 
   return result.filePaths[0] ?? null
 })
 
-ipcMain.handle(
-  'workspace:getGitBranch',
-  async (event, workspacePath: unknown): Promise<string | null> => {
-    if (event.sender !== mainWindow?.webContents || typeof workspacePath !== 'string') return null
-    return getGitBranch(workspacePath)
-  },
+ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>
+  workspaceServiceRequest(event, workspacePath, (service, path) => service.getGitBranch(path)),
 )
 
 ipcMain.handle('workspace:getGitWorktrees', async (event, workspacePath: unknown) => {
-  if (event.sender !== mainWindow?.webContents || typeof workspacePath !== 'string') return []
-  return getGitWorktrees(workspacePath)
+  return workspaceServiceRequest(event, workspacePath, (service, path) =>
+    service.getGitWorktrees(path),
+  )
+})
+
+ipcMain.handle('workspace:getGitStatus', async (event, workspacePath: unknown) => {
+  return workspaceServiceRequest(event, workspacePath, (service, path) =>
+    service.getGitStatus(path),
+  )
+})
+
+ipcMain.handle('workspace:getWorkspacePorts', async (event, workspacePath: unknown) => {
+  return workspaceServiceRequest(event, workspacePath, (service, path) =>
+    service.getWorkspacePorts(path),
+  )
+})
+
+ipcMain.handle('workspace:getPullRequestInfo', async (event, workspacePath: unknown) => {
+  return workspaceServiceRequest(event, workspacePath, (service, path) =>
+    service.getPullRequestInfo(path),
+  )
 })
 
 // ─── App Lifecycle ───
@@ -361,4 +434,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   disposePtyService()
+  void disposeMainRuntime()
 })

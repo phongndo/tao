@@ -33,7 +33,6 @@
     "tsc": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.100.10",
     "effect": "4.0.0-beta.66",
     "ghostty-web": "0.4.0-next.14.g6a1a50d",
     "lucide-react": "^1.16.0",

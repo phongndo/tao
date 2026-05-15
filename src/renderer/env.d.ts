@@ -4,7 +4,13 @@
  */
 
 import type { AppCommand } from '../shared/app-command'
-import type { WorktreeInfo } from '../shared/workspace'
+import type {
+  WorkspaceGitBranchResponse,
+  WorkspaceGitStatusResponse,
+  WorkspaceGitWorktreesResponse,
+  WorkspacePortsResponse,
+  WorkspacePullRequestResponse,
+} from '../shared/workspace'
 
 export interface ElectronAPI {
   spawnPty(
@@ -25,8 +31,11 @@ export interface ElectronAPI {
   signalReady(): void
   onAppCommand(callback: (command: AppCommand) => void): () => void
   pickWorkspaceDirectory(): Promise<string | null>
-  getGitBranch(workspacePath: string): Promise<string | null>
-  getGitWorktrees(workspacePath: string): Promise<WorktreeInfo[]>
+  getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
+  getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse>
+  getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse>
+  getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
+  getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>
 }
 
 declare global {
