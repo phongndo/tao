@@ -124,7 +124,7 @@ function bufferPtyData(sessionId: string, data: string) {
   )
 }
 
-function spawnPty(sessionId: string, cols: number, rows: number) {
+function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
   const existingSession = sessions.get(sessionId)
   if (existingSession) {
     existingSession.manager.resize(cols, rows)
@@ -137,7 +137,7 @@ function spawnPty(sessionId: string, cols: number, rows: number) {
   console.log(`[pty-service] Spawning PTY ${sessionId} with shell: ${shell}`)
 
   try {
-    const manager = new PtyManager(shell, { cols, rows })
+    const manager = new PtyManager(shell, { cols, rows, cwd })
     const session: PtySession = {
       manager,
       chunks: [],
@@ -197,7 +197,7 @@ function handleClientMessage(message: PtyClientMessage) {
       ) {
         return
       }
-      spawnPty(message.sessionId, message.cols, message.rows)
+      spawnPty(message.sessionId, message.cols, message.rows, message.cwd)
       break
     case 'write': {
       if (message.data.length === 0) return

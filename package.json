@@ -1,7 +1,7 @@
 {
   "name": "tau",
   "version": "1.0.0",
-  "description": "A super-performant terminal emulator built with Electron + ghostty-web",
+  "description": "A performance-first workspace terminal powered by Electron and Ghostty Web",
   "keywords": [
     "electron",
     "emulator",

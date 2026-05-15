@@ -10,16 +10,25 @@ type TerminalError = {
 
 export function TerminalPane({
   sessionId,
+  cwd,
   isActive,
   focusToken,
+  onTitleChange,
 }: {
   sessionId: string
+  cwd?: string
   isActive: boolean
   focusToken: number
+  onTitleChange?(title: string): void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  const onTitleChangeRef = useRef(onTitleChange)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
+
+  useEffect(() => {
+    onTitleChangeRef.current = onTitleChange
+  }, [onTitleChange])
 
   useEffect(() => {
     let disposed = false
@@ -38,7 +47,10 @@ export function TerminalPane({
 
       try {
         setTerminalError(null)
-        const terminal = await createTerminal(container, sessionId)
+        const terminal = await createTerminal(container, sessionId, {
+          cwd,
+          onTitle: (title) => onTitleChangeRef.current?.(title),
+        })
         if (disposed) {
           terminal.dispose()
           return
@@ -51,7 +63,6 @@ export function TerminalPane({
         } else {
           terminal.blur()
         }
-        console.log('[renderer] Terminal ready')
         window.electronAPI.signalReady()
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -72,7 +83,7 @@ export function TerminalPane({
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
-  }, [sessionId])
+  }, [cwd, sessionId])
 
   useEffect(() => {
     const terminal = terminalRef.current

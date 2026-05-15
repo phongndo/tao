@@ -92,7 +92,7 @@ function createWindow() {
     minWidth: 400,
     minHeight: 300,
     backgroundColor: '#151515',
-    title: 'Tau Terminal',
+    title: 'Tau',
     show: false, // Show only when terminal is ready
     // Accept first mouse click immediately (no click-through delay)
     acceptFirstMouse: true,

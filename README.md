@@ -1,4 +1,4 @@
-# Tau Terminal
+# Tau
 
 <p align="center">
   <img src="https://img.shields.io/github/actions/workflow/status/phongndo/tau/ci.yml?branch=main&label=CI" alt="CI">
@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/parser-Ghostty%20WASM%20(Zig)-blue" alt="Parser">
 </p>
 
-A super-performant terminal emulator built with **Electron** + **Ghostty's WASM-based VT parser** + **node-pty**.
+A performance-first workspace terminal built with **Electron**, **Ghostty's WASM-based VT parser**, and **node-pty**.
 
 Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
 
@@ -32,7 +32,7 @@ pnpm start           # Run production build
 | Renderer init               | ~50 ms                 | ~500 ms                      | **10×**  |
 | Full redraw (1920 cells)    | ~5 ms                  | ~15 ms                       | **3×**   |
 
-See [PLAN.md](PLAN.md) for methodology and full comparison.
+See [plans.md](plans.md) for methodology and full comparison.
 
 ## Architecture
 

@@ -1,8 +1,11 @@
 import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-component'
+import { Schema } from 'effect'
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import type { PaneFocusDirection } from '../../shared/app-command'
-import type { WorktreeInfo } from '../../shared/workspace'
+import { type WorktreeInfo, WorktreeInfoSchema } from '../../shared/workspace'
+import { sanitizeTerminalTitle } from '../osc-title'
+import { effectLocalStorage } from '../storage'
 
 export const LOCAL_WORKSPACE_ID = 'tau:local'
 
@@ -25,9 +28,12 @@ export interface TauState {
   closeActiveTab(): void
   selectTab(tabId: string): void
   selectTabByIndex(index: number): void
+  reorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
   setTabLayout(tabId: string, layout: MosaicLayoutNode | null): void
   selectPane(paneId: string): void
   selectPaneByDirection(direction: PaneFocusDirection): void
+  setPaneTitle(paneId: string, title: string): void
+  setPaneStatus(paneId: string, status: PaneStatus): void
   splitPane(paneId: string, direction: MosaicDirection): void
   splitActivePane(direction: MosaicDirection): void
   closePane(paneId: string): void
@@ -35,6 +41,11 @@ export interface TauState {
   toggleSidebar(): void
   setSidebarExpanded(expanded: boolean): void
   setSidebarWidth(width: number): void
+  reorderWorkspace(
+    workspaceId: string,
+    targetWorkspaceId: string,
+    placement: ReorderPlacement,
+  ): void
 }
 
 export interface Workspace {
@@ -67,6 +78,55 @@ export interface Pane {
 
 export type PaneType = 'terminal' | 'webview'
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
+export type ReorderPlacement = 'before' | 'after'
+
+const PaneStatusSchema = Schema.Union([
+  Schema.Literal('idle'),
+  Schema.Literal('working'),
+  Schema.Literal('permission'),
+  Schema.Literal('review'),
+])
+const PaneTypeSchema = Schema.Union([Schema.Literal('terminal'), Schema.Literal('webview')])
+
+const PersistedWorkspaceSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  projectPath: Schema.String,
+  branch: Schema.optional(Schema.String),
+  worktrees: Schema.optional(Schema.Array(WorktreeInfoSchema)),
+  order: Schema.optional(Schema.Number),
+})
+
+const PersistedTabSchema = Schema.Struct({
+  id: Schema.String,
+  workspaceId: Schema.String,
+  name: Schema.String,
+  layout: Schema.Unknown,
+  order: Schema.optional(Schema.Number),
+})
+
+const PersistedPaneSchema = Schema.Struct({
+  id: Schema.String,
+  tabId: Schema.String,
+  type: PaneTypeSchema,
+  name: Schema.String,
+  cwd: Schema.optional(Schema.String),
+  status: Schema.optional(PaneStatusSchema),
+})
+
+const PersistedTauStateSchema = Schema.Struct({
+  workspaces: Schema.optional(Schema.Array(PersistedWorkspaceSchema)),
+  activeWorkspaceId: Schema.optional(Schema.NullOr(Schema.String)),
+  tabs: Schema.optional(Schema.Array(PersistedTabSchema)),
+  activeTabId: Schema.optional(Schema.NullOr(Schema.String)),
+  panes: Schema.optional(Schema.Array(PersistedPaneSchema)),
+  activePaneId: Schema.optional(Schema.NullOr(Schema.String)),
+  sidebarExpanded: Schema.optional(Schema.Boolean),
+  sidebarWidth: Schema.optional(Schema.Number),
+})
+
+const MIN_SPLIT_PERCENTAGE = 5
+const MAX_SPLIT_PERCENTAGE = 95
 
 function createId(prefix: string): string {
   const randomUUID = globalThis.crypto?.randomUUID?.()
@@ -326,9 +386,10 @@ function closePaneState(state: TauState, paneId: string): Partial<TauState> {
   if (!result.layout) return closeTabState(state, tab.id)
 
   const layout = result.layout
-  const nextPaneIds = new Set(getPaneIdsInLayout(layout))
+  const paneIdsInLayout = getPaneIdsInLayout(layout)
+  const nextPaneIds = new Set(paneIdsInLayout)
   const activePaneId =
-    state.activePaneId === pane.id ? (getPaneIdsInLayout(layout)[0] ?? null) : state.activePaneId
+    state.activePaneId === pane.id ? (paneIdsInLayout[0] ?? null) : state.activePaneId
 
   return {
     tabs: state.tabs.map((candidate) =>
@@ -367,8 +428,152 @@ function ensureWorkspaceTabState(state: TauState, workspaceId: string): Partial<
 
 const initialLocalTab = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
 
+type PersistedTauState = Schema.Schema.Type<typeof PersistedTauStateSchema>
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function isNonEmptyString(value: string): boolean {
+  return value.trim().length > 0
+}
+
+function finiteNumber(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback
+}
+
+function clampSplitPercentage(value: number | undefined): number {
+  return Math.min(
+    MAX_SPLIT_PERCENTAGE,
+    Math.max(MIN_SPLIT_PERCENTAGE, finiteNumber(value ?? 50, 50)),
+  )
+}
+
+function moveRelativeTo<T extends { id: string; order: number }>(
+  items: T[],
+  itemId: string,
+  targetItemId: string,
+  placement: ReorderPlacement,
+): T[] {
+  if (itemId === targetItemId) return items
+
+  const movingItem = items.find((item) => item.id === itemId)
+  if (!movingItem || !items.some((item) => item.id === targetItemId)) return items
+
+  const orderedItems = items.filter((item) => item.id !== itemId)
+  const targetIndex = orderedItems.findIndex((item) => item.id === targetItemId)
+  orderedItems.splice(placement === 'after' ? targetIndex + 1 : targetIndex, 0, movingItem)
+
+  return orderedItems.map((item, order) => ({ ...item, order }))
+}
+
+function reorderAllWorkspaceTabs(tabs: Tab[]): Tab[] {
+  const counters = new Map<string, number>()
+
+  return [...tabs]
+    .sort((a, b) => a.order - b.order)
+    .map((tab) => {
+      const order = counters.get(tab.workspaceId) ?? 0
+      counters.set(tab.workspaceId, order + 1)
+      return { ...tab, order }
+    })
+}
+
+function decodePersistedLayout(
+  layout: unknown,
+  paneIdsForTab: ReadonlySet<string>,
+): MosaicLayoutNode | null {
+  if (typeof layout === 'string') return paneIdsForTab.has(layout) ? layout : null
+  if (!isRecord(layout)) return null
+
+  const direction = layout.direction
+  if (direction !== 'row' && direction !== 'column') return null
+
+  const first = decodePersistedLayout(layout.first, paneIdsForTab)
+  const second = decodePersistedLayout(layout.second, paneIdsForTab)
+  if (!first || !second) return first ?? second
+
+  return {
+    direction,
+    first,
+    second,
+    splitPercentage: clampSplitPercentage(
+      typeof layout.splitPercentage === 'number' ? layout.splitPercentage : undefined,
+    ),
+  }
+}
+
+function normalizePersistedState(persistedState: unknown): Partial<TauState> {
+  const decoded = Schema.decodeUnknownOption(PersistedTauStateSchema)(persistedState)
+  if (decoded._tag === 'None') return {}
+
+  const persisted = decoded.value as PersistedTauState
+  const workspaces = (persisted.workspaces ?? [])
+    .filter(
+      (workspace) => isNonEmptyString(workspace.id) && isNonEmptyString(workspace.projectPath),
+    )
+    .sort((a, b) => finiteNumber(a.order ?? 0, 0) - finiteNumber(b.order ?? 0, 0))
+    .map<Workspace>((workspace, order) => ({
+      ...workspace,
+      name: sanitizeTerminalTitle(workspace.name) ?? workspaceNameFallback(workspace.projectPath),
+      worktrees: workspace.worktrees ? [...workspace.worktrees] : undefined,
+      order,
+    }))
+
+  const panes = (persisted.panes ?? [])
+    .filter((pane) => isNonEmptyString(pane.id) && isNonEmptyString(pane.tabId))
+    .map<Pane>((pane) => ({
+      ...pane,
+      name: sanitizeTerminalTitle(pane.name) ?? 'Terminal',
+      status: pane.status ?? 'idle',
+    }))
+  const paneIdsByTab = new Map<string, Set<string>>()
+  for (const pane of panes) {
+    const paneIds = paneIdsByTab.get(pane.tabId) ?? new Set<string>()
+    paneIds.add(pane.id)
+    paneIdsByTab.set(pane.tabId, paneIds)
+  }
+
+  const usedPaneIds = new Set<string>()
+  const tabs = reorderAllWorkspaceTabs(
+    (persisted.tabs ?? []).flatMap<Tab>((tab) => {
+      if (!isNonEmptyString(tab.id) || !isNonEmptyString(tab.workspaceId)) return []
+
+      const layout = decodePersistedLayout(tab.layout, paneIdsByTab.get(tab.id) ?? new Set())
+      if (!layout) return []
+      for (const paneId of getPaneIdsInLayout(layout)) {
+        usedPaneIds.add(paneId)
+      }
+
+      return [
+        {
+          ...tab,
+          name: sanitizeTerminalTitle(tab.name) ?? 'Terminal',
+          layout,
+          order: finiteNumber(tab.order ?? 0, 0),
+        },
+      ]
+    }),
+  )
+
+  return {
+    workspaces,
+    activeWorkspaceId:
+      persisted.activeWorkspaceId &&
+      workspaces.some((workspace) => workspace.id === persisted.activeWorkspaceId)
+        ? persisted.activeWorkspaceId
+        : null,
+    tabs,
+    activeTabId: persisted.activeTabId ?? null,
+    panes: panes.filter((pane) => usedPaneIds.has(pane.id)),
+    activePaneId: persisted.activePaneId ?? null,
+    sidebarExpanded: persisted.sidebarExpanded ?? true,
+    sidebarWidth: finiteNumber(persisted.sidebarWidth ?? 240, 240),
+  }
+}
+
+function workspaceNameFallback(projectPath: string): string {
+  return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
 }
 
 function repairPersistedState(state: TauState): TauState {
@@ -512,6 +717,22 @@ export const useTauStore = create<TauState>()(
             activePaneId: getFirstPaneId(tab.layout),
           }
         }),
+      reorderTab: (tabId, targetTabId, placement) =>
+        set((state) => {
+          const tab = state.tabs.find((candidate) => candidate.id === tabId)
+          const targetTab = state.tabs.find((candidate) => candidate.id === targetTabId)
+          if (!tab || !targetTab || tab.workspaceId !== targetTab.workspaceId) return {}
+
+          const workspaceTabs = getWorkspaceTabs(state.tabs, tab.workspaceId)
+          const reorderedTabs = moveRelativeTo(workspaceTabs, tabId, targetTabId, placement)
+          if (reorderedTabs === workspaceTabs) return {}
+
+          const reorderedById = new Map(reorderedTabs.map((candidate) => [candidate.id, candidate]))
+
+          return {
+            tabs: state.tabs.map((candidate) => reorderedById.get(candidate.id) ?? candidate),
+          }
+        }),
       setTabLayout: (tabId, layout) =>
         set((state) => {
           if (!layout) return closeTabState(state, tabId)
@@ -520,9 +741,10 @@ export const useTauStore = create<TauState>()(
           if (!tab) return {}
 
           const paneIds = new Set(getPaneIdsInLayout(layout))
+          const firstPaneId = paneIds.values().next().value ?? null
           const activePaneId =
             state.activeTabId === tabId && (!state.activePaneId || !paneIds.has(state.activePaneId))
-              ? (getPaneIdsInLayout(layout)[0] ?? null)
+              ? firstPaneId
               : state.activePaneId
 
           return {
@@ -554,6 +776,42 @@ export const useTauStore = create<TauState>()(
 
           return {
             activePaneId: nextPaneId,
+          }
+        }),
+      setPaneTitle: (paneId, title) =>
+        set((state) => {
+          const pane = state.panes.find((candidate) => candidate.id === paneId)
+          if (!pane) return {}
+
+          const name = sanitizeTerminalTitle(title)
+          if (!name) return {}
+
+          const tab = state.tabs.find((candidate) => candidate.id === pane.tabId)
+          const nextPanes =
+            pane.name === name
+              ? state.panes
+              : state.panes.map((candidate) =>
+                  candidate.id === pane.id ? { ...candidate, name } : candidate,
+                )
+          const nextTabs =
+            tab && tab.name !== name
+              ? state.tabs.map((candidate) =>
+                  candidate.id === tab.id ? { ...candidate, name } : candidate,
+                )
+              : state.tabs
+
+          if (nextPanes === state.panes && nextTabs === state.tabs) return {}
+          return { panes: nextPanes, tabs: nextTabs }
+        }),
+      setPaneStatus: (paneId, status) =>
+        set((state) => {
+          const pane = state.panes.find((candidate) => candidate.id === paneId)
+          if (!pane || pane.status === status) return {}
+
+          return {
+            panes: state.panes.map((candidate) =>
+              candidate.id === pane.id ? { ...candidate, status } : candidate,
+            ),
           }
         }),
       splitPane: (paneId, direction) =>
@@ -604,9 +862,20 @@ export const useTauStore = create<TauState>()(
       toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
       setSidebarExpanded: (expanded) => set({ sidebarExpanded: expanded }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
+      reorderWorkspace: (workspaceId, targetWorkspaceId, placement) =>
+        set((state) => {
+          const workspaces = moveRelativeTo(
+            state.workspaces,
+            workspaceId,
+            targetWorkspaceId,
+            placement,
+          )
+          return workspaces === state.workspaces ? {} : { workspaces }
+        }),
     }),
     {
       name: 'tau-workspaces',
+      storage: createJSONStorage(() => effectLocalStorage),
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
@@ -618,7 +887,7 @@ export const useTauStore = create<TauState>()(
         sidebarWidth: state.sidebarWidth,
       }),
       merge: (persistedState, currentState) => {
-        const persisted = isRecord(persistedState) ? persistedState : {}
+        const persisted = normalizePersistedState(persistedState)
         return repairPersistedState({ ...currentState, ...persisted })
       },
     },

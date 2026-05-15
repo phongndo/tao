@@ -1,4 +1,10 @@
 import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
+import { createOscTitleScanner } from './osc-title'
+
+type CreateTerminalOptions = {
+  readonly cwd?: string
+  readonly onTitle?: (title: string) => void
+}
 
 /**
  * Tau Default — based on Mellow by @kvparik (shipped with Ghostty).
@@ -32,8 +38,21 @@ const THEME = {
 const terminalFontFamily =
   '"Symbols Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "SF Mono", Menlo, Monaco, monospace'
 
+let ghosttyLoad: Promise<Ghostty> | null = null
+
 function updateStatus(msg: string) {
-  console.log(`[terminal] ${msg}`)
+  if (window.location.protocol !== 'file:') {
+    console.debug(`[terminal] ${msg}`)
+  }
+}
+
+function loadGhostty(wasmUrl: string): Promise<Ghostty> {
+  ghosttyLoad ??= Ghostty.load(wasmUrl).catch((error) => {
+    ghosttyLoad = null
+    throw error
+  })
+
+  return ghosttyLoad
 }
 
 function renderTerminalError(container: HTMLElement, err: unknown) {
@@ -57,29 +76,28 @@ export function setTerminalCursorVisible(term: Terminal, visible: boolean) {
   }
 }
 
-export async function createTerminal(container: HTMLElement, sessionId: string): Promise<Terminal> {
+export async function createTerminal(
+  container: HTMLElement,
+  sessionId: string,
+  options: CreateTerminalOptions = {},
+): Promise<Terminal> {
   // Step 1: Load Ghostty WASM and PTY metadata in parallel.
   updateStatus('Loading Ghostty WASM...')
   const wasmUrl = new URL('ghostty-vt.wasm', window.location.href).href
-  console.log(`[terminal] Loading Ghostty WASM from ${wasmUrl}...`)
 
   const t0 = performance.now()
-  const ptyReady = window.electronAPI.spawnPty(sessionId, 80, 24)
+  const ptyReady = window.electronAPI.spawnPty(sessionId, 80, 24, options.cwd)
   let term: Terminal | null = null
 
   try {
     const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
-      Ghostty.load(wasmUrl),
+      loadGhostty(wasmUrl),
       ptyReady,
     ])
-    console.log(
-      `[terminal] Ghostty WASM + PTY metadata loaded in ${(performance.now() - t0).toFixed(0)}ms`,
-    )
-    console.log(`[terminal] PTY size: ${initialCols}x${initialRows}`)
+    updateStatus(`Ghostty WASM + PTY metadata ready in ${(performance.now() - t0).toFixed(0)}ms`)
 
     // Step 2: Create terminal instance (with pre-loaded Ghostty)
     updateStatus('Creating terminal...')
-    console.log('[terminal] Creating Terminal instance...')
 
     term = new Terminal({
       ghostty, // Pass the pre-loaded Ghostty instance for instant open
@@ -96,7 +114,6 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
 
     // Step 3: Clear container and open terminal
     updateStatus('Opening terminal...')
-    console.log('[terminal] Opening terminal...')
 
     // Clear any previous content (status messages, old terminal instances)
     while (container.firstChild) {
@@ -104,7 +121,6 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
     }
 
     term.open(container)
-    console.log('[terminal] Terminal opened')
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
@@ -119,9 +135,12 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
   }
 
   // Step 4: Wire IPC
-  console.log('[terminal] Wiring IPC...')
+  updateStatus('Wiring IPC...')
+
+  const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
 
   const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
+    scanTitle?.(data)
     term.write(data)
   })
 
@@ -159,7 +178,6 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
         info.signal != null
           ? `Shell killed by signal ${info.signal}`
           : `Shell exited with code ${info.exitCode}`
-      console.log(`[terminal] ${msg}`)
       term.write(`\r\n\x1b[33m[${msg}]\x1b[0m\r\n`)
     },
   )
@@ -185,6 +203,6 @@ export async function createTerminal(container: HTMLElement, sessionId: string):
     originalDispose()
   }
 
-  console.log('[terminal] Setup complete ✓')
+  updateStatus('Setup complete')
   return term
 }
