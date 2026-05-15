@@ -173,7 +173,7 @@ function createWindow() {
     }
 
     if (input.control && !input.meta && !input.alt && !input.shift) {
-      if (key === 'd') {
+      if (key === 'x') {
         event.preventDefault()
         sendAppCommand({ type: 'close-pane' })
         return
