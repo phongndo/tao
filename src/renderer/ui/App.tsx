@@ -557,6 +557,10 @@ export function App() {
         .sort((a, b) => a.order - b.order),
     [activeWorkspaceKey, tabs],
   )
+  const mountedTabs = useMemo(
+    () => [...tabs].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order),
+    [tabs],
+  )
   const activeTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
@@ -734,8 +738,8 @@ export function App() {
             onReorderTab={reorderTab}
           />
           <div className="pane-grid">
-            {workspaceTabs.length > 0 ? (
-              workspaceTabs.map((tab) => {
+            {mountedTabs.length > 0 ? (
+              mountedTabs.map((tab) => {
                 const isTabActive = tab.id === activeTab?.id
                 return (
                   <div
