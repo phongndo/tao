@@ -32,6 +32,10 @@ export function TerminalPane({
   }, [onTitleChange])
 
   useEffect(() => {
+    cwdRef.current = cwd
+  }, [cwd])
+
+  useEffect(() => {
     let disposed = false
 
     async function mountTerminal() {
