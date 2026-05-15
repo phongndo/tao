@@ -1,13 +1,13 @@
 import {
-  FolderPlus,
-  GitBranch,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plus,
-  Terminal,
-  Trash2,
-  X,
-} from 'lucide-react'
+  FiChevronsLeft,
+  FiChevronsRight,
+  FiFolderPlus,
+  FiGitBranch,
+  FiPlus,
+  FiTerminal,
+  FiTrash2,
+  FiX,
+} from 'react-icons/fi'
 import {
   type DragEvent,
   memo,
@@ -119,12 +119,12 @@ function WorkspaceItem({
             removeWorkspace(workspace.id)
           }}
         >
-          <Trash2 size={13} />
+          <FiTrash2 size={13} />
         </button>
       </div>
       <span className="workspace-path">{workspace.projectPath}</span>
       <span className="workspace-meta-row">
-        <GitBranch size={12} />
+        <FiGitBranch size={12} />
         <span>{branchLabel}</span>
       </span>
       {worktrees.isError ? (
@@ -375,7 +375,7 @@ const TabBar = memo(function TabBar({
                 aria-selected={isActive}
                 onClick={() => onSelectTab(tab.id)}
               >
-                <Terminal size={13} />
+                <FiTerminal size={13} />
                 <span>{tab.name}</span>
               </button>
               <button
@@ -385,7 +385,7 @@ const TabBar = memo(function TabBar({
                 title="Close tab"
                 onClick={() => onCloseTab(tab.id)}
               >
-                <X size={12} />
+                <FiX size={12} />
               </button>
             </div>
           )
@@ -398,7 +398,7 @@ const TabBar = memo(function TabBar({
         title="New tab"
         onClick={onNewTab}
       >
-        <Plus size={15} />
+        <FiPlus size={15} />
       </button>
     </div>
   )
@@ -451,7 +451,7 @@ const PaneTile = memo(function PaneTile({
           onClose()
         }}
       >
-        <X size={12} />
+        <FiX size={12} />
       </button>
       {pane.type === 'terminal' ? (
         <TerminalPane
@@ -463,7 +463,7 @@ const PaneTile = memo(function PaneTile({
         />
       ) : (
         <div className="pane-standby" aria-hidden="true">
-          <Terminal size={18} />
+          <FiTerminal size={18} />
         </div>
       )}
     </div>
@@ -748,7 +748,7 @@ export function App() {
                   title="Collapse sidebar"
                   onClick={() => setSidebarExpanded(false)}
                 >
-                  <PanelLeftClose size={15} />
+                  <FiChevronsLeft size={15} />
                 </button>
                 <button
                   type="button"
@@ -756,7 +756,7 @@ export function App() {
                   aria-label="Add workspace"
                   onClick={handleAddWorkspace}
                 >
-                  <FolderPlus size={15} />
+                  <FiFolderPlus size={15} />
                 </button>
               </div>
             </div>
@@ -786,7 +786,7 @@ export function App() {
               title="Expand sidebar"
               onClick={() => setSidebarExpanded(true)}
             >
-              <PanelLeftOpen size={16} />
+              <FiChevronsRight size={16} />
             </button>
             <button
               type="button"
@@ -795,7 +795,7 @@ export function App() {
               title="Add workspace"
               onClick={handleAddWorkspace}
             >
-              <FolderPlus size={16} />
+              <FiFolderPlus size={16} />
             </button>
             <div className="collapsed-workspace-list">
               {sortedWorkspaces.map((workspace) => (
@@ -841,7 +841,7 @@ export function App() {
                   aria-label="New tab"
                   onClick={() => newTab(activeWorkspaceKey)}
                 >
-                  <Plus size={15} />
+                  <FiPlus size={15} />
                 </button>
               </div>
             )}
