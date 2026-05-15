@@ -565,7 +565,6 @@ export function App() {
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
     [workspaces],
   )
-  const activeTabCwd = activeTab ? workspacePathById.get(activeTab.workspaceId) : undefined
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
@@ -735,18 +734,30 @@ export function App() {
             onReorderTab={reorderTab}
           />
           <div className="pane-grid">
-            {activeTab ? (
-              <PaneGrid
-                key={activeTab.id}
-                tab={activeTab}
-                terminalCwd={activeTabCwd}
-                panesById={panesById}
-                activePaneId={activePaneId}
-                terminalFocusTokens={terminalFocusTokens}
-                onLayoutRelease={setTabLayout}
-                onSelectPane={selectPane}
-                onPaneTitle={setPaneTitle}
-              />
+            {workspaceTabs.length > 0 ? (
+              workspaceTabs.map((tab) => {
+                const isTabActive = tab.id === activeTab?.id
+                return (
+                  <div
+                    className={
+                      isTabActive ? 'pane-grid-layer pane-grid-layer-active' : 'pane-grid-layer'
+                    }
+                    key={tab.id}
+                    aria-hidden={!isTabActive}
+                  >
+                    <PaneGrid
+                      tab={tab}
+                      terminalCwd={workspacePathById.get(tab.workspaceId)}
+                      panesById={panesById}
+                      activePaneId={isTabActive ? activePaneId : null}
+                      terminalFocusTokens={terminalFocusTokens}
+                      onLayoutRelease={setTabLayout}
+                      onSelectPane={selectPane}
+                      onPaneTitle={setPaneTitle}
+                    />
+                  </div>
+                )
+              })
             ) : (
               <div className="pane-grid-empty">
                 <button

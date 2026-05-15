@@ -435,6 +435,18 @@ body {
   background: #151515;
 }
 
+.pane-grid-layer {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pane-grid-layer-active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
 .tau-mosaic {
   padding: 0;
   background: #151515;
