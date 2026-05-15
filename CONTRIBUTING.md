@@ -41,18 +41,25 @@ pnpm dev             # Start terminal with HMR
 
 ```
 tau/
-├── src/
-│   ├── main/           # Electron main process (window, PTY, IPC)
-│   ├── preload/        # contextBridge (security boundary)
-│   └── renderer/       # Terminal UI (ghostty-web + rendering)
-├── bench/              # Benchmark suite
+├── apps/
+│   └── desktop/
+│       ├── src/
+│       │   ├── main/       # Electron main process (window, PTY, IPC)
+│       │   ├── preload/    # contextBridge (security boundary)
+│       │   └── renderer/   # Terminal UI (ghostty-web + rendering)
+│       ├── bench/      # Desktop benchmark suite
+│       └── public/     # Desktop runtime assets
+├── packages/           # Shared workspace packages
 ├── docs/               # Architecture + plans
+├── scripts/            # Repo-level maintenance scripts
+├── patches/            # Future dependency patches
+├── assets/             # Shared repo assets
 └── .github/            # CI + templates
 ```
 
 ## Architecture
 
-See [PLAN.md](PLAN.md) for the full architecture deep-dive.
+See [docs](docs/README.md) for architecture notes and plans.
 
 ## Code Style
 
@@ -61,5 +68,4 @@ See [PLAN.md](PLAN.md) for the full architecture deep-dive.
 
 ## License
 
-Tau is dual-licensed under MIT OR Apache-2.0. You may choose either license.
-All contributions are accepted under the same terms.
+Tau is licensed under MIT. All contributions are accepted under the same terms.

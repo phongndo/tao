@@ -10,6 +10,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 import {
+  type ComponentType,
   type DragEvent,
   memo,
   type ReactNode,
@@ -19,8 +20,8 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Mosaic, type MosaicNode } from 'react-mosaic-component'
-import type { AppCommand } from '../../shared/app-command'
+import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
+import type { AppCommand } from '@tau/shared/app-command'
 import {
   LOCAL_WORKSPACE_ID,
   type Pane,
@@ -39,6 +40,10 @@ const SIDEBAR_HIDE_THRESHOLD = 132
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tau-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
+
+// react-mosaic-component ships React 18-era class component types that do not satisfy
+// React 19's JSX constructor check. Keep the runtime component and narrow only the JSX type.
+const MosaicView = Mosaic as unknown as ComponentType<MosaicProps<string>>
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
@@ -483,7 +488,7 @@ const PaneGrid = memo(function PaneGrid({
   )
 
   return (
-    <Mosaic<string>
+    <MosaicView
       value={draftLayout}
       onChange={handleLayoutChange}
       onRelease={handleLayoutRelease}

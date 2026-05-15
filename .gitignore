@@ -7,3 +7,5 @@ dist/
 # nix
 result
 bench/data/
+
+apps/desktop/bench/data/

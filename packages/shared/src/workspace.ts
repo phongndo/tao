@@ -1,4 +1,6 @@
-import { Schema } from 'effect'
+import { Effect, Schema } from 'effect'
+
+export const WORKSPACE_IPC_TIMEOUT_MS = 15_000
 
 export const WorkspacePathSchema = Schema.Trim.check(Schema.isNonEmpty())
 
@@ -69,6 +71,8 @@ export const WorkspacePullRequestResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
 ])
 
+export const WorkspacePickDirectoryResponseSchema = Schema.NullOr(WorkspacePathSchema)
+
 export type WorktreeInfo = Schema.Schema.Type<typeof WorktreeInfoSchema>
 export type GitStatus = Schema.Schema.Type<typeof GitStatusSchema>
 export type PortInfo = Schema.Schema.Type<typeof PortInfoSchema>
@@ -85,6 +89,9 @@ export type WorkspacePortsResponse = Schema.Schema.Type<typeof WorkspacePortsRes
 export type WorkspacePullRequestResponse = Schema.Schema.Type<
   typeof WorkspacePullRequestResponseSchema
 >
+export type WorkspacePickDirectoryResponse = Schema.Schema.Type<
+  typeof WorkspacePickDirectoryResponseSchema
+>
 
 export type WorkspaceIpcResponse<T> =
   | { readonly ok: true; readonly value: T }
@@ -98,6 +105,40 @@ export class WorkspaceError extends Error {
     this.name = 'WorkspaceError'
     this.kind = kind
   }
+}
+
+export function errorMessageFromUnknown(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export function decodeWorkspacePathFromUnknown(
+  workspacePath: unknown,
+): Effect.Effect<string, WorkspaceError> {
+  return Effect.try({
+    try: () => Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath),
+    catch: (error) => new WorkspaceError('invalid-path', errorMessageFromUnknown(error)),
+  })
+}
+
+export function decodeWorkspacePathFromUnknownSync(
+  workspacePath: unknown,
+): string | WorkspaceError {
+  try {
+    return Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath)
+  } catch (error) {
+    return new WorkspaceError('invalid-path', errorMessageFromUnknown(error))
+  }
+}
+
+export function decodeWorkspaceIpcResponse<A>(
+  response: unknown,
+  schema: Schema.Decoder<A>,
+  channel: string,
+): Effect.Effect<A, WorkspaceError> {
+  const decoded = Schema.decodeUnknownOption(schema)(response)
+  if (decoded._tag === 'Some') return Effect.succeed(decoded.value)
+
+  return Effect.fail(new WorkspaceError('invalid-response', `Invalid response from ${channel}`))
 }
 
 export function workspaceErrorPayload(error: WorkspaceError): WorkspaceErrorPayload {
@@ -125,7 +166,9 @@ function workspaceErrorPayloadFromUnknown(error: unknown): WorkspaceErrorPayload
     name: 'WorkspaceError',
     kind: kind.value,
     message:
-      'message' in error && typeof error.message === 'string' ? error.message : String(error),
+      'message' in error && typeof error.message === 'string'
+        ? error.message
+        : errorMessageFromUnknown(error),
   }
 }
 
@@ -136,7 +179,7 @@ export function workspaceErrorFromUnknown(
   if (error instanceof WorkspaceError) return error
   const payload = workspaceErrorPayloadFromUnknown(error)
   if (payload) return workspaceErrorFromPayload(payload)
-  return new WorkspaceError(fallbackKind, error instanceof Error ? error.message : String(error))
+  return new WorkspaceError(fallbackKind, errorMessageFromUnknown(error))
 }
 
 export function workspaceIpcSuccess<T>(value: T): WorkspaceIpcResponse<T> {

@@ -4,10 +4,10 @@
   "triggerOnUpdates": true,
   "includeBranches": ["main"],
   "include": [
-    "src/**",
+    "apps/**",
+    "packages/**",
     "docs/**",
-    "bench/**",
-    "tau-gl/**",
+    "scripts/**",
     "*.md",
     "*.json",
     "*.ts",
@@ -15,5 +15,13 @@
     "*.yaml",
     "*.yml"
   ],
-  "exclude": ["pnpm-lock.yaml", "out/**", "dist/**", "public/ghostty-vt.wasm", "node_modules/**"]
+  "exclude": [
+    "pnpm-lock.yaml",
+    "out/**",
+    "dist/**",
+    "apps/desktop/out/**",
+    "apps/desktop/dist/**",
+    "apps/desktop/public/ghostty-vt.wasm",
+    "node_modules/**"
+  ]
 }

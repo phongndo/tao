@@ -6,15 +6,22 @@ if (process.platform === 'win32') {
   process.exit(0)
 }
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)))
+const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const candidates = [
   join(
-    root,
+    workspaceRoot,
+    'apps/desktop/node_modules/node-pty/prebuilds',
+    `${process.platform}-${process.arch}`,
+    'spawn-helper',
+  ),
+  join(workspaceRoot, 'apps/desktop/node_modules/node-pty/build/Release/spawn-helper'),
+  join(
+    workspaceRoot,
     'node_modules/node-pty/prebuilds',
     `${process.platform}-${process.arch}`,
     'spawn-helper',
   ),
-  join(root, 'node_modules/node-pty/build/Release/spawn-helper'),
+  join(workspaceRoot, 'node_modules/node-pty/build/Release/spawn-helper'),
 ]
 
 for (const helperPath of candidates) {

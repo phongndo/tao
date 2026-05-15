@@ -7,12 +7,15 @@ import {
   WorkspaceGitWorktreesResponseSchema,
   WorkspacePortsResponseSchema,
   WorkspacePullRequestResponseSchema,
+  WORKSPACE_IPC_TIMEOUT_MS,
   type WorkspaceGitBranchResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
-} from '../shared/workspace'
+  decodeWorkspaceIpcResponse,
+  errorMessageFromUnknown,
+} from '@tau/shared/workspace'
 
 export class PreloadWorkspaceIpc extends Context.Service<
   PreloadWorkspaceIpc,
@@ -42,15 +45,19 @@ function invokeWorkspace<A>(
 ): Effect.Effect<A, WorkspaceError> {
   return Effect.tryPromise({
     try: () => ipcRenderer.invoke(channel, workspacePath) as Promise<unknown>,
-    catch: (error) =>
-      new WorkspaceError('ipc-failed', error instanceof Error ? error.message : String(error)),
+    catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
   }).pipe(
-    Effect.flatMap((response) => {
-      const decoded = Schema.decodeUnknownOption(schema)(response)
-      if (decoded._tag === 'Some') return Effect.succeed(decoded.value)
-
-      return Effect.fail(new WorkspaceError('invalid-response', `Invalid response from ${channel}`))
+    Effect.timeoutOrElse({
+      duration: WORKSPACE_IPC_TIMEOUT_MS,
+      orElse: () =>
+        Effect.fail(
+          new WorkspaceError(
+            'ipc-timeout',
+            `${channel} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
+          ),
+        ),
     }),
+    Effect.flatMap((response) => decodeWorkspaceIpcResponse(response, schema, channel)),
   )
 }
 

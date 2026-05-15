@@ -3,14 +3,14 @@
  * These types describe the API exposed by the preload script via contextBridge.
  */
 
-import type { AppCommand } from '../shared/app-command'
+import type { AppCommand } from '@tau/shared/app-command'
 import type {
   WorkspaceGitBranchResponse,
   WorkspaceGitStatusResponse,
   WorkspaceGitWorktreesResponse,
   WorkspacePortsResponse,
   WorkspacePullRequestResponse,
-} from '../shared/workspace'
+} from '@tau/shared/workspace'
 
 export interface ElectronAPI {
   spawnPty(

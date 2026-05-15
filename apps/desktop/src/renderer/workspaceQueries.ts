@@ -7,8 +7,8 @@ import {
   type RefreshOptions,
   type WorkspaceResourceSnapshot,
 } from './workspace-service'
-import { WorkspaceError, workspaceErrorFromUnknown } from '../shared/workspace'
-import type { GitStatus, PortInfo, PullRequestInfo, WorktreeInfo } from '../shared/workspace'
+import { WorkspaceError, workspaceErrorFromUnknown } from '@tau/shared/workspace'
+import type { GitStatus, PortInfo, PullRequestInfo, WorktreeInfo } from '@tau/shared/workspace'
 
 type WorkspaceResourceAdapter<A> = {
   readonly snapshot: (
