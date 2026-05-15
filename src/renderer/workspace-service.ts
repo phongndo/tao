@@ -384,11 +384,17 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
         const decodedPath = decodeWorkspacePathSync(workspacePath)
         if (decodedPath instanceof WorkspaceError) return
 
+        invalidSnapshots.delete(workspacePath)
+        invalidSnapshots.delete(decodedPath)
+
         for (const kind of ['branch', 'worktrees', 'status', 'ports', 'pull-request'] as const) {
           const key = resourceKey(kind, decodedPath)
           const entry = entries.get(key)
-          entries.delete(key)
-          if (entry) notifyResource(entry)
+          if (!entry) continue
+
+          entry.inFlight = false
+          entry.snapshot = idleSnapshot
+          notifyResource(entry)
         }
       }),
   }
