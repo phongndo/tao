@@ -11,45 +11,42 @@ zero-copy rendering, dedicated PTY utility process).
 
 ## 1. Tech Stack (Current + Target)
 
-| Layer                    | Choice                        | Rationale                                                                                                                                           |
-| ------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Shell**                | Electron 42 + electron-vite   | Already in use; same as Superset                                                                                                                    |
-| **Rendering**            | React 19 + React DOM          | Ecosystem: react-mosaic-component, lucide-react; TanStack Query is only a temporary renderer cache                                                  |
-| **UI State**             | Zustand 5                     | Tiny, fast, synchronous — handles active tab, pane layout, workspace order                                                                          |
-| **Effect Runtime**       | Effect.ts (`effect`)          | Primary backend/runtime model for shell commands, IPC, persistence, cancellation, retries, streaming, typed errors, and testable services           |
-| **Async Cache**          | TanStack Query (transitional) | Current renderer cache over Effect-backed reads; target is an Effect-owned request/cache/subscription layer so this dependency can be removed later |
-| **Pane Layout**          | react-mosaic-component        | Battle-tested recursive split tiling (same lib Superset uses)                                                                                       |
-| **Sidebar / Main Split** | react-resizable-panels        | Resizable left sidebar + main content area                                                                                                          |
-| **Icons**                | lucide-react                  | Consistent icon set, tree-shakeable                                                                                                                 |
-| **Key Bindings**         | Electron `before-input-event` | Centralized app shortcuts before terminal input                                                                                                     |
-| **Terminal Renderer**    | ghostty-web (unchanged)       | WASM canvas — zero framework involvement, stays in its own rAF loop                                                                                 |
-| **PTY Backend**          | PtyPool (evolved PtyManager)  | One PTY instance per terminal pane, multiplexed on MessagePort                                                                                      |
+| Layer                    | Choice                        | Rationale                                                                                                                                 |
+| ------------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shell**                | Electron 42 + electron-vite   | Already in use; same as Superset                                                                                                          |
+| **Rendering**            | React 19 + React DOM          | Ecosystem: react-mosaic-component, lucide-react; metadata reads use Tau's Effect cache                                                    |
+| **UI State**             | Zustand 5                     | Tiny, fast, synchronous — handles active tab, pane layout, workspace order                                                                |
+| **Effect Runtime**       | Effect.ts (`effect`)          | Primary backend/runtime model for shell commands, IPC, persistence, cancellation, retries, streaming, typed errors, and testable services |
+| **Async Cache**          | Effect-owned metadata cache   | Renderer cache/subscription layer over Effect-backed reads; TanStack Query was removed in Phase 7                                         |
+| **Pane Layout**          | react-mosaic-component        | Battle-tested recursive split tiling (same lib Superset uses)                                                                             |
+| **Sidebar / Main Split** | react-resizable-panels        | Resizable left sidebar + main content area                                                                                                |
+| **Icons**                | lucide-react                  | Consistent icon set, tree-shakeable                                                                                                       |
+| **Key Bindings**         | Electron `before-input-event` | Centralized app shortcuts before terminal input                                                                                           |
+| **Terminal Renderer**    | ghostty-web (unchanged)       | WASM canvas — zero framework involvement, stays in its own rAF loop                                                                       |
+| **PTY Backend**          | PtyPool (evolved PtyManager)  | One PTY instance per terminal pane, multiplexed on MessagePort                                                                            |
 
 ### Why not TanStack Router / Table / Virtual / Form?
 
 - **Router**: Tau is a single-screen app. Navigation is state-driven (`activeWorkspaceId`, `activeTabId`), not URL-driven.
 - **Table / Virtual / Form**: Not needed for initial UI. Can add later if required.
 
-### Zustand vs Effect vs TanStack Query boundary
+### Zustand vs Effect boundary
 
 ```text
 Zustand:        "which tab is active right now"     (ephemeral UI state)
 Effect:         "run git safely and return typed errors" (fallible side effects)
-TanStack Query: "temporary renderer cache adapter"  (do not grow this surface)
+Effect Cache:   "workspace metadata cache/subscriptions"
 ```
 
 Effect is the only place for fallible external work. React components and
 Zustand actions should not call shell commands, Electron IPC, storage, or PTY
-operations directly. They call narrow Effect-backed services, and the renderer
-adapters decide whether to run those programs directly or expose them through
-TanStack Query.
+operations directly. They call narrow Effect-backed services through configured
+main/preload/renderer runtimes.
 
 Direction: Tau should become Effect-first, especially in the Electron
-main/preload/utility-process backend. TanStack Query is acceptable as a
-short-term renderer adapter while the app has only a few workspace metadata
-reads, but new backend-facing code should be modeled as Effect services. Once
-the Effect runtime owns request caching, invalidation, subscriptions, and
-cancellation, remove TanStack Query instead of expanding it.
+main/preload/utility-process backend. New backend-facing code should be modeled
+as Effect services. The Effect runtime now owns workspace metadata request
+caching, invalidation, and subscriptions.
 
 ---
 
@@ -140,29 +137,29 @@ type PaneType = 'terminal' | 'webview'
 type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 ```
 
-### TanStack Query (Current Transitional Adapter)
+### Effect Metadata Cache (TanStack Exit)
 
 ```typescript
-import { UseQueryResult } from '@tanstack/react-query'
+import type { EffectQueryResult } from '../renderer/workspaceQueries'
 
 // Sidebar data — fetched through Effect-backed services
-useGitBranch(workspacePath: string): UseQueryResult<string | null, Error>
-useGitWorktrees(workspacePath: string): UseQueryResult<WorktreeInfo[], Error>
-useGitStatus(workspacePath: string): UseQueryResult<{ changed: number, staged: number }, Error>
-useWorkspacePorts(workspacePath: string): UseQueryResult<PortInfo[], Error>
+useGitBranch(workspacePath: string): EffectQueryResult<string | null>
+useGitWorktrees(workspacePath: string): EffectQueryResult<readonly WorktreeInfo[]>
+useGitStatus(workspacePath: string): EffectQueryResult<{ changed: number, staged: number }>
+useWorkspacePorts(workspacePath: string): EffectQueryResult<readonly PortInfo[]>
 ```
 
-This is the current React adapter shape, not the long-term backend model. Do
-not add business logic, command execution, retry semantics, IPC parsing, or
-domain error handling to TanStack Query callbacks. Those belong in Effect
-programs and services.
+This is the current React adapter shape after Phase 7. Hooks subscribe to the
+Effect-owned metadata cache and trigger Effect refresh programs. Do not add
+business logic, command execution, retry semantics, IPC parsing, or domain error
+handling to hooks. Those belong in Effect programs and services.
 
 ### Effect Services (Side-Effect Boundary)
 
 ```typescript
 import { Effect, Context } from 'effect'
 
-class WorkspaceService extends Context.Tag('WorkspaceService')<
+class WorkspaceService extends Context.Service<
   WorkspaceService,
   {
     readonly getGitBranch: (workspacePath: string) => Effect.Effect<string | null, WorkspaceError>
@@ -172,9 +169,9 @@ class WorkspaceService extends Context.Tag('WorkspaceService')<
     readonly getGitStatus: (workspacePath: string) => Effect.Effect<GitStatus, WorkspaceError>
     readonly getWorkspacePorts: (workspacePath: string) => Effect.Effect<PortInfo[], WorkspaceError>
   }
->() {}
+>()('WorkspaceService') {}
 
-class PtyService extends Context.Tag('PtyService')<
+class PtyService extends Context.Service<
   PtyService,
   {
     readonly spawn: (request: SpawnPtyRequest) => Effect.Effect<PtySize, PtyError>
@@ -182,7 +179,7 @@ class PtyService extends Context.Tag('PtyService')<
     readonly resize: (sessionId: string, size: PtySize) => Effect.Effect<void, PtyError>
     readonly kill: (sessionId: string) => Effect.Effect<void, PtyError>
   }
->() {}
+>()('PtyService') {}
 ```
 
 Effect service consumers see the third type parameter (requirements `R`):
@@ -203,14 +200,14 @@ Effect services must own:
 - Persistence reads/writes for workspace layout
 - Runtime validation with `Schema` at process and IPC boundaries
 - Typed domain errors instead of thrown `unknown`
-- Request caching, invalidation, and subscriptions once the app outgrows the
-  temporary TanStack Query adapter
+- Request caching, invalidation, and subscriptions through the Effect metadata
+  cache
 
 Effect-first implementation rules:
 
 - New shell, git, workspace, PTY, persistence, and agent-facing code should
   expose typed `Effect.Effect<A, E, R>` programs at the service boundary.
-- Use `Context.Tag` + `Layer` for dependencies instead of importing singleton
+- Use `Context.Service` + `Layer` for dependencies instead of importing singleton
   helpers from deep modules.
 - Keep thrown exceptions and raw `Promise` code at the adapter edge only.
 - Use `Schema` for every process, IPC, persisted-state, and command-output
@@ -221,25 +218,30 @@ Effect-first implementation rules:
 Renderer hooks stay thin:
 
 ```typescript
-import { UseQueryResult, useQuery } from '@tanstack/react-query'
-import { Effect } from 'effect'
+import { useSyncExternalStore } from 'react'
+import { WorkspaceMetadataCache } from './workspace-service'
+import { runRendererEffect, runRendererEffectSync } from './runtime'
 
-// runAppEffect is the renderer adapter over Tau's configured Effect runtime.
-const useGitBranch = (workspacePath: string): UseQueryResult<string | null, Error> =>
-  useQuery({
-    queryKey: ['workspace', workspacePath, 'branch'],
-    queryFn: () =>
-      runAppEffect(
-        Effect.gen(function* () {
-          const svc = yield* WorkspaceService
-          return yield* svc.getGitBranch(workspacePath)
-        }),
+const useGitBranch = (workspacePath: string) => {
+  const snapshot = useSyncExternalStore(
+    (onStoreChange) =>
+      runRendererEffect(
+        WorkspaceMetadataCache.use((cache) =>
+          cache.subscribeGitBranch(workspacePath, onStoreChange),
+        ),
       ),
-  })
+    () =>
+      runRendererEffectSync(
+        WorkspaceMetadataCache.use((cache) => cache.getGitBranchSnapshot(workspacePath)),
+      ),
+  )
+
+  return snapshot
+}
 ```
 
-Long term, this hook should stop calling `useQuery` and instead use Tau's
-configured Effect runtime plus an Effect-owned cache/subscription primitive.
+Phase 7 replaced `useQuery` with Tau's configured Effect runtime plus an
+Effect-owned cache/subscription primitive.
 
 ---
 
@@ -488,16 +490,16 @@ Independent PTY sessions per pane remain Phase 4.
 
 ### Phase 7: Effect-First Backend + TanStack Exit
 
-- [ ] Introduce a configured app Effect runtime for main/preload/renderer
+- [x] Introduce a configured app Effect runtime for main/preload/renderer
       adapters
-- [ ] Convert workspace and git helpers from Promise-returning functions into
-      `Context.Tag` services with `Layer` implementations
-- [ ] Move IPC request/response wrappers behind Effect services with typed
+- [x] Convert workspace and git helpers from Promise-returning functions into
+      `Context.Service` services with `Layer` implementations
+- [x] Move IPC request/response wrappers behind Effect services with typed
       domain errors
-- [ ] Add Effect-owned caching/subscription semantics for workspace metadata,
+- [x] Add Effect-owned caching/subscription semantics for workspace metadata,
       git status, worktrees, ports, and PR info
-- [ ] Replace the TanStack Query hooks with thin Effect runtime hooks
-- [ ] Remove `@tanstack/react-query` once the Effect-backed hooks cover the
+- [x] Replace the TanStack Query hooks with thin Effect runtime hooks
+- [x] Remove `@tanstack/react-query` once the Effect-backed hooks cover the
       current branch/worktree/status surfaces
 
 ---
@@ -511,7 +513,6 @@ Independent PTY sessions per pane remain Phase 4.
     "react-dom": "^19.0.0",
     "effect": "4.0.0-beta.66",
     "zustand": "^5.0.0",
-    "@tanstack/react-query": "^5.0.0",
     "react-mosaic-component": "^6.0.0",
     "react-resizable-panels": "^4.11.1",
     "lucide-react": "^1.16.0",
@@ -531,9 +532,8 @@ Independent PTY sessions per pane remain Phase 4.
 These are the dependency families used or planned across the implementation
 phases. `package.json` remains the source of truth for what has landed.
 
-`@tanstack/react-query` is transitional. Keep it while the current sidebar
-metadata hooks need a renderer cache, but do not treat it as part of the final
-Tau backend architecture. The target backend architecture is Effect-first.
+`@tanstack/react-query` was transitional and has been removed. The current
+backend and renderer metadata architecture is Effect-first.
 
 The existing `electron-vite` config already wires `@vitejs/plugin-react` and
 `@tailwindcss/vite` into the renderer build config.
