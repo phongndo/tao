@@ -8,12 +8,22 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type DragEvent,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Mosaic, type MosaicNode } from 'react-mosaic-component'
 import type { AppCommand } from '../../shared/app-command'
 import {
   LOCAL_WORKSPACE_ID,
   type Pane,
+  type ReorderPlacement,
   type Tab,
   useTauStore,
   type Workspace,
@@ -27,12 +37,39 @@ const SIDEBAR_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_COLLAPSE_THRESHOLD = 120
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
+const TAB_DRAG_TYPE = 'application/x-tau-tab'
+const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
 }
 
-function WorkspaceItem({ workspace }: { workspace: Workspace }) {
+function getDropPlacement(
+  event: DragEvent<HTMLElement>,
+  axis: 'horizontal' | 'vertical',
+): ReorderPlacement {
+  const rect = event.currentTarget.getBoundingClientRect()
+  const midpoint = axis === 'horizontal' ? rect.left + rect.width / 2 : rect.top + rect.height / 2
+  const pointer = axis === 'horizontal' ? event.clientX : event.clientY
+
+  return pointer > midpoint ? 'after' : 'before'
+}
+
+function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean {
+  return Array.from(dataTransfer.types).includes(type)
+}
+
+function WorkspaceItem({
+  workspace,
+  onReorderWorkspace,
+}: {
+  workspace: Workspace
+  onReorderWorkspace(
+    workspaceId: string,
+    targetWorkspaceId: string,
+    placement: ReorderPlacement,
+  ): void
+}) {
   const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTauStore((state) => state.selectWorkspace)
   const removeWorkspace = useTauStore((state) => state.removeWorkspace)
@@ -44,7 +81,26 @@ function WorkspaceItem({ workspace }: { workspace: Workspace }) {
     : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
 
   return (
-    <div className={isActive ? 'workspace-item workspace-item-active' : 'workspace-item'}>
+    <div
+      className={isActive ? 'workspace-item workspace-item-active' : 'workspace-item'}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
+        event.dataTransfer.setData('text/plain', workspace.id)
+      }}
+      onDragOver={(event) => {
+        if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+      }}
+      onDrop={(event) => {
+        const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
+        if (!workspaceId || workspaceId === workspace.id) return
+        event.preventDefault()
+        onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
+      }}
+    >
       <div className="workspace-row">
         <button
           type="button"
@@ -87,7 +143,17 @@ function WorkspaceItem({ workspace }: { workspace: Workspace }) {
   )
 }
 
-function CollapsedWorkspaceItem({ workspace }: { workspace: Workspace }) {
+function CollapsedWorkspaceItem({
+  workspace,
+  onReorderWorkspace,
+}: {
+  workspace: Workspace
+  onReorderWorkspace(
+    workspaceId: string,
+    targetWorkspaceId: string,
+    placement: ReorderPlacement,
+  ): void
+}) {
   const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTauStore((state) => state.selectWorkspace)
   const isActive = activeWorkspaceId === workspace.id
@@ -104,6 +170,23 @@ function CollapsedWorkspaceItem({ workspace }: { workspace: Workspace }) {
       title={workspace.name}
       aria-label={workspace.name}
       aria-pressed={isActive}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
+        event.dataTransfer.setData('text/plain', workspace.id)
+      }}
+      onDragOver={(event) => {
+        if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+      }}
+      onDrop={(event) => {
+        const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
+        if (!workspaceId || workspaceId === workspace.id) return
+        event.preventDefault()
+        onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
+      }}
       onClick={() => selectWorkspace(workspace.id)}
     >
       <span>{label}</span>
@@ -249,12 +332,14 @@ const TabBar = memo(function TabBar({
   onNewTab,
   onSelectTab,
   onCloseTab,
+  onReorderTab,
 }: {
   tabs: Tab[]
   activeTabId: string | null
   onNewTab(): void
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
+  onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
 }) {
   return (
     <div className="tab-bar">
@@ -262,7 +347,27 @@ const TabBar = memo(function TabBar({
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
           return (
-            <div className={isActive ? 'tab-item tab-item-active' : 'tab-item'} key={tab.id}>
+            <div
+              className={isActive ? 'tab-item tab-item-active' : 'tab-item'}
+              key={tab.id}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id)
+                event.dataTransfer.setData('text/plain', tab.id)
+              }}
+              onDragOver={(event) => {
+                if (!dataTransferHasType(event.dataTransfer, TAB_DRAG_TYPE)) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+              }}
+              onDrop={(event) => {
+                const tabId = event.dataTransfer.getData(TAB_DRAG_TYPE)
+                if (!tabId || tabId === tab.id) return
+                event.preventDefault()
+                onReorderTab(tabId, tab.id, getDropPlacement(event, 'horizontal'))
+              }}
+            >
               <button
                 type="button"
                 className="tab-select-button"
@@ -301,17 +406,23 @@ const TabBar = memo(function TabBar({
 
 const PaneTile = memo(function PaneTile({
   pane,
+  terminalCwd,
   isActive,
   focusToken,
   onClose,
   onSelect,
+  onTitleChange,
 }: {
   pane: Pane
+  terminalCwd?: string
   isActive: boolean
   focusToken: number
   onClose(): void
   onSelect(): void
+  onTitleChange(title: string): void
 }) {
+  const status = pane.status ?? 'idle'
+
   return (
     <div
       className={isActive ? 'pane-tile pane-tile-active' : 'pane-tile'}
@@ -320,6 +431,13 @@ const PaneTile = memo(function PaneTile({
         if (event.target instanceof Node && event.currentTarget.contains(event.target)) onSelect()
       }}
     >
+      {status === 'idle' ? null : (
+        <span
+          className={`pane-status pane-status-${status}`}
+          title={`Pane status: ${status}`}
+          aria-label={`Pane status: ${status}`}
+        />
+      )}
       <button
         type="button"
         className="pane-close-button"
@@ -336,7 +454,13 @@ const PaneTile = memo(function PaneTile({
         <X size={12} />
       </button>
       {pane.type === 'terminal' ? (
-        <TerminalPane sessionId={pane.id} isActive={isActive} focusToken={focusToken} />
+        <TerminalPane
+          sessionId={pane.id}
+          cwd={pane.cwd ?? terminalCwd}
+          isActive={isActive}
+          focusToken={focusToken}
+          onTitleChange={onTitleChange}
+        />
       ) : (
         <div className="pane-standby" aria-hidden="true">
           <Terminal size={18} />
@@ -348,20 +472,24 @@ const PaneTile = memo(function PaneTile({
 
 const PaneGrid = memo(function PaneGrid({
   tab,
+  terminalCwd,
   panesById,
   activePaneId,
   terminalFocusTokens,
   onClosePane,
   onLayoutRelease,
   onSelectPane,
+  onPaneTitle,
 }: {
   tab: Tab
+  terminalCwd?: string
   panesById: Map<string, Pane>
   activePaneId: string | null
   terminalFocusTokens: ReadonlyMap<string, number>
   onClosePane(paneId: string): void
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
+  onPaneTitle(paneId: string, title: string): void
 }) {
   const [draftLayout, setDraftLayout] = useState<MosaicNode<string> | null>(tab.layout)
 
@@ -391,14 +519,24 @@ const PaneGrid = memo(function PaneGrid({
       return (
         <PaneTile
           pane={pane}
+          terminalCwd={terminalCwd}
           isActive={pane.id === activePaneId}
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
           onClose={() => onClosePane(pane.id)}
           onSelect={() => onSelectPane(pane.id)}
+          onTitleChange={(title) => onPaneTitle(pane.id, title)}
         />
       )
     },
-    [activePaneId, onClosePane, onSelectPane, panesById, terminalFocusTokens],
+    [
+      activePaneId,
+      onClosePane,
+      onPaneTitle,
+      onSelectPane,
+      panesById,
+      terminalCwd,
+      terminalFocusTokens,
+    ],
   )
 
   return (
@@ -431,15 +569,18 @@ export function App() {
   const closeActiveTab = useTauStore((state) => state.closeActiveTab)
   const selectTab = useTauStore((state) => state.selectTab)
   const selectTabByIndex = useTauStore((state) => state.selectTabByIndex)
+  const reorderTab = useTauStore((state) => state.reorderTab)
   const setTabLayout = useTauStore((state) => state.setTabLayout)
   const selectPane = useTauStore((state) => state.selectPane)
   const selectPaneByDirection = useTauStore((state) => state.selectPaneByDirection)
+  const setPaneTitle = useTauStore((state) => state.setPaneTitle)
   const splitActivePane = useTauStore((state) => state.splitActivePane)
   const closePane = useTauStore((state) => state.closePane)
   const closeActivePane = useTauStore((state) => state.closeActivePane)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
+  const reorderWorkspace = useTauStore((state) => state.reorderWorkspace)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
@@ -465,6 +606,11 @@ export function App() {
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
   )
+  const workspacePathById = useMemo(
+    () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
+    [workspaces],
+  )
+  const activeTabCwd = activeTab ? workspacePathById.get(activeTab.workspaceId) : undefined
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
@@ -475,6 +621,10 @@ export function App() {
   useEffect(() => {
     ensureWorkspaceTab(activeWorkspaceKey)
   }, [activeWorkspaceKey, ensureWorkspaceTab])
+
+  useEffect(() => {
+    document.title = activeTab ? `${activeTab.name} — Tau` : 'Tau'
+  }, [activeTab])
 
   useEffect(() => {
     const nextPaneIds = new Set(panes.map((pane) => pane.id))
@@ -613,7 +763,11 @@ export function App() {
             {workspaces.length > 0 ? (
               <div className="workspace-list">
                 {sortedWorkspaces.map((workspace) => (
-                  <WorkspaceItem key={workspace.id} workspace={workspace} />
+                  <WorkspaceItem
+                    key={workspace.id}
+                    workspace={workspace}
+                    onReorderWorkspace={reorderWorkspace}
+                  />
                 ))}
               </div>
             ) : (
@@ -645,7 +799,11 @@ export function App() {
             </button>
             <div className="collapsed-workspace-list">
               {sortedWorkspaces.map((workspace) => (
-                <CollapsedWorkspaceItem key={workspace.id} workspace={workspace} />
+                <CollapsedWorkspaceItem
+                  key={workspace.id}
+                  workspace={workspace}
+                  onReorderWorkspace={reorderWorkspace}
+                />
               ))}
             </div>
           </div>
@@ -659,18 +817,21 @@ export function App() {
             onNewTab={() => newTab(activeWorkspaceKey)}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
+            onReorderTab={reorderTab}
           />
           <div className="pane-grid">
             {activeTab ? (
               <PaneGrid
                 key={activeTab.id}
                 tab={activeTab}
+                terminalCwd={activeTabCwd}
                 panesById={panesById}
                 activePaneId={activePaneId}
                 terminalFocusTokens={terminalFocusTokens}
                 onClosePane={closePane}
                 onLayoutRelease={setTabLayout}
                 onSelectPane={selectPane}
+                onPaneTitle={setPaneTitle}
               />
             ) : (
               <div className="pane-grid-empty">

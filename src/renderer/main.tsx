@@ -11,7 +11,7 @@ import './styles.css'
 // We silence them so real errors aren't buried.
 {
   const originalWarn = console.warn.bind(console)
-  console.warn = (...args: any[]) => {
+  console.warn = (...args: unknown[]) => {
     const msg = args.join(' ')
     if (msg.includes('[ghostty-vt]') && msg.includes('warning(osc)')) return
     if (msg.includes('[ghostty-vt]') && msg.includes('invalid OSC')) return

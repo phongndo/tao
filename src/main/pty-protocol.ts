@@ -11,6 +11,7 @@ export const PtyExitInfoSchema = Schema.Struct({
 })
 
 const SessionIdSchema = Schema.Trim.check(Schema.isNonEmpty())
+const CwdSchema = Schema.Trim.check(Schema.isNonEmpty())
 
 export const PtyClientMessageSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal('renderer-ready') }),
@@ -19,6 +20,7 @@ export const PtyClientMessageSchema = Schema.Union([
     sessionId: SessionIdSchema,
     cols: Schema.Number,
     rows: Schema.Number,
+    cwd: Schema.optional(CwdSchema),
   }),
   Schema.Struct({ type: Schema.Literal('write'), sessionId: SessionIdSchema, data: Schema.String }),
   Schema.Struct({

@@ -212,6 +212,19 @@ body {
   color: inherit;
   cursor: default;
   text-align: left;
+  user-select: none;
+}
+
+.workspace-item[draggable='true'],
+.collapsed-workspace-button[draggable='true'],
+.tab-item[draggable='true'] {
+  cursor: grab;
+}
+
+.workspace-item[draggable='true']:active,
+.collapsed-workspace-button[draggable='true']:active,
+.tab-item[draggable='true']:active {
+  cursor: grabbing;
 }
 
 .workspace-item:hover {
@@ -401,6 +414,8 @@ body {
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
+  user-select: none;
+  -webkit-app-region: no-drag;
 }
 
 .tab-item:hover {
@@ -555,6 +570,38 @@ body {
   color: #747783;
   cursor: pointer;
   opacity: 0;
+}
+
+.pane-status {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  border: 1px solid #303035;
+  border-radius: 999px;
+  background: #747783;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.pane-status-working {
+  border-color: #90b99f;
+  background: #90b99f;
+  box-shadow: 0 0 0 4px rgb(144 185 159 / 12%);
+}
+
+.pane-status-permission {
+  border-color: #e6b99d;
+  background: #e6b99d;
+  box-shadow: 0 0 0 4px rgb(230 185 157 / 14%);
+}
+
+.pane-status-review {
+  border-color: #aca1cf;
+  background: #aca1cf;
+  box-shadow: 0 0 0 4px rgb(172 161 207 / 14%);
 }
 
 .pane-tile:hover .pane-close-button,

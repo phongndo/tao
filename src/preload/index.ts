@@ -10,6 +10,11 @@ type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
 
+type PendingDataState = {
+  chunks: string[]
+  bufferedChars: number
+}
+
 type ReadyState = {
   size: PtySize | null
   promise: Promise<PtySize>
@@ -25,7 +30,7 @@ let ptyPort: MessagePort | null = null
 let rendererReadySignaled = false
 let pendingClientMessages: PtyClientMessage[] = []
 const readyStates = new Map<string, ReadyState>()
-const pendingData = new Map<string, string[]>()
+const pendingData = new Map<string, PendingDataState>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
 const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
 const ptyExitCallbacks = new Map<string, PtyExitCallback[]>()
@@ -117,6 +122,15 @@ function callbacksFor<T>(callbacksBySession: Map<string, T[]>, sessionId: string
   return nextCallbacks
 }
 
+function pendingDataFor(sessionId: string): PendingDataState {
+  const existingState = pendingData.get(sessionId)
+  if (existingState) return existingState
+
+  const state: PendingDataState = { chunks: [], bufferedChars: 0 }
+  pendingData.set(sessionId, state)
+  return state
+}
+
 function removeCallback<T>(callbacksBySession: Map<string, T[]>, sessionId: string, callback: T) {
   const currentCallbacks = callbacksBySession.get(sessionId)
   if (!currentCallbacks) return
@@ -150,12 +164,13 @@ function rejectAndClearSessionState(sessionId: string, error: Error) {
 }
 
 function flushPendingData(sessionId: string) {
-  const chunks = pendingData.get(sessionId)
+  const pending = pendingData.get(sessionId)
   const callbacks = ptyDataCallbacks.get(sessionId)
-  if (!chunks || chunks.length === 0 || !callbacks || callbacks.length === 0) return
+  if (!pending || pending.chunks.length === 0 || !callbacks || callbacks.length === 0) return
 
-  const data = chunks.length === 1 ? chunks[0] : chunks.join('')
-  pendingData.set(sessionId, [])
+  const data = pending.chunks.length === 1 ? pending.chunks[0] : pending.chunks.join('')
+  pending.chunks = []
+  pending.bufferedChars = 0
   for (const callback of callbacks) {
     callback(data)
   }
@@ -164,16 +179,16 @@ function flushPendingData(sessionId: string) {
 function handlePtyData(sessionId: string, data: string) {
   const callbacks = ptyDataCallbacks.get(sessionId)
   if (!callbacks || callbacks.length === 0) {
-    const chunks = pendingData.get(sessionId) ?? []
-    chunks.push(data)
-    let bufferedChars = chunks.reduce((count, chunk) => count + chunk.length, 0)
-    while (bufferedChars > MAX_PENDING_DATA_CHARS && chunks.length > 1) {
-      bufferedChars -= chunks.shift()?.length ?? 0
+    const pending = pendingDataFor(sessionId)
+    pending.chunks.push(data)
+    pending.bufferedChars += data.length
+    while (pending.bufferedChars > MAX_PENDING_DATA_CHARS && pending.chunks.length > 1) {
+      pending.bufferedChars -= pending.chunks.shift()?.length ?? 0
     }
-    if (bufferedChars > MAX_PENDING_DATA_CHARS && chunks.length === 1) {
-      chunks[0] = chunks[0].slice(-MAX_PENDING_DATA_CHARS)
+    if (pending.bufferedChars > MAX_PENDING_DATA_CHARS && pending.chunks.length === 1) {
+      pending.chunks[0] = pending.chunks[0].slice(-MAX_PENDING_DATA_CHARS)
+      pending.bufferedChars = pending.chunks[0].length
     }
-    pendingData.set(sessionId, chunks)
     return
   }
 
@@ -263,7 +278,7 @@ ipcRenderer.send('pty:requestPort')
  * these specific methods, nothing else.
  */
 const electronAPI = {
-  spawnPty(sessionId: string, cols: number, rows: number): Promise<PtySize> {
+  spawnPty(sessionId: string, cols: number, rows: number, cwd?: string): Promise<PtySize> {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       return Promise.reject(new Error('PTY sessionId is required'))
     }
@@ -272,7 +287,14 @@ const electronAPI = {
     }
 
     const state = getReadyState(sessionId)
-    queuePtyMessage({ type: 'spawn', sessionId, cols, rows })
+    const trimmedCwd = typeof cwd === 'string' ? cwd.trim() : ''
+    queuePtyMessage({
+      type: 'spawn',
+      sessionId,
+      cols,
+      rows,
+      ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
+    })
     return state.size ? Promise.resolve(state.size) : state.promise
   },
 

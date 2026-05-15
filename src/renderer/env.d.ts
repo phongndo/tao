@@ -7,7 +7,12 @@ import type { AppCommand } from '../shared/app-command'
 import type { WorktreeInfo } from '../shared/workspace'
 
 export interface ElectronAPI {
-  spawnPty(sessionId: string, cols: number, rows: number): Promise<{ cols: number; rows: number }>
+  spawnPty(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    cwd?: string,
+  ): Promise<{ cols: number; rows: number }>
   sendPtyInput(sessionId: string, data: string): void
   resizePty(sessionId: string, cols: number, rows: number): void
   killPty(sessionId: string): void

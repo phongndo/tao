@@ -480,11 +480,11 @@ Independent PTY sessions per pane remain Phase 4.
 
 ### Phase 6: Polish
 
-- [ ] Tab auto-title (scan terminal output for OSC title sequences)
-- [ ] Pane status indicators (agent lifecycle rings)
-- [ ] Workspace persistence through an Effect-backed storage service (localStorage for MVP)
-- [ ] Drag-and-drop tab reorder
-- [ ] Drag-and-drop workspace reorder
+- [x] Tab auto-title (scan terminal output for OSC title sequences)
+- [x] Pane status indicators (agent lifecycle rings)
+- [x] Workspace persistence through an Effect-backed storage service (localStorage for MVP)
+- [x] Drag-and-drop tab reorder
+- [x] Drag-and-drop workspace reorder
 
 ### Phase 7: Effect-First Backend + TanStack Exit
 

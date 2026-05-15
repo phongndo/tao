@@ -1,3 +1,4 @@
+import { existsSync, statSync } from 'node:fs'
 import * as pty from 'node-pty'
 
 export interface PtyExitInfo {
@@ -18,7 +19,7 @@ export class PtyManager {
   private cols = DEFAULT_COLS
   private rows = DEFAULT_ROWS
 
-  constructor(shell: string, initialSize?: { cols: number; rows: number }) {
+  constructor(shell: string, initialSize?: { cols: number; rows: number; cwd?: string }) {
     this.cols = sanitizeCols(initialSize?.cols)
     this.rows = sanitizeRows(initialSize?.rows)
 
@@ -31,7 +32,7 @@ export class PtyManager {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
-      cwd: process.env.HOME || process.cwd(),
+      cwd: sanitizeCwd(initialSize?.cwd),
       env,
     })
 
@@ -109,4 +110,29 @@ function sanitizeCols(cols: number | undefined): number {
 function sanitizeRows(rows: number | undefined): number {
   if (rows === undefined || !Number.isFinite(rows)) return DEFAULT_ROWS
   return Math.max(1, Math.floor(rows))
+}
+
+function firstUsableDirectory(...candidates: Array<string | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    try {
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) return candidate
+    } catch {
+      // Ignore inaccessible candidates and try the next fallback.
+    }
+  }
+  return null
+}
+
+function sanitizeCwd(cwd: string | undefined): string {
+  const fallback = firstUsableDirectory(process.env.HOME, process.cwd())
+  if (!cwd) return fallback ?? process.cwd()
+
+  const trimmedCwd = cwd.trim()
+  if (trimmedCwd.length === 0) return fallback ?? process.cwd()
+
+  const selected = firstUsableDirectory(trimmedCwd, process.env.HOME, process.cwd())
+  if (selected) return selected
+
+  return process.cwd()
 }
