@@ -24,6 +24,7 @@ export function TerminalPane({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const onTitleChangeRef = useRef(onTitleChange)
+  const cwdRef = useRef(cwd)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export function TerminalPane({
       try {
         setTerminalError(null)
         const terminal = await createTerminal(container, sessionId, {
-          cwd,
+          cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
         })
         if (disposed) {
@@ -83,7 +84,7 @@ export function TerminalPane({
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
-  }, [cwd, sessionId])
+  }, [sessionId])
 
   useEffect(() => {
     const terminal = terminalRef.current

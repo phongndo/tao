@@ -5,6 +5,7 @@ const ST = '\x1b\\'
 
 const MAX_TITLE_CHARS = 80
 const MAX_OSC_BUFFER_CHARS = 4096
+const UNSAFE_TITLE_FORMATTING_CHARS = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g
 
 export function sanitizeTerminalTitle(rawTitle: string): string | null {
   let withoutControls = ''
@@ -23,7 +24,10 @@ export function sanitizeTerminalTitle(rawTitle: string): string | null {
     withoutControls += rawTitle.slice(lastCopyStart)
   }
 
-  const title = withoutControls.replace(/\s+/g, ' ').trim()
+  const title = withoutControls
+    .replace(UNSAFE_TITLE_FORMATTING_CHARS, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 
   if (title.length === 0) return null
   return title.length > MAX_TITLE_CHARS ? title.slice(0, MAX_TITLE_CHARS) : title

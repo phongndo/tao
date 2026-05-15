@@ -74,7 +74,8 @@ function runStorage<A>(program: Effect.Effect<A, StorageError, BrowserStorage>):
 function runStorageOr<A>(program: Effect.Effect<A, StorageError, BrowserStorage>, fallback: A): A {
   try {
     return runStorage(program)
-  } catch {
+  } catch (error) {
+    console.warn('[storage] Operation failed, using fallback:', error)
     return fallback
   }
 }

@@ -140,7 +140,13 @@ export async function createTerminal(
   const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
 
   const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
-    scanTitle?.(data)
+    if (scanTitle) {
+      try {
+        scanTitle(data)
+      } catch (error) {
+        console.error('[terminal] title scanner error:', error)
+      }
+    }
     term.write(data)
   })
 

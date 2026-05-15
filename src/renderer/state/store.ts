@@ -794,7 +794,7 @@ export const useTauStore = create<TauState>()(
                   candidate.id === pane.id ? { ...candidate, name } : candidate,
                 )
           const nextTabs =
-            tab && tab.name !== name
+            tab && paneId === state.activePaneId && tab.name !== name
               ? state.tabs.map((candidate) =>
                   candidate.id === tab.id ? { ...candidate, name } : candidate,
                 )

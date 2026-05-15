@@ -112,18 +112,27 @@ function sanitizeRows(rows: number | undefined): number {
   return Math.max(1, Math.floor(rows))
 }
 
+function firstUsableDirectory(...candidates: Array<string | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    try {
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) return candidate
+    } catch {
+      // Ignore inaccessible candidates and try the next fallback.
+    }
+  }
+  return null
+}
+
 function sanitizeCwd(cwd: string | undefined): string {
-  const fallback = process.env.HOME || process.cwd()
-  if (!cwd) return fallback
+  const fallback = firstUsableDirectory(process.env.HOME, process.cwd())
+  if (!cwd) return fallback ?? process.cwd()
 
   const trimmedCwd = cwd.trim()
-  if (trimmedCwd.length === 0) return fallback
+  if (trimmedCwd.length === 0) return fallback ?? process.cwd()
 
-  try {
-    if (existsSync(trimmedCwd) && statSync(trimmedCwd).isDirectory()) return trimmedCwd
-  } catch {
-    // Fall back to HOME/process.cwd when the workspace path is stale or inaccessible.
-  }
+  const selected = firstUsableDirectory(trimmedCwd, process.env.HOME, process.cwd())
+  if (selected) return selected
 
-  return fallback
+  return process.cwd()
 }
