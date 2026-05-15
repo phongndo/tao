@@ -40,10 +40,6 @@ function invokeWorkspace<A>(
   workspacePath: string,
   schema: Schema.Decoder<A>,
 ): Effect.Effect<A, WorkspaceError> {
-  if (typeof workspacePath !== 'string') {
-    return Effect.fail(new WorkspaceError('invalid-path', 'workspacePath must be a string'))
-  }
-
   return Effect.tryPromise({
     try: () => ipcRenderer.invoke(channel, workspacePath) as Promise<unknown>,
     catch: (error) =>

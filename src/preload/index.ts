@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import { Schema, type Effect } from 'effect'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
@@ -17,6 +17,9 @@ type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
+type WorkspaceIpcProgram<T> = (
+  workspaceIpc: typeof PreloadWorkspaceIpc.Service,
+) => Effect.Effect<T, unknown>
 
 type PendingDataState = {
   chunks: string[]
@@ -372,34 +375,30 @@ const electronAPI = {
   },
 
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse> {
-    return runPreloadEffect(
-      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getGitBranch(workspacePath)),
-    ).catch((error) => workspaceIpcFailure(error) as WorkspaceGitBranchResponse)
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitBranch(workspacePath))
   },
 
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse> {
-    return runPreloadEffect(
-      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getGitWorktrees(workspacePath)),
-    ).catch((error) => workspaceIpcFailure(error) as WorkspaceGitWorktreesResponse)
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitWorktrees(workspacePath))
   },
 
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse> {
-    return runPreloadEffect(
-      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getGitStatus(workspacePath)),
-    ).catch((error) => workspaceIpcFailure(error) as WorkspaceGitStatusResponse)
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitStatus(workspacePath))
   },
 
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse> {
-    return runPreloadEffect(
-      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getWorkspacePorts(workspacePath)),
-    ).catch((error) => workspaceIpcFailure(error) as WorkspacePortsResponse)
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getWorkspacePorts(workspacePath))
   },
 
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse> {
-    return runPreloadEffect(
-      PreloadWorkspaceIpc.use((workspaceIpc) => workspaceIpc.getPullRequestInfo(workspacePath)),
-    ).catch((error) => workspaceIpcFailure(error) as WorkspacePullRequestResponse)
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getPullRequestInfo(workspacePath))
   },
+}
+
+function runWorkspaceIpc<T>(program: WorkspaceIpcProgram<T>): Promise<T> {
+  return runPreloadEffect(PreloadWorkspaceIpc.use(program)).catch(
+    (error) => workspaceIpcFailure(error, 'ipc-failed') as T,
+  )
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

@@ -17,7 +17,7 @@
  */
 
 import { join } from 'node:path'
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 import {
   app,
   BrowserWindow,
@@ -33,6 +33,7 @@ import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '../shared/app-command'
 import {
   WorkspaceError,
+  WorkspacePathSchema,
   workspaceIpcFailure,
   workspaceIpcSuccess,
   type WorkspaceIpcResponse,
@@ -321,9 +322,11 @@ function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, Works
 }
 
 function workspacePathFromUnknown(workspacePath: unknown): Effect.Effect<string, WorkspaceError> {
-  if (typeof workspacePath === 'string') return Effect.succeed(workspacePath)
-
-  return Effect.fail(new WorkspaceError('invalid-path', 'workspacePath must be a string'))
+  return Effect.try({
+    try: () => Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath),
+    catch: (error) =>
+      new WorkspaceError('invalid-path', error instanceof Error ? error.message : String(error)),
+  })
 }
 
 async function runWorkspaceRequest<A>(

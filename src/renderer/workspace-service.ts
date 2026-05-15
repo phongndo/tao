@@ -8,6 +8,7 @@ import {
   WorkspacePortsResponseSchema,
   WorkspacePullRequestResponseSchema,
   workspaceErrorFromPayload,
+  workspaceErrorFromUnknown,
   type GitStatus,
   type PortInfo,
   type PullRequestInfo,
@@ -16,6 +17,7 @@ import {
 } from '../shared/workspace'
 
 const WORKSPACE_METADATA_STALE_MS = 5 * 60 * 1000
+const WORKSPACE_IPC_TIMEOUT_MS = 15_000
 
 type WorkspaceResourceKind = 'branch' | 'worktrees' | 'status' | 'ports' | 'pull-request'
 type WorkspaceResourceListener = () => void
@@ -166,9 +168,8 @@ function invokeWorkspaceIpc<T, R extends WorkspaceIpcResponse<T>>(
     const path = yield* decodeWorkspacePath(workspacePath)
     const api = yield* electronApi()
     const rawResponse = yield* Effect.tryPromise({
-      try: () => invoke(api, path),
-      catch: (error) =>
-        new WorkspaceError('ipc-failed', error instanceof Error ? error.message : String(error)),
+      try: () => invokeWithTimeout(channelName, () => invoke(api, path)),
+      catch: (error) => workspaceErrorFromUnknown(error, 'ipc-failed'),
     })
     const decoded = Schema.decodeUnknownOption(schema)(rawResponse)
     if (decoded._tag === 'None') {
@@ -179,6 +180,29 @@ function invokeWorkspaceIpc<T, R extends WorkspaceIpcResponse<T>>(
 
     if (!decoded.value.ok) return yield* Effect.fail(workspaceErrorFromPayload(decoded.value.error))
     return decoded.value.value
+  })
+}
+
+function invokeWithTimeout(channelName: string, invoke: () => Promise<unknown>): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(
+        new WorkspaceError(
+          'ipc-timeout',
+          `${channelName} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
+        ),
+      )
+    }, WORKSPACE_IPC_TIMEOUT_MS)
+
+    invoke()
+      .then((value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      })
+      .catch((error) => {
+        window.clearTimeout(timer)
+        reject(error)
+      })
   })
 }
 

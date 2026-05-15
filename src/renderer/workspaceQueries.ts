@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Effect } from 'effect'
 import { runRendererEffect, runRendererEffectSync } from './runtime'
 import {
@@ -7,13 +7,8 @@ import {
   type RefreshOptions,
   type WorkspaceResourceSnapshot,
 } from './workspace-service'
-import type {
-  GitStatus,
-  PortInfo,
-  PullRequestInfo,
-  WorkspaceError,
-  WorktreeInfo,
-} from '../shared/workspace'
+import { WorkspaceError, workspaceErrorFromUnknown } from '../shared/workspace'
+import type { GitStatus, PortInfo, PullRequestInfo, WorktreeInfo } from '../shared/workspace'
 
 type WorkspaceResourceAdapter<A> = {
   readonly snapshot: (
@@ -42,6 +37,20 @@ const idleSnapshot: WorkspaceResourceSnapshot<never> = {
   status: 'idle',
   data: undefined,
   error: null,
+}
+
+function errorSnapshot<A>(error: unknown, workspacePath: string): WorkspaceResourceSnapshot<A> {
+  const workspaceError = workspaceErrorFromUnknown(
+    error,
+    error instanceof Error ? 'unavailable' : 'invalid-response',
+  )
+
+  return {
+    status: 'error',
+    data: undefined,
+    error: new WorkspaceError(workspaceError.kind, `${workspacePath}: ${workspaceError.message}`),
+    updatedAt: Date.now(),
+  }
 }
 
 const gitBranchResource: WorkspaceResourceAdapter<string | null> = {
@@ -94,6 +103,8 @@ function useWorkspaceResource<A>(
   enabled: boolean,
   adapter: WorkspaceResourceAdapter<A>,
 ): EffectQueryResult<A> {
+  const [operationError, setOperationError] = useState<WorkspaceError | null>(null)
+
   const getSnapshot = useCallback((): WorkspaceResourceSnapshot<A> => {
     if (!workspacePath) return idleSnapshot as WorkspaceResourceSnapshot<A>
 
@@ -101,7 +112,7 @@ function useWorkspaceResource<A>(
       return runRendererEffectSync(adapter.snapshot(workspacePath))
     } catch (error) {
       console.warn('[workspace] Failed to read Effect cache snapshot:', error)
-      return idleSnapshot as WorkspaceResourceSnapshot<A>
+      return errorSnapshot(error, workspacePath)
     }
   }, [adapter, workspacePath])
 
@@ -109,26 +120,14 @@ function useWorkspaceResource<A>(
     (onStoreChange: () => void) => {
       if (!workspacePath || !enabled) return () => {}
 
-      let disposed = false
-      let unsubscribe: (() => void) | null = null
-      void runRendererEffect(adapter.subscribe(workspacePath, onStoreChange))
-        .then((nextUnsubscribe) => {
-          if (disposed) {
-            nextUnsubscribe()
-            return
-          }
-
-          unsubscribe = nextUnsubscribe
-          onStoreChange()
-        })
-        .catch((error) => {
-          console.warn('[workspace] Failed to subscribe to Effect cache:', error)
-          onStoreChange()
-        })
-
-      return () => {
-        disposed = true
-        unsubscribe?.()
+      try {
+        const unsubscribe = runRendererEffectSync(adapter.subscribe(workspacePath, onStoreChange))
+        setOperationError(null)
+        return unsubscribe
+      } catch (error) {
+        console.warn('[workspace] Failed to subscribe to Effect cache:', error)
+        onStoreChange()
+        return () => {}
       }
     },
     [adapter, enabled, workspacePath],
@@ -137,29 +136,42 @@ function useWorkspaceResource<A>(
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   useEffect(() => {
-    if (!workspacePath || !enabled) return
+    if (!workspacePath || !enabled) {
+      setOperationError(null)
+      return
+    }
 
-    void runRendererEffect(adapter.refresh(workspacePath)).catch((error) => {
-      console.warn('[workspace] Failed to refresh metadata:', error)
-    })
+    setOperationError(null)
+    void runRendererEffect(adapter.refresh(workspacePath))
+      .then(() => setOperationError(null))
+      .catch((error) => {
+        console.warn('[workspace] Failed to refresh metadata:', error)
+        setOperationError(workspaceErrorFromUnknown(error, 'ipc-failed'))
+      })
   }, [adapter, enabled, workspacePath])
 
   const refetch = useCallback(() => {
     if (!workspacePath) return
-    void runRendererEffect(adapter.refresh(workspacePath, { force: true })).catch((error) => {
-      console.warn('[workspace] Failed to refetch metadata:', error)
-    })
+    setOperationError(null)
+    void runRendererEffect(adapter.refresh(workspacePath, { force: true }))
+      .then(() => setOperationError(null))
+      .catch((error) => {
+        console.warn('[workspace] Failed to refetch metadata:', error)
+        setOperationError(workspaceErrorFromUnknown(error, 'ipc-failed'))
+      })
   }, [adapter, workspacePath])
 
   const hasPath = workspacePath !== null
   const hasData = snapshot.data !== undefined
   const isFetching = hasPath && enabled && snapshot.status === 'loading'
-  const isLoading = hasPath && enabled && !hasData && snapshot.status !== 'error'
+  const error = operationError ?? snapshot.error
+  const isError = snapshot.status === 'error' || operationError !== null
+  const isLoading = hasPath && enabled && !hasData && !isError
 
   return {
     data: snapshot.data,
-    error: snapshot.error,
-    isError: snapshot.status === 'error',
+    error,
+    isError,
     isLoading,
     isFetching,
     refetch,

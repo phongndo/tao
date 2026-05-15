@@ -33,6 +33,7 @@ export const WorkspaceErrorKindSchema = Schema.Union([
   Schema.Literal('parse-failed'),
   Schema.Literal('unauthorized'),
   Schema.Literal('ipc-failed'),
+  Schema.Literal('ipc-timeout'),
   Schema.Literal('invalid-response'),
   Schema.Literal('unavailable'),
 ])
@@ -111,11 +112,30 @@ export function workspaceErrorFromPayload(payload: WorkspaceErrorPayload): Works
   return new WorkspaceError(payload.kind, payload.message)
 }
 
+function workspaceErrorPayloadFromUnknown(error: unknown): WorkspaceErrorPayload | null {
+  const decoded = Schema.decodeUnknownOption(WorkspaceErrorPayloadSchema)(error)
+  if (decoded._tag === 'Some') return decoded.value
+
+  if (typeof error !== 'object' || error === null || !('kind' in error)) return null
+
+  const kind = Schema.decodeUnknownOption(WorkspaceErrorKindSchema)(error.kind)
+  if (kind._tag === 'None') return null
+
+  return {
+    name: 'WorkspaceError',
+    kind: kind.value,
+    message:
+      'message' in error && typeof error.message === 'string' ? error.message : String(error),
+  }
+}
+
 export function workspaceErrorFromUnknown(
   error: unknown,
   fallbackKind: WorkspaceErrorKind = 'command-failed',
 ): WorkspaceError {
   if (error instanceof WorkspaceError) return error
+  const payload = workspaceErrorPayloadFromUnknown(error)
+  if (payload) return workspaceErrorFromPayload(payload)
   return new WorkspaceError(fallbackKind, error instanceof Error ? error.message : String(error))
 }
 
@@ -123,6 +143,9 @@ export function workspaceIpcSuccess<T>(value: T): WorkspaceIpcResponse<T> {
   return { ok: true, value }
 }
 
-export function workspaceIpcFailure(error: unknown): WorkspaceIpcResponse<never> {
-  return { ok: false, error: workspaceErrorPayload(workspaceErrorFromUnknown(error)) }
+export function workspaceIpcFailure(
+  error: unknown,
+  fallbackKind: WorkspaceErrorKind = 'command-failed',
+): WorkspaceIpcResponse<never> {
+  return { ok: false, error: workspaceErrorPayload(workspaceErrorFromUnknown(error, fallbackKind)) }
 }
