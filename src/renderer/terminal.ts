@@ -64,10 +64,8 @@ async function loadTerminalFonts(): Promise<void> {
   if (!('fonts' in document) || typeof FontFace === 'undefined') return
 
   terminalFontsLoad ??= (async () => {
-    const source = new URL(
-      'fonts/nerd-fonts/SymbolsNerdFontMono-Regular.ttf',
-      window.location.href,
-    ).href
+    const source = new URL('fonts/nerd-fonts/SymbolsNerdFontMono-Regular.ttf', window.location.href)
+      .href
     const descriptor = `14px "${tauSymbolsFontFamily}"`
     let tauSymbolsFontFace = Array.from(document.fonts).find(
       (fontFace) => fontFace.family === tauSymbolsFontFamily,
