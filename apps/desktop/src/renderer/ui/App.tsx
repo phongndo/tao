@@ -34,9 +34,12 @@ import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
-const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_COLLAPSED_WIDTH = 48
+const SIDEBAR_EXPANDED_MIN_WIDTH = 220
+const SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD = 156
+const SIDEBAR_COMPACT_THRESHOLD = 64
+const SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD = 148
 const SIDEBAR_MAX_WIDTH = 360
-const SIDEBAR_HIDE_THRESHOLD = 132
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tau-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
@@ -47,6 +50,17 @@ const MosaicView = Mosaic as unknown as ComponentType<MosaicProps<string>>
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
+}
+
+function workspaceInitials(name: string): string {
+  const words = name.match(/[\p{L}\p{N}]+/gu) ?? []
+  const initials = words
+    .slice(0, 2)
+    .map((word) => word.at(0))
+    .join('')
+    .toUpperCase()
+
+  return initials || name.slice(0, 2).toUpperCase() || '•'
 }
 
 function getDropPlacement(
@@ -83,6 +97,7 @@ function WorkspaceItem({
   const branchLabel = branch.isError
     ? 'git error'
     : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
+  const label = `${workspace.name} — ${branchLabel}`
 
   return (
     <div
@@ -110,11 +125,18 @@ function WorkspaceItem({
         className="workspace-select-button"
         onClick={() => selectWorkspace(workspace.id)}
         aria-pressed={isActive}
+        aria-label={label}
+        title={label}
       >
-        <span className="workspace-title">{workspace.name}</span>
-        <span className="workspace-branch-pill">
-          <FiGitBranch size={12} />
-          <span>{branchLabel}</span>
+        <span className="workspace-avatar" aria-hidden="true">
+          {workspaceInitials(workspace.name)}
+        </span>
+        <span className="workspace-details">
+          <span className="workspace-title">{workspace.name}</span>
+          <span className="workspace-branch-pill">
+            <FiGitBranch size={12} />
+            <span>{branchLabel}</span>
+          </span>
         </span>
       </button>
       <button
@@ -207,7 +229,7 @@ function ResizeShell({
       // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="separator"
       aria-orientation="vertical"
-      aria-valuemin={SIDEBAR_MIN_WIDTH}
+      aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
       aria-valuenow={width}
       aria-label="Resize sidebar"
@@ -229,12 +251,16 @@ function ResizeShell({
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
-          onResize(width + SIDEBAR_KEYBOARD_RESIZE_STEP)
+          onResize(
+            width <= SIDEBAR_COMPACT_THRESHOLD
+              ? SIDEBAR_EXPANDED_MIN_WIDTH
+              : width + SIDEBAR_KEYBOARD_RESIZE_STEP,
+          )
           return
         }
         if (event.key === 'Home') {
           event.preventDefault()
-          onResize(0)
+          onResize(SIDEBAR_COLLAPSED_WIDTH)
           return
         }
         if (event.key === 'End') {
@@ -244,15 +270,23 @@ function ResizeShell({
         }
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
-          onResize(0)
+          onResize(SIDEBAR_DEFAULT_WIDTH)
         }
       }}
       onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
     />
   )
 
+  const className = [
+    'tau-sidebar',
+    width <= SIDEBAR_COMPACT_THRESHOLD ? 'tau-sidebar-compact' : null,
+    width <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD ? 'tau-sidebar-header-actions-hidden' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <aside className="tau-sidebar" style={{ width }} aria-label="Workspaces">
+    <aside className={className} style={{ width }} aria-label="Workspaces">
       {children}
       {resizeHandle}
     </aside>
@@ -262,6 +296,7 @@ function ResizeShell({
 const TabBar = memo(function TabBar({
   tabs,
   activeTabId,
+  showHeaderNavigation,
   isSidebarVisible,
   canGoPreviousWorkspace,
   canGoNextWorkspace,
@@ -275,6 +310,7 @@ const TabBar = memo(function TabBar({
 }: {
   tabs: Tab[]
   activeTabId: string | null
+  showHeaderNavigation: boolean
   isSidebarVisible: boolean
   canGoPreviousWorkspace: boolean
   canGoNextWorkspace: boolean
@@ -288,37 +324,16 @@ const TabBar = memo(function TabBar({
 }) {
   return (
     <div className="tab-bar">
-      <div className="titlebar-navigation">
-        <button
-          type="button"
-          className="icon-button titlebar-button"
-          aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-          title={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-          onClick={onToggleSidebar}
-        >
-          <FiMenu size={15} />
-        </button>
-        <button
-          type="button"
-          className="icon-button titlebar-button"
-          aria-label="Previous workspace"
-          title="Previous workspace"
-          disabled={!canGoPreviousWorkspace}
-          onClick={onPreviousWorkspace}
-        >
-          <FiChevronLeft size={15} />
-        </button>
-        <button
-          type="button"
-          className="icon-button titlebar-button"
-          aria-label="Next workspace"
-          title="Next workspace"
-          disabled={!canGoNextWorkspace}
-          onClick={onNextWorkspace}
-        >
-          <FiChevronRight size={15} />
-        </button>
-      </div>
+      {showHeaderNavigation ? (
+        <HeaderNavigation
+          isSidebarVisible={isSidebarVisible}
+          canGoPreviousWorkspace={canGoPreviousWorkspace}
+          canGoNextWorkspace={canGoNextWorkspace}
+          onToggleSidebar={onToggleSidebar}
+          onPreviousWorkspace={onPreviousWorkspace}
+          onNextWorkspace={onNextWorkspace}
+        />
+      ) : null}
       <div className="tab-list" role="tablist" aria-label="Terminal tabs">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
@@ -375,6 +390,56 @@ const TabBar = memo(function TabBar({
         onClick={onNewTab}
       >
         <FiPlus size={15} />
+      </button>
+    </div>
+  )
+})
+
+const HeaderNavigation = memo(function HeaderNavigation({
+  isSidebarVisible,
+  canGoPreviousWorkspace,
+  canGoNextWorkspace,
+  onToggleSidebar,
+  onPreviousWorkspace,
+  onNextWorkspace,
+}: {
+  isSidebarVisible: boolean
+  canGoPreviousWorkspace: boolean
+  canGoNextWorkspace: boolean
+  onToggleSidebar(): void
+  onPreviousWorkspace(): void
+  onNextWorkspace(): void
+}) {
+  return (
+    <div className="titlebar-navigation">
+      <button
+        type="button"
+        className="icon-button titlebar-button"
+        aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+        title={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+        onClick={onToggleSidebar}
+      >
+        <FiMenu size={15} />
+      </button>
+      <button
+        type="button"
+        className="icon-button titlebar-button"
+        aria-label="Previous workspace"
+        title="Previous workspace"
+        disabled={!canGoPreviousWorkspace}
+        onClick={onPreviousWorkspace}
+      >
+        <FiChevronLeft size={15} />
+      </button>
+      <button
+        type="button"
+        className="icon-button titlebar-button"
+        aria-label="Next workspace"
+        title="Next workspace"
+        disabled={!canGoNextWorkspace}
+        onClick={onNextWorkspace}
+      >
+        <FiChevronRight size={15} />
       </button>
     </div>
   )
@@ -535,8 +600,8 @@ export function App() {
       Math.min(
         SIDEBAR_MAX_WIDTH,
         Math.max(
-          SIDEBAR_MIN_WIDTH,
-          sidebarWidth >= SIDEBAR_MIN_WIDTH ? sidebarWidth : SIDEBAR_DEFAULT_WIDTH,
+          SIDEBAR_COLLAPSED_WIDTH,
+          sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_COLLAPSED_WIDTH,
         ),
       ),
     [sidebarWidth],
@@ -684,34 +749,50 @@ export function App() {
 
   const handleResizeSidebar = useCallback(
     (nextWidth: number) => {
-      if (nextWidth < SIDEBAR_HIDE_THRESHOLD) {
-        setSidebarExpanded(false)
-        return
-      }
-
-      const clampedWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth))
+      const clampedWidth =
+        nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
+          ? SIDEBAR_COLLAPSED_WIDTH
+          : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
       setSidebarWidth(clampedWidth)
       setSidebarExpanded(true)
     },
     [setSidebarExpanded, setSidebarWidth],
   )
+  const isSidebarCompact = sidebarExpanded && sidebarSize <= SIDEBAR_COMPACT_THRESHOLD
+  const shellClassName = [
+    'tau-shell',
+    sidebarExpanded ? null : 'tau-shell-sidebar-hidden',
+    isSidebarCompact ? 'tau-shell-sidebar-compact' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <div className={sidebarExpanded ? 'tau-shell' : 'tau-shell tau-shell-sidebar-hidden'}>
+    <div className={shellClassName}>
       {sidebarExpanded ? (
         <ResizeShell width={sidebarSize} onResize={handleResizeSidebar}>
+          {!isSidebarCompact ? (
+            <HeaderNavigation
+              isSidebarVisible={sidebarExpanded}
+              canGoPreviousWorkspace={canGoPreviousWorkspace}
+              canGoNextWorkspace={canGoNextWorkspace}
+              onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+              onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
+              onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
+            />
+          ) : null}
+          <div className="sidebar-top-actions">
+            <button
+              type="button"
+              className="icon-button add-workspace-button"
+              aria-label="Add workspace"
+              title="Add workspace"
+              onClick={handleAddWorkspace}
+            >
+              <FiFolderPlus size={15} />
+            </button>
+          </div>
           <div className="sidebar-content">
-            <div className="sidebar-top-actions">
-              <button
-                type="button"
-                className="icon-button add-workspace-button"
-                aria-label="Add workspace"
-                title="Add workspace"
-                onClick={handleAddWorkspace}
-              >
-                <FiFolderPlus size={15} />
-              </button>
-            </div>
             {workspaces.length > 0 ? (
               <div className="workspace-list">
                 {sortedWorkspaces.map((workspace) => (
@@ -731,6 +812,7 @@ export function App() {
           <TabBar
             tabs={workspaceTabs}
             activeTabId={activeTab?.id ?? null}
+            showHeaderNavigation={!sidebarExpanded || isSidebarCompact}
             isSidebarVisible={sidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
             canGoNextWorkspace={canGoNextWorkspace}

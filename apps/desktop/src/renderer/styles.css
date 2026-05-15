@@ -30,6 +30,7 @@ body {
 }
 
 .tau-shell {
+  position: relative;
   display: flex;
   width: 100%;
   height: 100%;
@@ -37,33 +38,61 @@ body {
   overflow: hidden;
 }
 
+.tau-shell-sidebar-compact::before,
+.tau-shell-sidebar-hidden::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 42px;
+  border-bottom: 1px solid #242428;
+  background: #18181a;
+  content: '';
+  pointer-events: none;
+}
+
 .tau-sidebar {
   position: relative;
+  z-index: 5;
   height: 100%;
   flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
   background: #191919;
-  border-right: 1px solid #28282c;
+}
+
+.tau-sidebar::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 1px;
+  background: #3a3b44;
+  content: '';
+  pointer-events: none;
 }
 
 .sidebar-content {
   position: relative;
-  height: 100%;
+  z-index: 3;
+  height: calc(100% - 42px);
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  padding-top: 44px;
 }
 
 .sidebar-top-actions {
   position: absolute;
-  top: 6px;
-  right: 12px;
-  height: 30px;
+  top: 9px;
+  right: 8px;
+  z-index: 7;
+  height: 24px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   -webkit-app-region: no-drag;
 }
 
@@ -190,14 +219,25 @@ body {
   align-items: center;
 }
 
+.workspace-avatar {
+  display: none;
+}
+
+.workspace-details {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
 .workspace-select-button {
   min-width: 0;
   flex: 1 1 auto;
   height: 100%;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -242,6 +282,58 @@ body {
   white-space: nowrap;
 }
 
+.tau-sidebar-header-actions-hidden .sidebar-top-actions {
+  display: none;
+}
+
+.tau-sidebar-compact .sidebar-content {
+  height: 100%;
+  gap: 0;
+  padding: 0;
+  padding-top: 42px;
+}
+
+.tau-sidebar-compact .workspace-list {
+  width: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+.tau-sidebar-compact .workspace-item {
+  width: 100%;
+  min-height: 46px;
+  padding: 0;
+  border-bottom: 1px solid #242428;
+  border-radius: 0;
+}
+
+.tau-sidebar-compact .workspace-select-button {
+  width: 100%;
+  justify-content: center;
+  padding: 0;
+}
+
+.tau-sidebar-compact .workspace-avatar {
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaaebd;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.tau-sidebar-compact .workspace-item-active .workspace-avatar {
+  color: #dedff0;
+}
+
+.tau-sidebar-compact .workspace-details,
+.tau-sidebar-compact .workspace-danger-button {
+  display: none;
+}
+
 .resize-handle {
   position: absolute;
   top: 0;
@@ -256,10 +348,10 @@ body {
 
 .resize-handle::after {
   position: absolute;
-  top: 0;
+  top: 42px;
   left: 7px;
   width: 1px;
-  height: 100%;
+  height: calc(100% - 42px);
   background: transparent;
   content: '';
 }
@@ -281,6 +373,8 @@ body {
 
 .tau-main,
 .main-content {
+  position: relative;
+  z-index: 3;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -290,22 +384,48 @@ body {
 .main-content {
   width: 100%;
   height: 100%;
-  position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .tab-bar {
+  position: relative;
+  z-index: 4;
   height: 42px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  border-bottom: 1px solid #242428;
   background: #18181a;
   -webkit-app-region: drag;
+}
+
+.tab-bar::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: -1px;
+  z-index: 4;
+  height: 1px;
+  background: #242428;
+  content: '';
+  pointer-events: none;
+}
+
+.tau-shell-sidebar-compact .tau-sidebar {
+  z-index: 1;
+}
+
+.tau-sidebar-compact + .tau-main .tab-bar {
+  margin-left: -1px;
+  padding-left: 44px;
+}
+
+.tau-shell:not(.tau-shell-sidebar-hidden):not(.tau-shell-sidebar-compact) .tab-bar {
+  margin-left: -1px;
+  padding-left: 0;
 }
 
 .tau-shell-sidebar-hidden .tab-bar {
@@ -314,11 +434,19 @@ body {
 
 .titlebar-navigation {
   flex: 0 0 auto;
+  height: 42px;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-right: 4px;
+  padding-right: 12px;
   -webkit-app-region: no-drag;
+}
+
+.tau-sidebar > .titlebar-navigation {
+  position: relative;
+  z-index: 6;
+  padding-left: 92px;
+  border-bottom: 1px solid #242428;
 }
 
 .titlebar-button {
