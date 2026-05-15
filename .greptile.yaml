@@ -8,10 +8,10 @@
 repository:
   # Only index these paths (ignore build artifacts and binaries)
   include:
-    - src/**
+    - apps/**
+    - packages/**
     - docs/**
-    - bench/**
-    - tau-gl/**
+    - scripts/**
     - '*.md'
     - '*.json'
     - '*.ts'
@@ -22,7 +22,9 @@ repository:
     - pnpm-lock.yaml
     - out/**
     - dist/**
-    - public/ghostty-vt.wasm
+    - apps/desktop/out/**
+    - apps/desktop/dist/**
+    - apps/desktop/public/ghostty-vt.wasm
     - node_modules/**
 
 # ── Indexing ──
@@ -33,9 +35,7 @@ indexing:
 
   # Prioritize architecture docs for Q&A accuracy
   priority_files:
-    - PLAN.md
-    - docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md
-    - docs/WEBGL_RENDERER_PLAN.md
+    - docs/README.md
     - CONTRIBUTING.md
-    - src/main/index.ts
-    - src/renderer/terminal.ts
+    - apps/desktop/src/main/index.ts
+    - apps/desktop/src/renderer/terminal.ts

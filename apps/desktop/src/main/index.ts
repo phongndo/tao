@@ -17,7 +17,7 @@
  */
 
 import { join } from 'node:path'
-import { Effect, Schema } from 'effect'
+import { Effect } from 'effect'
 import {
   app,
   BrowserWindow,
@@ -30,14 +30,15 @@ import {
 import ptyServicePath from './pty-service?modulePath'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { WorkspaceService } from './workspace-service'
-import type { AppCommand, PaneFocusDirection } from '../shared/app-command'
+import type { AppCommand, PaneFocusDirection } from '@tau/shared/app-command'
 import {
   WorkspaceError,
-  WorkspacePathSchema,
+  decodeWorkspacePathFromUnknown,
+  errorMessageFromUnknown,
   workspaceIpcFailure,
   workspaceIpcSuccess,
   type WorkspaceIpcResponse,
-} from '../shared/workspace'
+} from '@tau/shared/workspace'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
 
@@ -279,7 +280,7 @@ function setupPtyService() {
   } catch (err) {
     port1.close()
     port2.close()
-    notifyPtyServiceError(`Failed to start PTY service: ${String(err)}`)
+    notifyPtyServiceError(`Failed to start PTY service: ${errorMessageFromUnknown(err)}`)
     return
   }
 
@@ -292,7 +293,7 @@ function setupPtyService() {
       rendererPort = null
       ptyService = null
     }
-    notifyPtyServiceError(`PTY service error: ${String(err)}`)
+    notifyPtyServiceError(`PTY service error: ${errorMessageFromUnknown(err)}`)
   })
   ptyService.once('exit', (code) => {
     console.log(`[main] PTY service exited with code ${code}`)
@@ -327,24 +328,19 @@ function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, Works
   return Effect.fail(new WorkspaceError('unauthorized', 'IPC request came from an unknown sender'))
 }
 
-function workspacePathFromUnknown(workspacePath: unknown): Effect.Effect<string, WorkspaceError> {
-  return Effect.try({
-    try: () => Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath),
-    catch: (error) =>
-      new WorkspaceError('invalid-path', error instanceof Error ? error.message : String(error)),
-  })
-}
-
-async function runWorkspaceRequest<A>(
+function runWorkspaceRequest<A>(
   event: IpcMainInvokeEvent,
   program: Effect.Effect<A, WorkspaceError, WorkspaceService>,
 ): Promise<WorkspaceIpcResponse<A>> {
-  try {
-    const value = await runMainEffect(authorizeRenderer(event).pipe(Effect.flatMap(() => program)))
-    return workspaceIpcSuccess(value)
-  } catch (error) {
-    return workspaceIpcFailure(error)
-  }
+  return runMainEffect(
+    authorizeRenderer(event).pipe(
+      Effect.flatMap(() => program),
+      Effect.match({
+        onFailure: workspaceIpcFailure,
+        onSuccess: workspaceIpcSuccess,
+      }),
+    ),
+  ).catch((error) => workspaceIpcFailure(error, 'ipc-failed'))
 }
 
 function workspaceServiceRequest<A>(
@@ -358,11 +354,54 @@ function workspaceServiceRequest<A>(
   return runWorkspaceRequest(
     event,
     WorkspaceService.use((service) =>
-      workspacePathFromUnknown(workspacePath).pipe(
+      decodeWorkspacePathFromUnknown(workspacePath).pipe(
         Effect.flatMap((decodedWorkspacePath) => run(service, decodedWorkspacePath)),
       ),
     ),
   )
+}
+
+function pickWorkspaceDirectoryRequest(event: IpcMainInvokeEvent): Promise<string | null> {
+  const program = Effect.gen(function* () {
+    yield* authorizeRenderer(event)
+
+    const window = mainWindow
+    if (!window || window.isDestroyed()) {
+      return yield* Effect.fail(new WorkspaceError('unavailable', 'Main window is unavailable'))
+    }
+
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        dialog.showOpenDialog(window, {
+          properties: ['openDirectory'],
+          title: 'Add Workspace',
+        }),
+      catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
+    })
+
+    if (result.canceled) return null
+    const selectedPath = result.filePaths[0]
+    if (!selectedPath) return null
+
+    return yield* decodeWorkspacePathFromUnknown(selectedPath)
+  })
+
+  return Effect.runPromise(
+    program.pipe(
+      Effect.match({
+        onFailure: (error) => {
+          // The renderer models directory selection as `string | null`; null covers
+          // cancellation and unavailable/unauthorized dialogs without changing that API.
+          console.warn('[workspace] Failed to pick directory:', error.message)
+          return null
+        },
+        onSuccess: (value) => value,
+      }),
+    ),
+  ).catch((error) => {
+    console.warn('[workspace] Failed to pick directory:', error)
+    return null
+  })
 }
 
 // ─── IPC Handlers ───
@@ -380,17 +419,7 @@ ipcMain.on('pty:requestPort', (event) => {
   sendPtyPortToRenderer()
 })
 
-ipcMain.handle('workspace:pickDirectory', async (event): Promise<string | null> => {
-  if (event.sender !== mainWindow?.webContents || !mainWindow) return null
-
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
-    title: 'Add Workspace',
-  })
-
-  if (result.canceled) return null
-  return result.filePaths[0] ?? null
-})
+ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
 
 ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>
   workspaceServiceRequest(event, workspacePath, (service, path) => service.getGitBranch(path)),

@@ -22,6 +22,20 @@ pnpm build           # Production build
 pnpm start           # Run production build
 ```
 
+Tau is a pnpm workspace. Root scripts delegate to `apps/desktop`, leaving room for future apps such as a website.
+
+## Workspace Layout
+
+```
+tau/
+├── apps/desktop/   # Electron terminal app
+├── packages/       # Shared workspace packages
+├── docs/           # Architecture notes and plans
+├── scripts/        # Repo-level maintenance scripts
+├── patches/        # Future dependency patches, e.g. ghostty-web
+└── assets/         # Shared repo assets
+```
+
 ## Performance
 
 | Metric                      | Tau (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup  |
@@ -49,7 +63,7 @@ Main Process                 PTY Utility Process              Renderer Process
 - **node-pty**: Runs in an Electron utility process and spawns a real shell (bash/zsh/fish) with PTY
 - **ghostty-web**: Ghostty's production VT emulator compiled to WASM. Same parser as the native Ghostty app.
 - **IPC**: Raw bytes over a direct `MessagePort`, batched at 16ms (~60fps), with main kept off the PTY hot path
-- **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/ZIG_WEBGL_IMPLEMENTATION_PLAN.md))
+- **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/README.md))
 
 ## Benchmarks
 
@@ -63,6 +77,8 @@ pnpm bench:all          # Run everything
 
 ## Development
 
+Desktop source lives in `apps/desktop`. Run commands from the repository root unless you need to target the package directly with `pnpm --filter @tau/desktop <script>`.
+
 ```bash
 pnpm tsc          # Type check
 pnpm lint         # Lint
@@ -72,12 +88,7 @@ pnpm check        # Format + lint (CI)
 
 ## License
 
-Dual-licensed under either of:
-
-- [MIT License](LICENSE)
-- [Apache License, Version 2.0](LICENSE-APACHE)
-
-at your option.
+[MIT License](LICENSE)
 
 ## Contributing
 

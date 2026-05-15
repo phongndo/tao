@@ -6,13 +6,14 @@ import {
   PortInfoSchema,
   PullRequestInfoSchema,
   WorkspaceError,
-  WorkspacePathSchema,
+  decodeWorkspacePathFromUnknown,
+  errorMessageFromUnknown,
   type GitStatus,
   type PortInfo,
   type PullRequestInfo,
   type WorktreeInfo,
   WorktreeInfoSchema,
-} from '../shared/workspace'
+} from '@tau/shared/workspace'
 
 const execFileAsync = promisify(execFile)
 
@@ -45,37 +46,29 @@ export class WorkspaceService extends Context.Service<
   }
 >()('Tau/WorkspaceService') {}
 
-function decodeWorkspacePath(workspacePath: string): Effect.Effect<string, WorkspaceError> {
-  return Effect.try({
-    try: () => Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath),
-    catch: (error) =>
-      new WorkspaceError('invalid-path', error instanceof Error ? error.message : String(error)),
-  })
-}
-
 function runCommand(
   command: string,
   args: string[],
   options: { readonly cwd?: string } = {},
 ): Effect.Effect<string, WorkspaceError> {
   return Effect.tryPromise({
-    try: async (): Promise<string> => {
+    try: async (signal): Promise<string> => {
       const { stdout } = (await execFileAsync(command, args, {
         cwd: options.cwd,
         timeout: COMMAND_TIMEOUT_MS,
         maxBuffer: COMMAND_MAX_BUFFER,
+        signal,
       })) as ExecResult
 
       return stdout.trim()
     },
-    catch: (error) =>
-      new WorkspaceError('command-failed', error instanceof Error ? error.message : String(error)),
+    catch: (error) => new WorkspaceError('command-failed', errorMessageFromUnknown(error)),
   })
 }
 
 function runGit(workspacePath: string, args: string[]): Effect.Effect<string, WorkspaceError> {
   return Effect.gen(function* () {
-    const path = yield* decodeWorkspacePath(workspacePath)
+    const path = yield* decodeWorkspacePathFromUnknown(workspacePath)
     return yield* runCommand('git', ['-C', path, ...args])
   })
 }
@@ -140,8 +133,7 @@ function parseGitStatus(output: string): Effect.Effect<GitStatus, WorkspaceError
 
       return Schema.decodeUnknownSync(GitStatusSchema)({ changed, staged })
     },
-    catch: (error) =>
-      new WorkspaceError('parse-failed', error instanceof Error ? error.message : String(error)),
+    catch: (error) => new WorkspaceError('parse-failed', errorMessageFromUnknown(error)),
   })
 }
 
@@ -172,8 +164,7 @@ function parsePorts(output: string): Effect.Effect<PortInfo[], WorkspaceError> {
       const ports = [...portsByNumber.values()].sort((a, b) => a.port - b.port)
       return [...Schema.decodeUnknownSync(Schema.Array(PortInfoSchema))(ports)]
     },
-    catch: (error) =>
-      new WorkspaceError('parse-failed', error instanceof Error ? error.message : String(error)),
+    catch: (error) => new WorkspaceError('parse-failed', errorMessageFromUnknown(error)),
   })
 }
 
@@ -184,8 +175,7 @@ function parsePullRequestInfo(
 
   return Effect.try({
     try: () => Schema.decodeUnknownSync(PullRequestInfoSchema)(JSON.parse(output)),
-    catch: (error) =>
-      new WorkspaceError('parse-failed', error instanceof Error ? error.message : String(error)),
+    catch: (error) => new WorkspaceError('parse-failed', errorMessageFromUnknown(error)),
   })
 }
 
@@ -217,7 +207,7 @@ const WorkspaceServiceLiveValue: typeof WorkspaceService.Service = {
     runGit(workspacePath, ['status', '--porcelain=v1']).pipe(Effect.flatMap(parseGitStatus)),
 
   getWorkspacePorts: (workspacePath) =>
-    decodeWorkspacePath(workspacePath).pipe(
+    decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((decodedPath) =>
         runCommand('lsof', ['+D', decodedPath, '-nP', '-iTCP', '-sTCP:LISTEN', '-Fpnc']),
       ),
@@ -226,7 +216,7 @@ const WorkspaceServiceLiveValue: typeof WorkspaceService.Service = {
     ),
 
   getPullRequestInfo: (workspacePath) =>
-    decodeWorkspacePath(workspacePath).pipe(
+    decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((cwd) =>
         runCommand('gh', ['pr', 'view', '--json', 'number,title,url,state,headRefName'], { cwd }),
       ),

@@ -2,8 +2,8 @@ import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-com
 import { Schema } from 'effect'
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import type { PaneFocusDirection } from '../../shared/app-command'
-import { type WorktreeInfo, WorktreeInfoSchema } from '../../shared/workspace'
+import type { PaneFocusDirection } from '@tau/shared/app-command'
+import { type WorktreeInfo, WorktreeInfoSchema } from '@tau/shared/workspace'
 import { sanitizeTerminalTitle } from '../osc-title'
 import { effectLocalStorage } from '../storage'
 

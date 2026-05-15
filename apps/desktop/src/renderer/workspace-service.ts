@@ -4,9 +4,12 @@ import {
   WorkspaceGitBranchResponseSchema,
   WorkspaceGitStatusResponseSchema,
   WorkspaceGitWorktreesResponseSchema,
-  WorkspacePathSchema,
   WorkspacePortsResponseSchema,
   WorkspacePullRequestResponseSchema,
+  WORKSPACE_IPC_TIMEOUT_MS,
+  decodeWorkspaceIpcResponse,
+  decodeWorkspacePathFromUnknown,
+  decodeWorkspacePathFromUnknownSync,
   workspaceErrorFromPayload,
   workspaceErrorFromUnknown,
   type GitStatus,
@@ -14,10 +17,9 @@ import {
   type PullRequestInfo,
   type WorkspaceIpcResponse,
   type WorktreeInfo,
-} from '../shared/workspace'
+} from '@tau/shared/workspace'
 
 const WORKSPACE_METADATA_STALE_MS = 5 * 60 * 1000
-const WORKSPACE_IPC_TIMEOUT_MS = 15_000
 
 type WorkspaceResourceKind = 'branch' | 'worktrees' | 'status' | 'ports' | 'pull-request'
 type WorkspaceResourceListener = () => void
@@ -140,25 +142,6 @@ function electronApi(): Effect.Effect<Window['electronAPI'], WorkspaceError> {
   return Effect.fail(new WorkspaceError('unavailable', 'window.electronAPI is unavailable'))
 }
 
-function decodeWorkspacePath(workspacePath: string): Effect.Effect<string, WorkspaceError> {
-  return Effect.try({
-    try: () => Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath),
-    catch: (error) =>
-      new WorkspaceError('invalid-path', error instanceof Error ? error.message : String(error)),
-  })
-}
-
-function decodeWorkspacePathSync(workspacePath: string): string | WorkspaceError {
-  try {
-    return Schema.decodeUnknownSync(WorkspacePathSchema)(workspacePath)
-  } catch (error) {
-    return new WorkspaceError(
-      'invalid-path',
-      error instanceof Error ? error.message : String(error),
-    )
-  }
-}
-
 function invokeWorkspaceIpc<T, R extends WorkspaceIpcResponse<T>>(
   workspacePath: string,
   channelName: string,
@@ -166,44 +149,29 @@ function invokeWorkspaceIpc<T, R extends WorkspaceIpcResponse<T>>(
   schema: Schema.Decoder<R>,
 ): Effect.Effect<T, WorkspaceError> {
   return Effect.gen(function* () {
-    const path = yield* decodeWorkspacePath(workspacePath)
+    const path = yield* decodeWorkspacePathFromUnknown(workspacePath)
     const api = yield* electronApi()
     const rawResponse = yield* Effect.tryPromise({
-      try: () => invokeWithTimeout(channelName, () => invoke(api, path)),
+      try: () => invoke(api, path),
       catch: (error) => workspaceErrorFromUnknown(error, 'ipc-failed'),
-    })
-    const decoded = Schema.decodeUnknownOption(schema)(rawResponse)
-    if (decoded._tag === 'None') {
-      return yield* Effect.fail(
-        new WorkspaceError('invalid-response', `Invalid response from ${channelName}`),
-      )
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: WORKSPACE_IPC_TIMEOUT_MS,
+        orElse: () =>
+          Effect.fail(
+            new WorkspaceError(
+              'ipc-timeout',
+              `${channelName} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
+            ),
+          ),
+      }),
+    )
+    const decoded = yield* decodeWorkspaceIpcResponse(rawResponse, schema, channelName)
+    if (!decoded.ok) {
+      return yield* Effect.fail(workspaceErrorFromPayload(decoded.error))
     }
 
-    if (!decoded.value.ok) return yield* Effect.fail(workspaceErrorFromPayload(decoded.value.error))
-    return decoded.value.value
-  })
-}
-
-function invokeWithTimeout(channelName: string, invoke: () => Promise<unknown>): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(
-        new WorkspaceError(
-          'ipc-timeout',
-          `${channelName} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
-        ),
-      )
-    }, WORKSPACE_IPC_TIMEOUT_MS)
-
-    invoke()
-      .then((value) => {
-        window.clearTimeout(timer)
-        resolve(value)
-      })
-      .catch((error) => {
-        window.clearTimeout(timer)
-        reject(error)
-      })
+    return decoded.value
   })
 }
 
@@ -258,7 +226,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
     kind: WorkspaceResourceKind,
     workspacePath: string,
   ): WorkspaceResourceSnapshot<A> {
-    const decodedPath = decodeWorkspacePathSync(workspacePath)
+    const decodedPath = decodeWorkspacePathFromUnknownSync(workspacePath)
     if (decodedPath instanceof WorkspaceError) return invalidSnapshot(workspacePath, decodedPath)
 
     return entryFor<A>(kind, decodedPath).snapshot
@@ -269,7 +237,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
     workspacePath: string,
     listener: WorkspaceResourceListener,
   ): Effect.Effect<() => void, WorkspaceError> {
-    return decodeWorkspacePath(workspacePath).pipe(
+    return decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.map((decodedPath) => {
         const entry = entryFor(kind, decodedPath)
         entry.listeners.add(listener)
@@ -287,7 +255,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
     fetch: (workspacePath: string) => Effect.Effect<A, WorkspaceError, WorkspaceIpcClient>,
   ): Effect.Effect<void, WorkspaceError, WorkspaceIpcClient> {
     return Effect.gen(function* () {
-      const decodedPath = yield* decodeWorkspacePath(workspacePath)
+      const decodedPath = yield* decodeWorkspacePathFromUnknown(workspacePath)
       const entry = entryFor<A>(kind, decodedPath)
       if (entry.inFlight) return
 
@@ -388,7 +356,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
 
     invalidateWorkspace: (workspacePath) =>
       Effect.sync(() => {
-        const decodedPath = decodeWorkspacePathSync(workspacePath)
+        const decodedPath = decodeWorkspacePathFromUnknownSync(workspacePath)
         if (decodedPath instanceof WorkspaceError) return
 
         invalidSnapshots.delete(workspacePath)

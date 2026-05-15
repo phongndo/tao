@@ -1,16 +1,21 @@
-import { Schema, type Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
-import type { AppCommand } from '../shared/app-command'
+import type { AppCommand } from '@tau/shared/app-command'
 import {
+  WorkspaceError,
+  WorkspacePickDirectoryResponseSchema,
+  WORKSPACE_IPC_TIMEOUT_MS,
+  decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
+  workspaceErrorFromUnknown,
   type WorkspaceGitBranchResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
-} from '../shared/workspace'
+} from '@tau/shared/workspace'
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
 type PtyDataCallback = (data: string) => void
@@ -19,7 +24,7 @@ type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
 type WorkspaceIpcProgram<T> = (
   workspaceIpc: typeof PreloadWorkspaceIpc.Service,
-) => Effect.Effect<T, unknown>
+) => Effect.Effect<T, WorkspaceError>
 
 type PendingDataState = {
   chunks: string[]
@@ -371,7 +376,7 @@ const electronAPI = {
   },
 
   pickWorkspaceDirectory(): Promise<string | null> {
-    return ipcRenderer.invoke('workspace:pickDirectory')
+    return pickWorkspaceDirectory()
   },
 
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse> {
@@ -399,6 +404,34 @@ function runWorkspaceIpc<T>(program: WorkspaceIpcProgram<T>): Promise<T> {
   return runPreloadEffect(PreloadWorkspaceIpc.use(program)).catch(
     (error) => workspaceIpcFailure(error, 'ipc-failed') as T,
   )
+}
+
+function pickWorkspaceDirectory(): Promise<string | null> {
+  const channel = 'workspace:pickDirectory'
+  return Effect.runPromise(
+    Effect.tryPromise({
+      try: () => ipcRenderer.invoke(channel) as Promise<unknown>,
+      catch: (error) => workspaceErrorFromUnknown(error, 'ipc-failed'),
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: WORKSPACE_IPC_TIMEOUT_MS,
+        orElse: () =>
+          Effect.fail(
+            new WorkspaceError(
+              'ipc-timeout',
+              `${channel} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
+            ),
+          ),
+      }),
+      Effect.flatMap((response) =>
+        decodeWorkspaceIpcResponse(response, WorkspacePickDirectoryResponseSchema, channel),
+      ),
+    ),
+  ).catch((error) => {
+    // Preserve the existing public API: cancellation and selection failure are both null.
+    console.warn('[workspace] Failed to pick directory:', error)
+    return null
+  })
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

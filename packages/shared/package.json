@@ -1,0 +1,19 @@
+{
+  "name": "@tau/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./app-command": "./src/app-command.ts",
+    "./workspace": "./src/workspace.ts"
+  },
+  "scripts": {
+    "tsc": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.66"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

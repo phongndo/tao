@@ -60,7 +60,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tau-dist-ubuntu
-          path: out/
+          path: apps/desktop/out/
 
   build-macos:
     runs-on: macos-latest
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tau-dist-macos
-          path: out/
+          path: apps/desktop/out/
 
   build-windows:
     runs-on: windows-latest
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tau-dist-windows
-          path: out/
+          path: apps/desktop/out/
 
   # ── Parser benchmark (Linux only) ──
   bench:
