@@ -21,7 +21,7 @@ zero-copy rendering, dedicated PTY utility process).
 | **Pane Layout**          | react-mosaic-component        | Battle-tested recursive split tiling (same lib Superset uses)                                                                                       |
 | **Sidebar / Main Split** | react-resizable-panels        | Resizable left sidebar + main content area                                                                                                          |
 | **Icons**                | lucide-react                  | Consistent icon set, tree-shakeable                                                                                                                 |
-| **Key Bindings**         | react-hotkeys-hook            | Declarative shortcut handling                                                                                                                       |
+| **Key Bindings**         | Electron `before-input-event` | Centralized app shortcuts before terminal input                                                                                                     |
 | **Terminal Renderer**    | ghostty-web (unchanged)       | WASM canvas — zero framework involvement, stays in its own rAF loop                                                                                 |
 | **PTY Backend**          | PtyPool (evolved PtyManager)  | One PTY instance per terminal pane, multiplexed on MessagePort                                                                                      |
 
@@ -514,7 +514,6 @@ Independent PTY sessions per pane remain Phase 4.
     "@tanstack/react-query": "^5.0.0",
     "react-mosaic-component": "^6.0.0",
     "react-resizable-panels": "^4.11.1",
-    "react-hotkeys-hook": "^5.0.0",
     "lucide-react": "^1.16.0",
   },
   "devDependencies": {
