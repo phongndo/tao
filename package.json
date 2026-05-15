@@ -26,8 +26,8 @@
     "postinstall": "node scripts/fix-node-pty-perms.mjs",
     "fmt": "pnpm exec oxfmt .",
     "fmt:check": "pnpm exec oxfmt --check .",
-    "lint": "pnpm --filter @tau/desktop lint",
-    "lint:fix": "pnpm --filter @tau/desktop lint:fix",
+    "lint": "pnpm --filter @tau/desktop --filter @tau/shared lint",
+    "lint:fix": "pnpm --filter @tau/desktop --filter @tau/shared lint:fix",
     "check": "pnpm lint && pnpm fmt:check && pnpm tsc",
     "check:fix": "pnpm lint:fix && pnpm fmt",
     "tsc": "pnpm --filter @tau/desktop tsc"

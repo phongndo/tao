@@ -209,7 +209,7 @@ const WorkspaceServiceLiveValue: typeof WorkspaceService.Service = {
   getWorkspacePorts: (workspacePath) =>
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((decodedPath) =>
-        runCommand('lsof', ['+D', decodedPath, '-nP', '-iTCP', '-sTCP:LISTEN', '-Fpnc']),
+        runCommand('lsof', ['-a', '+D', decodedPath, '-nP', '-iTCP', '-sTCP:LISTEN', '-Fpnc']),
       ),
       Effect.flatMap(parsePorts),
       Effect.orElseSucceed(() => []),

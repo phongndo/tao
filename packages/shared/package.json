@@ -8,12 +8,15 @@
     "./workspace": "./src/workspace.ts"
   },
   "scripts": {
-    "tsc": "tsc --noEmit -p tsconfig.json"
+    "tsc": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint . --deny-warnings --report-unused-disable-directives",
+    "lint:fix": "oxlint . --fix"
   },
   "dependencies": {
     "effect": "4.0.0-beta.66"
   },
   "devDependencies": {
+    "oxlint": "^1.64.0",
     "typescript": "^6.0.3"
   }
 }
