@@ -69,7 +69,7 @@ export function TerminalPane({
   }, [sessionId])
 
   useEffect(() => {
-    if (isActive || focusToken > 0) {
+    if (isActive) {
       terminalRef.current?.focus()
     }
   }, [focusToken, isActive])

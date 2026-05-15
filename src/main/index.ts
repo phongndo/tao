@@ -154,7 +154,7 @@ function createWindow() {
       return
     }
 
-    if (input.control && !input.meta && !input.alt && !input.shift) {
+    if (input.control && input.shift && !input.meta && !input.alt) {
       const directionByKey: Record<string, PaneFocusDirection> = {
         h: 'left',
         j: 'down',
