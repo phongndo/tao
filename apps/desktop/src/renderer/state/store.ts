@@ -8,8 +8,9 @@ import { sanitizeTerminalTitle } from '../osc-title'
 import { effectLocalStorage } from '../storage'
 
 export const LOCAL_WORKSPACE_ID = 'tau:local'
+export const DEFAULT_WORKSPACE_CONTEXT_ID = 'workspace-default'
 
-export interface TauState {
+export interface WorkspaceContextState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
   tabs: Tab[]
@@ -18,6 +19,28 @@ export interface TauState {
   activePaneId: string | null
   sidebarExpanded: boolean
   sidebarWidth: number
+}
+
+export interface WorkspaceContext {
+  id: string
+  name: string
+  order: number
+  state: WorkspaceContextState
+}
+
+export interface TauState {
+  workspaceContexts: WorkspaceContext[]
+  activeWorkspaceContextId: string
+  workspaces: Workspace[]
+  activeWorkspaceId: string | null
+  tabs: Tab[]
+  activeTabId: string | null
+  panes: Pane[]
+  activePaneId: string | null
+  sidebarExpanded: boolean
+  sidebarWidth: number
+  addWorkspaceContext(name: string): void
+  selectWorkspaceContext(contextId: string): void
   addWorkspace(workspace: Workspace): void
   removeWorkspace(workspaceId: string): void
   selectWorkspace(workspaceId: string): void
@@ -114,7 +137,27 @@ const PersistedPaneSchema = Schema.Struct({
   status: Schema.optional(PaneStatusSchema),
 })
 
+const PersistedWorkspaceContextStateSchema = Schema.Struct({
+  workspaces: Schema.optional(Schema.Array(PersistedWorkspaceSchema)),
+  activeWorkspaceId: Schema.optional(Schema.NullOr(Schema.String)),
+  tabs: Schema.optional(Schema.Array(PersistedTabSchema)),
+  activeTabId: Schema.optional(Schema.NullOr(Schema.String)),
+  panes: Schema.optional(Schema.Array(PersistedPaneSchema)),
+  activePaneId: Schema.optional(Schema.NullOr(Schema.String)),
+  sidebarExpanded: Schema.optional(Schema.Boolean),
+  sidebarWidth: Schema.optional(Schema.Number),
+})
+
+const PersistedWorkspaceContextSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  order: Schema.optional(Schema.Number),
+  state: Schema.optional(PersistedWorkspaceContextStateSchema),
+})
+
 const PersistedTauStateSchema = Schema.Struct({
+  workspaceContexts: Schema.optional(Schema.Array(PersistedWorkspaceContextSchema)),
+  activeWorkspaceContextId: Schema.optional(Schema.String),
   workspaces: Schema.optional(Schema.Array(PersistedWorkspaceSchema)),
   activeWorkspaceId: Schema.optional(Schema.NullOr(Schema.String)),
   tabs: Schema.optional(Schema.Array(PersistedTabSchema)),
@@ -429,6 +472,56 @@ function ensureWorkspaceTabState(state: TauState, workspaceId: string): Partial<
 const initialLocalTab = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
 
 type PersistedTauState = Schema.Schema.Type<typeof PersistedTauStateSchema>
+type PersistedWorkspaceContextState = Schema.Schema.Type<
+  typeof PersistedWorkspaceContextStateSchema
+>
+
+function createEmptyWorkspaceContextState(): WorkspaceContextState {
+  const { tab, pane } = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
+  return {
+    workspaces: [],
+    activeWorkspaceId: null,
+    tabs: [tab],
+    activeTabId: tab.id,
+    panes: [pane],
+    activePaneId: pane.id,
+    sidebarExpanded: true,
+    sidebarWidth: 240,
+  }
+}
+
+function currentWorkspaceContextState(state: TauState): WorkspaceContextState {
+  return {
+    workspaces: state.workspaces,
+    activeWorkspaceId: state.activeWorkspaceId,
+    tabs: state.tabs,
+    activeTabId: state.activeTabId,
+    panes: state.panes,
+    activePaneId: state.activePaneId,
+    sidebarExpanded: state.sidebarExpanded,
+    sidebarWidth: state.sidebarWidth,
+  }
+}
+
+function restoreWorkspaceContextState(state: WorkspaceContextState): Partial<TauState> {
+  return {
+    workspaces: state.workspaces,
+    activeWorkspaceId: state.activeWorkspaceId,
+    tabs: state.tabs,
+    activeTabId: state.activeTabId,
+    panes: state.panes,
+    activePaneId: state.activePaneId,
+    sidebarExpanded: state.sidebarExpanded,
+    sidebarWidth: state.sidebarWidth,
+  }
+}
+
+function syncActiveWorkspaceContext(state: TauState): WorkspaceContext[] {
+  const snapshot = currentWorkspaceContextState(state)
+  return state.workspaceContexts.map((context) =>
+    context.id === state.activeWorkspaceContextId ? { ...context, state: snapshot } : context,
+  )
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -503,12 +596,11 @@ function decodePersistedLayout(
   }
 }
 
-function normalizePersistedState(persistedState: unknown): Partial<TauState> {
-  const decoded = Schema.decodeUnknownOption(PersistedTauStateSchema)(persistedState)
-  if (decoded._tag === 'None') return {}
-
-  const persisted = decoded.value as PersistedTauState
-  const workspaces = (persisted.workspaces ?? [])
+function normalizeWorkspaceContextState(
+  persisted: PersistedWorkspaceContextState | undefined,
+): WorkspaceContextState {
+  const contextState = persisted ?? {}
+  const workspaces = (contextState.workspaces ?? [])
     .filter(
       (workspace) => isNonEmptyString(workspace.id) && isNonEmptyString(workspace.projectPath),
     )
@@ -520,7 +612,7 @@ function normalizePersistedState(persistedState: unknown): Partial<TauState> {
       order,
     }))
 
-  const panes = (persisted.panes ?? [])
+  const panes = (contextState.panes ?? [])
     .filter((pane) => isNonEmptyString(pane.id) && isNonEmptyString(pane.tabId))
     .map<Pane>((pane) => ({
       ...pane,
@@ -536,7 +628,7 @@ function normalizePersistedState(persistedState: unknown): Partial<TauState> {
 
   const usedPaneIds = new Set<string>()
   const tabs = reorderAllWorkspaceTabs(
-    (persisted.tabs ?? []).flatMap<Tab>((tab) => {
+    (contextState.tabs ?? []).flatMap<Tab>((tab) => {
       if (!isNonEmptyString(tab.id) || !isNonEmptyString(tab.workspaceId)) return []
 
       const layout = decodePersistedLayout(tab.layout, paneIdsByTab.get(tab.id) ?? new Set())
@@ -559,16 +651,56 @@ function normalizePersistedState(persistedState: unknown): Partial<TauState> {
   return {
     workspaces,
     activeWorkspaceId:
-      persisted.activeWorkspaceId &&
-      workspaces.some((workspace) => workspace.id === persisted.activeWorkspaceId)
-        ? persisted.activeWorkspaceId
+      contextState.activeWorkspaceId &&
+      workspaces.some((workspace) => workspace.id === contextState.activeWorkspaceId)
+        ? contextState.activeWorkspaceId
         : null,
     tabs,
-    activeTabId: persisted.activeTabId ?? null,
+    activeTabId: contextState.activeTabId ?? null,
     panes: panes.filter((pane) => usedPaneIds.has(pane.id)),
-    activePaneId: persisted.activePaneId ?? null,
-    sidebarExpanded: persisted.sidebarExpanded ?? true,
-    sidebarWidth: finiteNumber(persisted.sidebarWidth ?? 240, 240),
+    activePaneId: contextState.activePaneId ?? null,
+    sidebarExpanded: contextState.sidebarExpanded ?? true,
+    sidebarWidth: finiteNumber(contextState.sidebarWidth ?? 240, 240),
+  }
+}
+
+function normalizePersistedState(persistedState: unknown): Partial<TauState> {
+  const decoded = Schema.decodeUnknownOption(PersistedTauStateSchema)(persistedState)
+  if (decoded._tag === 'None') return {}
+
+  const persisted = decoded.value as PersistedTauState
+  const activeContextId = persisted.activeWorkspaceContextId ?? DEFAULT_WORKSPACE_CONTEXT_ID
+  const workspaceContexts = (persisted.workspaceContexts ?? [])
+    .filter((context) => isNonEmptyString(context.id))
+    .sort((a, b) => finiteNumber(a.order ?? 0, 0) - finiteNumber(b.order ?? 0, 0))
+    .map<WorkspaceContext>((context, order) => ({
+      id: context.id,
+      name: sanitizeTerminalTitle(context.name) ?? `Workspace ${order + 1}`,
+      order,
+      state: normalizeWorkspaceContextState(context.state),
+    }))
+
+  const migratedState = normalizeWorkspaceContextState(persisted)
+  const contexts =
+    workspaceContexts.length > 0
+      ? workspaceContexts
+      : [
+          {
+            id: DEFAULT_WORKSPACE_CONTEXT_ID,
+            name: 'Main',
+            order: 0,
+            state: migratedState,
+          },
+        ]
+
+  const activeContext =
+    contexts.find((context) => context.id === activeContextId) ?? contexts[0] ?? null
+  if (!activeContext) return {}
+
+  return {
+    workspaceContexts: contexts,
+    activeWorkspaceContextId: activeContext.id,
+    ...activeContext.state,
   }
 }
 
@@ -577,22 +709,61 @@ function workspaceNameFallback(projectPath: string): string {
 }
 
 function repairPersistedState(state: TauState): TauState {
+  const workspaceContexts =
+    state.workspaceContexts.length > 0
+      ? state.workspaceContexts
+      : [
+          {
+            id: DEFAULT_WORKSPACE_CONTEXT_ID,
+            name: 'Main',
+            order: 0,
+            state: currentWorkspaceContextState(state),
+          },
+        ]
+  const activeWorkspaceContextId = workspaceContexts.some(
+    (context) => context.id === state.activeWorkspaceContextId,
+  )
+    ? state.activeWorkspaceContextId
+    : workspaceContexts[0].id
   const hasActiveWorkspace =
     state.activeWorkspaceId !== null &&
     state.workspaces.some((workspace) => workspace.id === state.activeWorkspaceId)
   const activeWorkspaceId = hasActiveWorkspace ? state.activeWorkspaceId : null
-  const nextState = { ...state, activeWorkspaceId }
+  const nextState = { ...state, workspaceContexts, activeWorkspaceContextId, activeWorkspaceId }
   const targetWorkspaceId = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
 
-  return {
+  const repairedState = {
     ...nextState,
     ...ensureWorkspaceTabState(nextState, targetWorkspaceId),
+  }
+
+  return {
+    ...repairedState,
+    workspaceContexts: syncActiveWorkspaceContext(repairedState),
   }
 }
 
 export const useTauStore = create<TauState>()(
   persist(
     (set) => ({
+      workspaceContexts: [
+        {
+          id: DEFAULT_WORKSPACE_CONTEXT_ID,
+          name: 'Main',
+          order: 0,
+          state: {
+            workspaces: [],
+            activeWorkspaceId: null,
+            tabs: [initialLocalTab.tab],
+            activeTabId: initialLocalTab.tab.id,
+            panes: [initialLocalTab.pane],
+            activePaneId: initialLocalTab.pane.id,
+            sidebarExpanded: true,
+            sidebarWidth: 240,
+          },
+        },
+      ],
+      activeWorkspaceContextId: DEFAULT_WORKSPACE_CONTEXT_ID,
       workspaces: [],
       activeWorkspaceId: null,
       tabs: [initialLocalTab.tab],
@@ -601,6 +772,36 @@ export const useTauStore = create<TauState>()(
       activePaneId: initialLocalTab.pane.id,
       sidebarExpanded: true,
       sidebarWidth: 240,
+      addWorkspaceContext: (name) =>
+        set((state) => {
+          const cleanName =
+            sanitizeTerminalTitle(name) ?? `Workspace ${state.workspaceContexts.length + 1}`
+          const context = {
+            id: createId('workspace'),
+            name: cleanName,
+            order: state.workspaceContexts.length,
+            state: createEmptyWorkspaceContextState(),
+          }
+
+          return {
+            workspaceContexts: [...syncActiveWorkspaceContext(state), context],
+            activeWorkspaceContextId: context.id,
+            ...restoreWorkspaceContextState(context.state),
+          }
+        }),
+      selectWorkspaceContext: (contextId) =>
+        set((state) => {
+          if (contextId === state.activeWorkspaceContextId) return {}
+          const contexts = syncActiveWorkspaceContext(state)
+          const context = contexts.find((candidate) => candidate.id === contextId)
+          if (!context) return {}
+
+          return {
+            workspaceContexts: contexts,
+            activeWorkspaceContextId: context.id,
+            ...restoreWorkspaceContextState(context.state),
+          }
+        }),
       addWorkspace: (workspace) =>
         set((state) => {
           const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)
@@ -877,6 +1078,8 @@ export const useTauStore = create<TauState>()(
       name: 'tau-workspaces',
       storage: createJSONStorage(() => effectLocalStorage),
       partialize: (state) => ({
+        workspaceContexts: syncActiveWorkspaceContext(state),
+        activeWorkspaceContextId: state.activeWorkspaceContextId,
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
         tabs: state.tabs,

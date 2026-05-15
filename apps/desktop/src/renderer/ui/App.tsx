@@ -29,6 +29,8 @@ import {
   type Tab,
   useTauStore,
   type Workspace,
+  type WorkspaceContext,
+  type WorkspaceContextState,
 } from '../state/store'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
@@ -445,6 +447,95 @@ const HeaderNavigation = memo(function HeaderNavigation({
   )
 })
 
+const WorkspaceContextSwitcher = memo(function WorkspaceContextSwitcher({
+  contexts,
+  activeContextId,
+  isCreating,
+  draftName,
+  onDraftNameChange,
+  onStartCreate,
+  onCancelCreate,
+  onCreate,
+  onSelectContext,
+}: {
+  contexts: WorkspaceContext[]
+  activeContextId: string
+  isCreating: boolean
+  draftName: string
+  onDraftNameChange(name: string): void
+  onStartCreate(): void
+  onCancelCreate(): void
+  onCreate(): void
+  onSelectContext(contextId: string): void
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (isCreating) inputRef.current?.focus()
+  }, [isCreating])
+
+  return (
+    <div className="workspace-context-switcher" aria-label="Workspaces">
+      {isCreating ? (
+        <form
+          className="workspace-context-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onCreate()
+          }}
+        >
+          <input
+            ref={inputRef}
+            className="workspace-context-input"
+            value={draftName}
+            placeholder="Workspace name"
+            onChange={(event) => onDraftNameChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                onCancelCreate()
+              }
+            }}
+          />
+          <button type="submit" className="icon-button" aria-label="Create workspace">
+            <FiPlus size={14} />
+          </button>
+        </form>
+      ) : null}
+      <div className="workspace-context-row">
+        {contexts.map((context) => {
+          const isActive = context.id === activeContextId
+          return (
+            <button
+              key={context.id}
+              type="button"
+              className={
+                isActive
+                  ? 'workspace-context-dot workspace-context-dot-active'
+                  : 'workspace-context-dot'
+              }
+              aria-label={context.name}
+              title={context.name}
+              onClick={() => onSelectContext(context.id)}
+            >
+              <span className="workspace-context-tooltip">{context.name}</span>
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          className="icon-button workspace-context-add-button"
+          aria-label="Add workspace"
+          title="Add workspace"
+          onClick={onStartCreate}
+        >
+          <FiPlus size={14} />
+        </button>
+      </div>
+    </div>
+  )
+})
+
 const PaneTile = memo(function PaneTile({
   pane,
   terminalCwd,
@@ -566,6 +657,8 @@ const PaneGrid = memo(function PaneGrid({
 })
 
 export function App() {
+  const workspaceContexts = useTauStore((state) => state.workspaceContexts)
+  const activeWorkspaceContextId = useTauStore((state) => state.activeWorkspaceContextId)
   const workspaces = useTauStore((state) => state.workspaces)
   const tabs = useTauStore((state) => state.tabs)
   const panes = useTauStore((state) => state.panes)
@@ -593,7 +686,11 @@ export function App() {
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
   const reorderWorkspace = useTauStore((state) => state.reorderWorkspace)
+  const addWorkspaceContext = useTauStore((state) => state.addWorkspaceContext)
+  const selectWorkspaceContext = useTauStore((state) => state.selectWorkspaceContext)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
+  const [isCreatingWorkspaceContext, setIsCreatingWorkspaceContext] = useState(false)
+  const [workspaceContextName, setWorkspaceContextName] = useState('')
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
     () =>
@@ -609,6 +706,41 @@ export function App() {
   const sortedWorkspaces = useMemo(
     () => [...workspaces].sort((a, b) => a.order - b.order),
     [workspaces],
+  )
+  const sortedWorkspaceContexts = useMemo(
+    () => [...workspaceContexts].sort((a, b) => a.order - b.order),
+    [workspaceContexts],
+  )
+  const activeWorkspaceContextState = useMemo<WorkspaceContextState>(
+    () => ({
+      workspaces,
+      activeWorkspaceId,
+      tabs,
+      activeTabId,
+      panes,
+      activePaneId,
+      sidebarExpanded,
+      sidebarWidth,
+    }),
+    [
+      activePaneId,
+      activeTabId,
+      activeWorkspaceId,
+      panes,
+      sidebarExpanded,
+      sidebarWidth,
+      tabs,
+      workspaces,
+    ],
+  )
+  const mountedWorkspaceContexts = useMemo(
+    () =>
+      sortedWorkspaceContexts.map((context) =>
+        context.id === activeWorkspaceContextId
+          ? { ...context, state: activeWorkspaceContextState }
+          : context,
+      ),
+    [activeWorkspaceContextId, activeWorkspaceContextState, sortedWorkspaceContexts],
   )
   const activeWorkspace = useMemo(
     () => sortedWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
@@ -628,23 +760,45 @@ export function App() {
     [activeWorkspaceKey, tabs],
   )
   const mountedTabs = useMemo(
-    () => [...tabs].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order),
-    [tabs],
+    () =>
+      mountedWorkspaceContexts
+        .flatMap((context) => context.state.tabs)
+        .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order),
+    [mountedWorkspaceContexts],
   )
   const activeTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
   )
-  const workspacePathById = useMemo(
-    () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
-    [workspaces],
+  const workspacePathByTabId = useMemo(() => {
+    const pathByTabId = new Map<string, string>()
+    for (const context of mountedWorkspaceContexts) {
+      const pathByWorkspaceId = new Map(
+        context.state.workspaces.map((workspace) => [workspace.id, workspace.projectPath]),
+      )
+      for (const tab of context.state.tabs) {
+        const projectPath = pathByWorkspaceId.get(tab.workspaceId)
+        if (projectPath) pathByTabId.set(tab.id, projectPath)
+      }
+    }
+
+    return pathByTabId
+  }, [mountedWorkspaceContexts])
+  const panesById = useMemo(
+    () =>
+      new Map(
+        mountedWorkspaceContexts.flatMap((context) =>
+          context.state.panes.map((pane) => [pane.id, pane] as const),
+        ),
+      ),
+    [mountedWorkspaceContexts],
   )
-  const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
     [terminalFocusCounts],
   )
-  const previousPaneIdsRef = useRef(new Set(panes.map((pane) => pane.id)))
+  const mountedPaneIds = useMemo(() => new Set(panesById.keys()), [panesById])
+  const previousPaneIdsRef = useRef(mountedPaneIds)
 
   useEffect(() => {
     ensureWorkspaceTab(activeWorkspaceKey)
@@ -655,14 +809,13 @@ export function App() {
   }, [activeTab])
 
   useEffect(() => {
-    const nextPaneIds = new Set(panes.map((pane) => pane.id))
     for (const paneId of previousPaneIdsRef.current) {
-      if (!nextPaneIds.has(paneId)) {
+      if (!mountedPaneIds.has(paneId)) {
         window.electronAPI.killPty(paneId)
       }
     }
-    previousPaneIdsRef.current = nextPaneIds
-  }, [panes])
+    previousPaneIdsRef.current = mountedPaneIds
+  }, [mountedPaneIds])
 
   useEffect(() => {
     const focusActiveTerminal = () => {
@@ -741,6 +894,23 @@ export function App() {
     })
   }
 
+  function handleCreateWorkspaceContext() {
+    const name = workspaceContextName.trim()
+    if (!name) return
+
+    addWorkspaceContext(name)
+    setWorkspaceContextName('')
+    setIsCreatingWorkspaceContext(false)
+  }
+
+  function handleStartCreateWorkspaceContext() {
+    if (isSidebarCompact) {
+      setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+      setSidebarExpanded(true)
+    }
+    setIsCreatingWorkspaceContext(true)
+  }
+
   function selectWorkspaceAtIndex(index: number) {
     const workspace = sortedWorkspaces[index]
     if (!workspace) return
@@ -805,6 +975,20 @@ export function App() {
               </div>
             ) : null}
           </div>
+          <WorkspaceContextSwitcher
+            contexts={sortedWorkspaceContexts}
+            activeContextId={activeWorkspaceContextId}
+            isCreating={isCreatingWorkspaceContext}
+            draftName={workspaceContextName}
+            onDraftNameChange={setWorkspaceContextName}
+            onStartCreate={handleStartCreateWorkspaceContext}
+            onCancelCreate={() => {
+              setIsCreatingWorkspaceContext(false)
+              setWorkspaceContextName('')
+            }}
+            onCreate={handleCreateWorkspaceContext}
+            onSelectContext={selectWorkspaceContext}
+          />
         </ResizeShell>
       ) : null}
       <section className="tau-main">
@@ -838,7 +1022,7 @@ export function App() {
                   >
                     <PaneGrid
                       tab={tab}
-                      terminalCwd={workspacePathById.get(tab.workspaceId)}
+                      terminalCwd={workspacePathByTabId.get(tab.id)}
                       panesById={panesById}
                       activePaneId={isTabActive ? activePaneId : null}
                       terminalFocusTokens={terminalFocusTokens}
