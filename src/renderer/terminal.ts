@@ -36,7 +36,12 @@ const THEME = {
 }
 
 const terminalFontFamily =
-  '"Symbols Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "SF Mono", Menlo, Monaco, monospace'
+  '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tau Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
+
+const tauSymbolsFontFamily = 'Tau Symbols Nerd Font Mono'
+const tauSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
+
+let terminalFontsLoad: Promise<void> | null = null
 
 let ghosttyLoad: Promise<Ghostty> | null = null
 
@@ -53,6 +58,43 @@ function loadGhostty(wasmUrl: string): Promise<Ghostty> {
   })
 
   return ghosttyLoad
+}
+
+async function loadTerminalFonts(): Promise<void> {
+  if (!('fonts' in document) || typeof FontFace === 'undefined') return
+
+  terminalFontsLoad ??= (async () => {
+    const source = new URL(
+      'fonts/nerd-fonts/SymbolsNerdFontMono-Regular.ttf',
+      window.location.href,
+    ).href
+    const descriptor = `14px "${tauSymbolsFontFamily}"`
+    let tauSymbolsFontFace = Array.from(document.fonts).find(
+      (fontFace) => fontFace.family === tauSymbolsFontFamily,
+    )
+
+    if (!tauSymbolsFontFace) {
+      tauSymbolsFontFace = new FontFace(tauSymbolsFontFamily, `url(${source})`, {
+        style: 'normal',
+        weight: '400',
+        display: 'block',
+      })
+
+      document.fonts.add(tauSymbolsFontFace)
+    }
+
+    await tauSymbolsFontFace.load()
+    await document.fonts.load(descriptor, tauSymbolsFontProbe)
+
+    if (tauSymbolsFontFace.status !== 'loaded') {
+      console.warn(`[terminal] bundled Nerd Font status: ${tauSymbolsFontFace.status}`)
+    }
+  })().catch((error) => {
+    terminalFontsLoad = null
+    console.warn('[terminal] failed to load bundled Nerd Font:', error)
+  })
+
+  return terminalFontsLoad
 }
 
 function renderTerminalError(container: HTMLElement, err: unknown) {
@@ -87,12 +129,14 @@ export async function createTerminal(
 
   const t0 = performance.now()
   const ptyReady = window.electronAPI.spawnPty(sessionId, 80, 24, options.cwd)
+  const fontsReady = loadTerminalFonts()
   let term: Terminal | null = null
 
   try {
     const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
       loadGhostty(wasmUrl),
       ptyReady,
+      fontsReady,
     ])
     updateStatus(`Ghostty WASM + PTY metadata ready in ${(performance.now() - t0).toFixed(0)}ms`)
 
