@@ -18,8 +18,7 @@ export interface ElectronAPI {
     callback: (info: { exitCode: number; signal?: number }) => void,
   ): () => void
   signalReady(): void
-  onToggleSidebar(callback: () => void): () => void
-  onAppCommand(command: AppCommand, callback: () => void): () => void
+  onAppCommand(callback: (command: AppCommand) => void): () => void
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<string | null>
   getGitWorktrees(workspacePath: string): Promise<WorktreeInfo[]>

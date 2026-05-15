@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, utilityProcess } from 'electron'
 import ptyServicePath from './pty-service?modulePath'
 import { getGitBranch, getGitWorktrees } from './workspace-service'
+import type { AppCommand, PaneFocusDirection } from '../shared/app-command'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
 
@@ -137,38 +138,72 @@ function createWindow() {
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
-    if (!input.meta || input.alt || input.control) return
 
     const key = input.key.toLowerCase()
+    const digitIndex = key >= '0' && key <= '9' ? (key === '0' ? 9 : Number(key) - 1) : null
+
+    if (input.meta && !input.alt && !input.control && !input.shift && digitIndex !== null) {
+      event.preventDefault()
+      sendAppCommand({ type: 'switch-workspace', index: digitIndex })
+      return
+    }
+
+    if (input.control && !input.meta && !input.alt && !input.shift && digitIndex !== null) {
+      event.preventDefault()
+      sendAppCommand({ type: 'switch-tab', index: digitIndex })
+      return
+    }
+
+    if (input.control && !input.meta && !input.alt && !input.shift) {
+      const directionByKey: Record<string, PaneFocusDirection> = {
+        h: 'left',
+        j: 'down',
+        k: 'up',
+        l: 'right',
+      }
+      const direction = directionByKey[key]
+      if (direction) {
+        event.preventDefault()
+        sendAppCommand({ type: 'focus-pane', direction })
+      }
+      return
+    }
+
+    if (!input.meta || input.alt || input.control) return
+
     if (key === 'b' && !input.shift) {
       event.preventDefault()
-      mainWindow?.webContents.send('app:toggle-sidebar')
+      sendAppCommand({ type: 'toggle-sidebar' })
       return
     }
 
     if (key === 't' && !input.shift) {
       event.preventDefault()
-      mainWindow?.webContents.send('app:new-tab')
+      sendAppCommand({ type: 'new-tab' })
       return
     }
 
     if (key === 'w' && !input.shift) {
       event.preventDefault()
-      mainWindow?.webContents.send('app:close-tab')
+      sendAppCommand({ type: 'close-tab' })
       return
     }
 
     if (key === 'w' && input.shift) {
       event.preventDefault()
-      mainWindow?.webContents.send('app:close-pane')
+      sendAppCommand({ type: 'close-pane' })
+      return
+    }
+
+    if (key === 'l' && !input.shift) {
+      event.preventDefault()
+      sendAppCommand({ type: 'focus-terminal' })
       return
     }
 
     if (key === 'd') {
       event.preventDefault()
-      mainWindow?.webContents.send(
-        input.shift ? 'app:split-pane-horizontal' : 'app:split-pane-vertical',
-      )
+      sendAppCommand({ type: input.shift ? 'split-pane-horizontal' : 'split-pane-vertical' })
     }
   })
 
@@ -189,6 +224,10 @@ function createWindow() {
     disposePtyService()
     mainWindow = null
   })
+}
+
+function sendAppCommand(command: AppCommand) {
+  mainWindow?.webContents.send('app:command', command)
 }
 
 // ─── PTY Service Lifecycle ───

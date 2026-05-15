@@ -1,6 +1,13 @@
+export type PaneFocusDirection = 'left' | 'down' | 'up' | 'right'
+
 export type AppCommand =
-  | 'new-tab'
-  | 'close-tab'
-  | 'close-pane'
-  | 'split-pane-vertical'
-  | 'split-pane-horizontal'
+  | { type: 'toggle-sidebar' }
+  | { type: 'new-tab' }
+  | { type: 'close-tab' }
+  | { type: 'close-pane' }
+  | { type: 'split-pane-vertical' }
+  | { type: 'split-pane-horizontal' }
+  | { type: 'switch-workspace'; index: number }
+  | { type: 'switch-tab'; index: number }
+  | { type: 'focus-pane'; direction: PaneFocusDirection }
+  | { type: 'focus-terminal' }

@@ -8,7 +8,7 @@ import type { WorktreeInfo } from '../shared/workspace'
 type PtyDataCallback = (data: string) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
-type AppShortcutCallback = () => void
+type AppCommandCallback = (command: AppCommand) => void
 
 type ReadyState = {
   size: PtySize | null
@@ -325,29 +325,15 @@ const electronAPI = {
   },
 
   /**
-   * Register a callback for app-owned shortcuts handled before terminal input.
-   */
-  onToggleSidebar(callback: AppShortcutCallback): () => void {
-    const listener = () => {
-      callback()
-    }
-    ipcRenderer.on('app:toggle-sidebar', listener)
-    return () => {
-      ipcRenderer.removeListener('app:toggle-sidebar', listener)
-    }
-  },
-
-  /**
    * Register a callback for a tab/pane command handled before terminal input.
    */
-  onAppCommand(command: AppCommand, callback: AppShortcutCallback): () => void {
-    const channel = `app:${command}`
-    const listener = () => {
-      callback()
+  onAppCommand(callback: AppCommandCallback): () => void {
+    const listener = (_event: Electron.IpcRendererEvent, command: AppCommand) => {
+      callback(command)
     }
-    ipcRenderer.on(channel, listener)
+    ipcRenderer.on('app:command', listener)
     return () => {
-      ipcRenderer.removeListener(channel, listener)
+      ipcRenderer.removeListener('app:command', listener)
     }
   },
 
