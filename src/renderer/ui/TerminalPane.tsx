@@ -8,7 +8,15 @@ type TerminalError = {
   detail?: string
 }
 
-export function TerminalPane({ sessionId }: { sessionId: string }) {
+export function TerminalPane({
+  sessionId,
+  isActive,
+  focusToken,
+}: {
+  sessionId: string
+  isActive: boolean
+  focusToken: number
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
@@ -59,6 +67,12 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       terminalRef.current = null
     }
   }, [sessionId])
+
+  useEffect(() => {
+    if (isActive) {
+      terminalRef.current?.focus()
+    }
+  }, [focusToken, isActive])
 
   return (
     <div className="terminal-container" ref={containerRef}>

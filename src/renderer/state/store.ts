@@ -1,6 +1,7 @@
 import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-component'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { PaneFocusDirection } from '../../shared/app-command'
 import type { WorktreeInfo } from '../../shared/workspace'
 
 export const LOCAL_WORKSPACE_ID = 'tau:local'
@@ -17,13 +18,16 @@ export interface TauState {
   addWorkspace(workspace: Workspace): void
   removeWorkspace(workspaceId: string): void
   selectWorkspace(workspaceId: string): void
+  selectWorkspaceByIndex(index: number): void
   ensureWorkspaceTab(workspaceId?: string): void
   newTab(workspaceId?: string): void
   closeTab(tabId: string): void
   closeActiveTab(): void
   selectTab(tabId: string): void
+  selectTabByIndex(index: number): void
   setTabLayout(tabId: string, layout: MosaicLayoutNode | null): void
   selectPane(paneId: string): void
+  selectPaneByDirection(direction: PaneFocusDirection): void
   splitPane(paneId: string, direction: MosaicDirection): void
   splitActivePane(direction: MosaicDirection): void
   closePane(paneId: string): void
@@ -123,6 +127,102 @@ function getPaneIdsInLayout(layout: MosaicLayoutNode): string[] {
 
 function getFirstPaneId(layout: MosaicLayoutNode): string | null {
   return getPaneIdsInLayout(layout)[0] ?? null
+}
+
+type PaneRect = {
+  id: string
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+function getPaneRects(layout: MosaicLayoutNode, bounds: Omit<PaneRect, 'id'>): PaneRect[] {
+  if (typeof layout === 'string') return [{ id: layout, ...bounds }]
+
+  const split = (layout.splitPercentage ?? 50) / 100
+  if (layout.direction === 'row') {
+    const splitX = bounds.left + (bounds.right - bounds.left) * split
+    return [
+      ...getPaneRects(layout.first, { ...bounds, right: splitX }),
+      ...getPaneRects(layout.second, { ...bounds, left: splitX }),
+    ]
+  }
+
+  const splitY = bounds.top + (bounds.bottom - bounds.top) * split
+  return [
+    ...getPaneRects(layout.first, { ...bounds, bottom: splitY }),
+    ...getPaneRects(layout.second, { ...bounds, top: splitY }),
+  ]
+}
+
+function getRectCenter(rect: PaneRect): { x: number; y: number } {
+  return {
+    x: (rect.left + rect.right) / 2,
+    y: (rect.top + rect.bottom) / 2,
+  }
+}
+
+function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean {
+  return Math.max(startA, startB) < Math.min(endA, endB)
+}
+
+function findPaneInDirection(
+  layout: MosaicLayoutNode,
+  paneId: string,
+  direction: PaneFocusDirection,
+): string | null {
+  const rects = getPaneRects(layout, { left: 0, top: 0, right: 1, bottom: 1 })
+  const activeRect = rects.find((rect) => rect.id === paneId)
+  if (!activeRect) return null
+
+  const activeCenter = getRectCenter(activeRect)
+  let best: { id: string; score: number } | null = null
+
+  for (const rect of rects) {
+    if (rect.id === paneId) continue
+
+    const center = getRectCenter(rect)
+    const horizontalOverlap = rangesOverlap(
+      activeRect.left,
+      activeRect.right,
+      rect.left,
+      rect.right,
+    )
+    const verticalOverlap = rangesOverlap(activeRect.top, activeRect.bottom, rect.top, rect.bottom)
+    let primaryDistance: number
+    let secondaryDistance: number
+
+    switch (direction) {
+      case 'left':
+        if (center.x >= activeCenter.x || !verticalOverlap) continue
+        primaryDistance = activeCenter.x - center.x
+        secondaryDistance = Math.abs(activeCenter.y - center.y)
+        break
+      case 'right':
+        if (center.x <= activeCenter.x || !verticalOverlap) continue
+        primaryDistance = center.x - activeCenter.x
+        secondaryDistance = Math.abs(activeCenter.y - center.y)
+        break
+      case 'up':
+        if (center.y >= activeCenter.y || !horizontalOverlap) continue
+        primaryDistance = activeCenter.y - center.y
+        secondaryDistance = Math.abs(activeCenter.x - center.x)
+        break
+      case 'down':
+        if (center.y <= activeCenter.y || !horizontalOverlap) continue
+        primaryDistance = center.y - activeCenter.y
+        secondaryDistance = Math.abs(activeCenter.x - center.x)
+        break
+    }
+
+    const score = primaryDistance * 100 + secondaryDistance
+    if (!best || score < best.score) {
+      best = { id: rect.id, score }
+    }
+  }
+
+  return best?.id ?? null
 }
 
 function layoutContainsPane(layout: MosaicLayoutNode, paneId: string): boolean {
@@ -356,6 +456,16 @@ export const useTauStore = create<TauState>()(
           activeWorkspaceId: workspaceId,
           ...ensureWorkspaceTabState(state, workspaceId),
         })),
+      selectWorkspaceByIndex: (index) =>
+        set((state) => {
+          const workspace = [...state.workspaces].sort((a, b) => a.order - b.order)[index]
+          if (!workspace) return {}
+
+          return {
+            activeWorkspaceId: workspace.id,
+            ...ensureWorkspaceTabState(state, workspace.id),
+          }
+        }),
       ensureWorkspaceTab: (workspaceId) =>
         set((state) =>
           ensureWorkspaceTabState(
@@ -391,6 +501,17 @@ export const useTauStore = create<TauState>()(
             activePaneId: getFirstPaneId(tab.layout),
           }
         }),
+      selectTabByIndex: (index) =>
+        set((state) => {
+          const workspaceId = state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+          const tab = getWorkspaceTabs(state.tabs, workspaceId)[index]
+          if (!tab) return {}
+
+          return {
+            activeTabId: tab.id,
+            activePaneId: getFirstPaneId(tab.layout),
+          }
+        }),
       setTabLayout: (tabId, layout) =>
         set((state) => {
           if (!layout) return closeTabState(state, tabId)
@@ -420,6 +541,19 @@ export const useTauStore = create<TauState>()(
           return {
             activePaneId: pane.id,
             activeTabId: pane.tabId,
+          }
+        }),
+      selectPaneByDirection: (direction) =>
+        set((state) => {
+          const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
+          const paneId = state.activePaneId ?? (activeTab ? getFirstPaneId(activeTab.layout) : null)
+          if (!activeTab || !paneId) return {}
+
+          const nextPaneId = findPaneInDirection(activeTab.layout, paneId, direction)
+          if (!nextPaneId) return {}
+
+          return {
+            activePaneId: nextPaneId,
           }
         }),
       splitPane: (paneId, direction) =>

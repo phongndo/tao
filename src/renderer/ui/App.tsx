@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mosaic, type MosaicNode } from 'react-mosaic-component'
+import type { AppCommand } from '../../shared/app-command'
 import {
   LOCAL_WORKSPACE_ID,
   type Pane,
@@ -301,11 +302,13 @@ const TabBar = memo(function TabBar({
 const PaneTile = memo(function PaneTile({
   pane,
   isActive,
+  focusToken,
   onClose,
   onSelect,
 }: {
   pane: Pane
   isActive: boolean
+  focusToken: number
   onClose(): void
   onSelect(): void
 }) {
@@ -333,7 +336,7 @@ const PaneTile = memo(function PaneTile({
         <X size={12} />
       </button>
       {pane.type === 'terminal' ? (
-        <TerminalPane sessionId={pane.id} />
+        <TerminalPane sessionId={pane.id} isActive={isActive} focusToken={focusToken} />
       ) : (
         <div className="pane-standby" aria-hidden="true">
           <Terminal size={18} />
@@ -347,6 +350,7 @@ const PaneGrid = memo(function PaneGrid({
   tab,
   panesById,
   activePaneId,
+  terminalFocusTokens,
   onClosePane,
   onLayoutRelease,
   onSelectPane,
@@ -354,6 +358,7 @@ const PaneGrid = memo(function PaneGrid({
   tab: Tab
   panesById: Map<string, Pane>
   activePaneId: string | null
+  terminalFocusTokens: ReadonlyMap<string, number>
   onClosePane(paneId: string): void
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
@@ -387,12 +392,13 @@ const PaneGrid = memo(function PaneGrid({
         <PaneTile
           pane={pane}
           isActive={pane.id === activePaneId}
+          focusToken={terminalFocusTokens.get(pane.id) ?? 0}
           onClose={() => onClosePane(pane.id)}
           onSelect={() => onSelectPane(pane.id)}
         />
       )
     },
-    [activePaneId, onClosePane, onSelectPane, panesById],
+    [activePaneId, onClosePane, onSelectPane, panesById, terminalFocusTokens],
   )
 
   return (
@@ -419,18 +425,22 @@ export function App() {
   const sidebarWidth = useTauStore((state) => state.sidebarWidth)
   const addWorkspace = useTauStore((state) => state.addWorkspace)
   const ensureWorkspaceTab = useTauStore((state) => state.ensureWorkspaceTab)
+  const selectWorkspaceByIndex = useTauStore((state) => state.selectWorkspaceByIndex)
   const newTab = useTauStore((state) => state.newTab)
   const closeTab = useTauStore((state) => state.closeTab)
   const closeActiveTab = useTauStore((state) => state.closeActiveTab)
   const selectTab = useTauStore((state) => state.selectTab)
+  const selectTabByIndex = useTauStore((state) => state.selectTabByIndex)
   const setTabLayout = useTauStore((state) => state.setTabLayout)
   const selectPane = useTauStore((state) => state.selectPane)
+  const selectPaneByDirection = useTauStore((state) => state.selectPaneByDirection)
   const splitActivePane = useTauStore((state) => state.splitActivePane)
   const closePane = useTauStore((state) => state.closePane)
   const closeActivePane = useTauStore((state) => state.closeActivePane)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTauStore((state) => state.toggleSidebar)
+  const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
     () =>
@@ -456,6 +466,10 @@ export function App() {
     [activeTabId, workspaceTabs],
   )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
+  const terminalFocusTokens = useMemo(
+    () => new Map(Object.entries(terminalFocusCounts)),
+    [terminalFocusCounts],
+  )
   const previousPaneIdsRef = useRef(new Set(panes.map((pane) => pane.id)))
 
   useEffect(() => {
@@ -473,31 +487,63 @@ export function App() {
   }, [panes])
 
   useEffect(() => {
-    const unsubscribeToggleSidebar = window.electronAPI.onToggleSidebar(toggleSidebar)
-    const unsubscribeNewTab = window.electronAPI.onAppCommand('new-tab', () => {
-      newTab(activeWorkspaceKey)
-    })
-    const unsubscribeCloseTab = window.electronAPI.onAppCommand('close-tab', closeActiveTab)
-    const unsubscribeClosePane = window.electronAPI.onAppCommand('close-pane', closeActivePane)
-    const unsubscribeSplitVertical = window.electronAPI.onAppCommand('split-pane-vertical', () => {
-      splitActivePane('row')
-    })
-    const unsubscribeSplitHorizontal = window.electronAPI.onAppCommand(
-      'split-pane-horizontal',
-      () => {
-        splitActivePane('column')
-      },
-    )
+    const focusActiveTerminal = () => {
+      const paneId = useTauStore.getState().activePaneId
+      if (!paneId) return
 
-    return () => {
-      unsubscribeToggleSidebar()
-      unsubscribeNewTab()
-      unsubscribeCloseTab()
-      unsubscribeClosePane()
-      unsubscribeSplitVertical()
-      unsubscribeSplitHorizontal()
+      setTerminalFocusCounts((counts) => ({
+        ...counts,
+        [paneId]: (counts[paneId] ?? 0) + 1,
+      }))
     }
-  }, [activeWorkspaceKey, closeActivePane, closeActiveTab, newTab, splitActivePane, toggleSidebar])
+
+    const runCommand = (command: AppCommand) => {
+      switch (command.type) {
+        case 'toggle-sidebar':
+          toggleSidebar()
+          break
+        case 'new-tab':
+          newTab(activeWorkspaceKey)
+          break
+        case 'close-tab':
+          closeActiveTab()
+          break
+        case 'close-pane':
+          closeActivePane()
+          break
+        case 'split-pane-vertical':
+          splitActivePane('row')
+          break
+        case 'split-pane-horizontal':
+          splitActivePane('column')
+          break
+        case 'switch-workspace':
+          selectWorkspaceByIndex(command.index)
+          break
+        case 'switch-tab':
+          selectTabByIndex(command.index)
+          break
+        case 'focus-pane':
+          selectPaneByDirection(command.direction)
+          break
+        case 'focus-terminal':
+          focusActiveTerminal()
+          break
+      }
+    }
+
+    return window.electronAPI.onAppCommand(runCommand)
+  }, [
+    activeWorkspaceKey,
+    closeActivePane,
+    closeActiveTab,
+    newTab,
+    selectPaneByDirection,
+    selectTabByIndex,
+    selectWorkspaceByIndex,
+    splitActivePane,
+    toggleSidebar,
+  ])
 
   async function handleAddWorkspace() {
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
@@ -621,6 +667,7 @@ export function App() {
                 tab={activeTab}
                 panesById={panesById}
                 activePaneId={activePaneId}
+                terminalFocusTokens={terminalFocusTokens}
                 onClosePane={closePane}
                 onLayoutRelease={setTabLayout}
                 onSelectPane={selectPane}
