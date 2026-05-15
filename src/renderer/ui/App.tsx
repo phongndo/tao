@@ -1,8 +1,9 @@
 import {
-  FiChevronsLeft,
-  FiChevronsRight,
+  FiChevronLeft,
+  FiChevronRight,
   FiFolderPlus,
   FiGitBranch,
+  FiMenu,
   FiPlus,
   FiTerminal,
   FiTrash2,
@@ -28,14 +29,13 @@ import {
   useTauStore,
   type Workspace,
 } from '../state/store'
-import { useGitBranch, useGitWorktrees } from '../workspaceQueries'
+import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
-const SIDEBAR_COLLAPSED_WIDTH = 52
 const SIDEBAR_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
-const SIDEBAR_COLLAPSE_THRESHOLD = 120
+const SIDEBAR_HIDE_THRESHOLD = 132
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tau-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
@@ -75,7 +75,6 @@ function WorkspaceItem({
   const removeWorkspace = useTauStore((state) => state.removeWorkspace)
   const isActive = activeWorkspaceId === workspace.id
   const branch = useGitBranch(workspace.projectPath, isActive)
-  const worktrees = useGitWorktrees(workspace.projectPath, isActive)
   const branchLabel = branch.isError
     ? 'git error'
     : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
@@ -101,108 +100,41 @@ function WorkspaceItem({
         onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
       }}
     >
-      <div className="workspace-row">
-        <button
-          type="button"
-          className="workspace-select-button"
-          onClick={() => selectWorkspace(workspace.id)}
-          aria-pressed={isActive}
-        >
-          <span className="workspace-title">{workspace.name}</span>
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={`Remove ${workspace.name}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            removeWorkspace(workspace.id)
-          }}
-        >
-          <FiTrash2 size={13} />
-        </button>
-      </div>
-      <span className="workspace-path">{workspace.projectPath}</span>
-      <span className="workspace-meta-row">
-        <FiGitBranch size={12} />
-        <span>{branchLabel}</span>
-      </span>
-      {worktrees.isError ? (
-        <span className="worktree-error">worktrees unavailable</span>
-      ) : worktrees.data && worktrees.data.length > 1 ? (
-        <span className="worktree-list">
-          {worktrees.data.map((worktree) => (
-            <span className="worktree-item" key={worktree.path}>
-              {workspaceNameFromPath(worktree.path)}
-              {worktree.branch ? <span className="worktree-branch">{worktree.branch}</span> : null}
-            </span>
-          ))}
+      <button
+        type="button"
+        className="workspace-select-button"
+        onClick={() => selectWorkspace(workspace.id)}
+        aria-pressed={isActive}
+      >
+        <span className="workspace-title">{workspace.name}</span>
+        <span className="workspace-branch-pill">
+          <FiGitBranch size={12} />
+          <span>{branchLabel}</span>
         </span>
-      ) : null}
+      </button>
+      <button
+        type="button"
+        className="icon-button workspace-danger-button"
+        aria-label={`Remove ${workspace.name}`}
+        title="Remove workspace"
+        onClick={(event) => {
+          event.stopPropagation()
+          removeWorkspace(workspace.id)
+        }}
+      >
+        <FiTrash2 size={13} />
+      </button>
     </div>
-  )
-}
-
-function CollapsedWorkspaceItem({
-  workspace,
-  onReorderWorkspace,
-}: {
-  workspace: Workspace
-  onReorderWorkspace(
-    workspaceId: string,
-    targetWorkspaceId: string,
-    placement: ReorderPlacement,
-  ): void
-}) {
-  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
-  const selectWorkspace = useTauStore((state) => state.selectWorkspace)
-  const isActive = activeWorkspaceId === workspace.id
-  const label = workspace.name.trim().slice(0, 1).toUpperCase() || 'W'
-
-  return (
-    <button
-      type="button"
-      className={
-        isActive
-          ? 'collapsed-workspace-button collapsed-workspace-button-active'
-          : 'collapsed-workspace-button'
-      }
-      title={workspace.name}
-      aria-label={workspace.name}
-      aria-pressed={isActive}
-      draggable
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = 'move'
-        event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
-        event.dataTransfer.setData('text/plain', workspace.id)
-      }}
-      onDragOver={(event) => {
-        if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = 'move'
-      }}
-      onDrop={(event) => {
-        const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
-        if (!workspaceId || workspaceId === workspace.id) return
-        event.preventDefault()
-        onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
-      }}
-      onClick={() => selectWorkspace(workspace.id)}
-    >
-      <span>{label}</span>
-    </button>
   )
 }
 
 function ResizeShell({
   children,
   width,
-  isCollapsed,
   onResize,
 }: {
   children: ReactNode
   width: number
-  isCollapsed: boolean
   onResize(width: number): void
 }) {
   const [isResizing, setIsResizing] = useState(false)
@@ -270,7 +202,7 @@ function ResizeShell({
       // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="separator"
       aria-orientation="vertical"
-      aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
+      aria-valuemin={SIDEBAR_MIN_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
       aria-valuenow={width}
       aria-label="Resize sidebar"
@@ -292,12 +224,12 @@ function ResizeShell({
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
-          onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : width + SIDEBAR_KEYBOARD_RESIZE_STEP)
+          onResize(width + SIDEBAR_KEYBOARD_RESIZE_STEP)
           return
         }
         if (event.key === 'Home') {
           event.preventDefault()
-          onResize(SIDEBAR_COLLAPSED_WIDTH)
+          onResize(0)
           return
         }
         if (event.key === 'End') {
@@ -307,7 +239,7 @@ function ResizeShell({
         }
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
-          onResize(isCollapsed ? SIDEBAR_DEFAULT_WIDTH : SIDEBAR_COLLAPSED_WIDTH)
+          onResize(0)
         }
       }}
       onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
@@ -315,11 +247,7 @@ function ResizeShell({
   )
 
   return (
-    <aside
-      className={isCollapsed ? 'tau-sidebar tau-sidebar-collapsed' : 'tau-sidebar'}
-      style={{ width }}
-      aria-label="Workspaces"
-    >
+    <aside className="tau-sidebar" style={{ width }} aria-label="Workspaces">
       {children}
       {resizeHandle}
     </aside>
@@ -329,6 +257,12 @@ function ResizeShell({
 const TabBar = memo(function TabBar({
   tabs,
   activeTabId,
+  isSidebarVisible,
+  canGoPreviousWorkspace,
+  canGoNextWorkspace,
+  onToggleSidebar,
+  onPreviousWorkspace,
+  onNextWorkspace,
   onNewTab,
   onSelectTab,
   onCloseTab,
@@ -336,6 +270,12 @@ const TabBar = memo(function TabBar({
 }: {
   tabs: Tab[]
   activeTabId: string | null
+  isSidebarVisible: boolean
+  canGoPreviousWorkspace: boolean
+  canGoNextWorkspace: boolean
+  onToggleSidebar(): void
+  onPreviousWorkspace(): void
+  onNextWorkspace(): void
   onNewTab(): void
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
@@ -343,6 +283,37 @@ const TabBar = memo(function TabBar({
 }) {
   return (
     <div className="tab-bar">
+      <div className="titlebar-navigation">
+        <button
+          type="button"
+          className="icon-button titlebar-button"
+          aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+          title={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+          onClick={onToggleSidebar}
+        >
+          <FiMenu size={15} />
+        </button>
+        <button
+          type="button"
+          className="icon-button titlebar-button"
+          aria-label="Previous workspace"
+          title="Previous workspace"
+          disabled={!canGoPreviousWorkspace}
+          onClick={onPreviousWorkspace}
+        >
+          <FiChevronLeft size={15} />
+        </button>
+        <button
+          type="button"
+          className="icon-button titlebar-button"
+          aria-label="Next workspace"
+          title="Next workspace"
+          disabled={!canGoNextWorkspace}
+          onClick={onNextWorkspace}
+        >
+          <FiChevronRight size={15} />
+        </button>
+      </div>
       <div className="tab-list" role="tablist" aria-label="Terminal tabs">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
@@ -409,7 +380,6 @@ const PaneTile = memo(function PaneTile({
   terminalCwd,
   isActive,
   focusToken,
-  onClose,
   onSelect,
   onTitleChange,
 }: {
@@ -417,7 +387,6 @@ const PaneTile = memo(function PaneTile({
   terminalCwd?: string
   isActive: boolean
   focusToken: number
-  onClose(): void
   onSelect(): void
   onTitleChange(title: string): void
 }) {
@@ -438,21 +407,6 @@ const PaneTile = memo(function PaneTile({
           aria-label={`Pane status: ${status}`}
         />
       )}
-      <button
-        type="button"
-        className="pane-close-button"
-        aria-label={`Close ${pane.name}`}
-        title="Close pane"
-        onPointerDown={(event) => {
-          event.stopPropagation()
-        }}
-        onClick={(event) => {
-          event.stopPropagation()
-          onClose()
-        }}
-      >
-        <FiX size={12} />
-      </button>
       {pane.type === 'terminal' ? (
         <TerminalPane
           sessionId={pane.id}
@@ -476,7 +430,6 @@ const PaneGrid = memo(function PaneGrid({
   panesById,
   activePaneId,
   terminalFocusTokens,
-  onClosePane,
   onLayoutRelease,
   onSelectPane,
   onPaneTitle,
@@ -486,7 +439,6 @@ const PaneGrid = memo(function PaneGrid({
   panesById: Map<string, Pane>
   activePaneId: string | null
   terminalFocusTokens: ReadonlyMap<string, number>
-  onClosePane(paneId: string): void
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
   onPaneTitle(paneId: string, title: string): void
@@ -522,21 +474,12 @@ const PaneGrid = memo(function PaneGrid({
           terminalCwd={terminalCwd}
           isActive={pane.id === activePaneId}
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
-          onClose={() => onClosePane(pane.id)}
           onSelect={() => onSelectPane(pane.id)}
           onTitleChange={(title) => onPaneTitle(pane.id, title)}
         />
       )
     },
-    [
-      activePaneId,
-      onClosePane,
-      onPaneTitle,
-      onSelectPane,
-      panesById,
-      terminalCwd,
-      terminalFocusTokens,
-    ],
+    [activePaneId, onPaneTitle, onSelectPane, panesById, terminalCwd, terminalFocusTokens],
   )
 
   return (
@@ -575,7 +518,6 @@ export function App() {
   const selectPaneByDirection = useTauStore((state) => state.selectPaneByDirection)
   const setPaneTitle = useTauStore((state) => state.setPaneTitle)
   const splitActivePane = useTauStore((state) => state.splitActivePane)
-  const closePane = useTauStore((state) => state.closePane)
   const closeActivePane = useTauStore((state) => state.closeActivePane)
   const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
@@ -594,7 +536,20 @@ export function App() {
       ),
     [sidebarWidth],
   )
-  const renderedSidebarWidth = sidebarExpanded ? sidebarSize : SIDEBAR_COLLAPSED_WIDTH
+  const sortedWorkspaces = useMemo(
+    () => [...workspaces].sort((a, b) => a.order - b.order),
+    [workspaces],
+  )
+  const activeWorkspace = useMemo(
+    () => sortedWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
+    [activeWorkspaceId, sortedWorkspaces],
+  )
+  const activeWorkspaceIndex = activeWorkspace
+    ? sortedWorkspaces.findIndex((workspace) => workspace.id === activeWorkspace.id)
+    : -1
+  const canGoPreviousWorkspace = activeWorkspaceIndex > 0
+  const canGoNextWorkspace =
+    activeWorkspaceIndex >= 0 && activeWorkspaceIndex < sortedWorkspaces.length - 1
   const workspaceTabs = useMemo(
     () =>
       tabs
@@ -713,9 +668,15 @@ export function App() {
     })
   }
 
+  function selectWorkspaceAtIndex(index: number) {
+    const workspace = sortedWorkspaces[index]
+    if (!workspace) return
+    useTauStore.getState().selectWorkspace(workspace.id)
+  }
+
   const handleResizeSidebar = useCallback(
     (nextWidth: number) => {
-      if (nextWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
+      if (nextWidth < SIDEBAR_HIDE_THRESHOLD) {
         setSidebarExpanded(false)
         return
       }
@@ -727,38 +688,21 @@ export function App() {
     [setSidebarExpanded, setSidebarWidth],
   )
 
-  const sortedWorkspaces = [...workspaces].sort((a, b) => a.order - b.order)
-
   return (
-    <div className="tau-shell">
-      <ResizeShell
-        width={renderedSidebarWidth}
-        isCollapsed={!sidebarExpanded}
-        onResize={handleResizeSidebar}
-      >
-        {sidebarExpanded ? (
+    <div className={sidebarExpanded ? 'tau-shell' : 'tau-shell tau-shell-sidebar-hidden'}>
+      {sidebarExpanded ? (
+        <ResizeShell width={sidebarSize} onResize={handleResizeSidebar}>
           <div className="sidebar-content">
-            <div className="sidebar-header">
-              <span className="sidebar-title">Tau</span>
-              <div className="sidebar-header-actions">
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Collapse sidebar"
-                  title="Collapse sidebar"
-                  onClick={() => setSidebarExpanded(false)}
-                >
-                  <FiChevronsLeft size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="icon-button add-workspace-button"
-                  aria-label="Add workspace"
-                  onClick={handleAddWorkspace}
-                >
-                  <FiFolderPlus size={15} />
-                </button>
-              </div>
+            <div className="sidebar-top-actions">
+              <button
+                type="button"
+                className="icon-button add-workspace-button"
+                aria-label="Add workspace"
+                title="Add workspace"
+                onClick={handleAddWorkspace}
+              >
+                <FiFolderPlus size={15} />
+              </button>
             </div>
             {workspaces.length > 0 ? (
               <div className="workspace-list">
@@ -770,50 +714,21 @@ export function App() {
                   />
                 ))}
               </div>
-            ) : (
-              <div className="workspace-placeholder">
-                <span className="workspace-name">No workspaces</span>
-                <span className="workspace-meta">Add a project directory</span>
-              </div>
-            )}
+            ) : null}
           </div>
-        ) : (
-          <div className="collapsed-sidebar-content">
-            <button
-              type="button"
-              className="collapsed-sidebar-toggle"
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-              onClick={() => setSidebarExpanded(true)}
-            >
-              <FiChevronsRight size={16} />
-            </button>
-            <button
-              type="button"
-              className="collapsed-sidebar-toggle"
-              aria-label="Add workspace"
-              title="Add workspace"
-              onClick={handleAddWorkspace}
-            >
-              <FiFolderPlus size={16} />
-            </button>
-            <div className="collapsed-workspace-list">
-              {sortedWorkspaces.map((workspace) => (
-                <CollapsedWorkspaceItem
-                  key={workspace.id}
-                  workspace={workspace}
-                  onReorderWorkspace={reorderWorkspace}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-      </ResizeShell>
+        </ResizeShell>
+      ) : null}
       <section className="tau-main">
         <main className="main-content">
           <TabBar
             tabs={workspaceTabs}
             activeTabId={activeTab?.id ?? null}
+            isSidebarVisible={sidebarExpanded}
+            canGoPreviousWorkspace={canGoPreviousWorkspace}
+            canGoNextWorkspace={canGoNextWorkspace}
+            onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+            onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
+            onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
             onNewTab={() => newTab(activeWorkspaceKey)}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
@@ -828,7 +743,6 @@ export function App() {
                 panesById={panesById}
                 activePaneId={activePaneId}
                 terminalFocusTokens={terminalFocusTokens}
-                onClosePane={closePane}
                 onLayoutRelease={setTabLayout}
                 onSelectPane={selectPane}
                 onPaneTitle={setPaneTitle}

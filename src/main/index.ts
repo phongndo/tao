@@ -172,6 +172,12 @@ function createWindow() {
     }
 
     if (input.control && !input.meta && !input.alt && !input.shift) {
+      if (key === 'd') {
+        event.preventDefault()
+        sendAppCommand({ type: 'close-pane' })
+        return
+      }
+
       const directionByKey: Record<string, PaneFocusDirection> = {
         h: 'left',
         j: 'down',

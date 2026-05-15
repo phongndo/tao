@@ -47,11 +47,8 @@ body {
   border-right: 1px solid #28282c;
 }
 
-.tau-sidebar-collapsed {
-  background: #18181a;
-}
-
 .sidebar-content {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -60,24 +57,14 @@ body {
   padding-top: 44px;
 }
 
-.sidebar-header {
-  min-height: 32px;
+.sidebar-top-actions {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  height: 30px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.sidebar-title {
-  color: #cac9dd;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.sidebar-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  -webkit-app-region: no-drag;
 }
 
 .icon-button {
@@ -101,83 +88,31 @@ body {
   outline: none;
 }
 
+.icon-button:disabled,
+.titlebar-button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.icon-button:disabled:hover,
+.titlebar-button:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  color: #9699a8;
+}
+
 .add-workspace-button {
   flex: 0 0 auto;
-}
-
-.collapsed-sidebar-content {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 6px;
-  padding-top: 44px;
-}
-
-.collapsed-sidebar-toggle,
-.collapsed-workspace-button {
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #9699a8;
-  background: transparent;
-  cursor: pointer;
-}
-
-.collapsed-sidebar-toggle:hover,
-.collapsed-sidebar-toggle:focus-visible,
-.collapsed-workspace-button:hover,
-.collapsed-workspace-button:focus-visible {
-  color: #cac9dd;
-  border-color: #38383d;
-  background: #242428;
-  outline: none;
-}
-
-.collapsed-workspace-list {
-  width: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  overflow: auto;
-}
-
-.collapsed-workspace-button {
-  position: relative;
-  color: #c9c7cd;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.collapsed-workspace-button-active {
-  border-color: #424246;
-  background: #242428;
-}
-
-.collapsed-workspace-button-active::before {
-  position: absolute;
-  top: 7px;
-  bottom: 7px;
-  left: -6px;
-  width: 2px;
-  border-radius: 999px;
-  background: #cac9dd;
-  content: '';
 }
 
 .workspace-list {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
+  margin: 0 -12px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .workspace-placeholder {
@@ -203,56 +138,66 @@ body {
 
 .workspace-item {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  padding: 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  min-height: 46px;
+  padding: 0 8px 0 12px;
+  border: 0;
+  border-bottom: 1px solid #242428;
+  border-radius: 0;
   background: transparent;
   color: inherit;
   cursor: default;
   text-align: left;
   user-select: none;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .workspace-item[draggable='true'],
-.collapsed-workspace-button[draggable='true'],
 .tab-item[draggable='true'] {
   cursor: grab;
 }
 
 .workspace-item[draggable='true']:active,
-.collapsed-workspace-button[draggable='true']:active,
 .tab-item[draggable='true']:active {
   cursor: grabbing;
 }
 
 .workspace-item:hover {
-  border-color: #303035;
   background: #1f1f22;
 }
 
 .workspace-item-active {
-  border-color: #424246;
-  background: #242428;
+  position: relative;
+  background: #25262b;
 }
 
-.workspace-row,
-.workspace-meta-row,
-.worktree-item {
+.workspace-item-active::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: #c9c7cd;
+  content: '';
+}
+
+.workspace-branch-pill {
   min-width: 0;
   display: flex;
   align-items: center;
 }
 
-.workspace-row {
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .workspace-select-button {
   min-width: 0;
   flex: 1 1 auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -261,8 +206,7 @@ body {
 }
 
 .workspace-select-button:focus-visible {
-  outline: 1px solid #424246;
-  outline-offset: 2px;
+  outline: none;
 }
 
 .workspace-title {
@@ -284,44 +228,18 @@ body {
   white-space: nowrap;
 }
 
-.workspace-meta-row {
+.workspace-branch-pill {
   gap: 5px;
   color: #9699a8;
   font-size: 11px;
+  line-height: 1.25;
 }
 
-.workspace-meta-row span {
+.workspace-branch-pill span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.worktree-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-left: 17px;
-}
-
-.worktree-item {
-  gap: 6px;
-  color: #9699a8;
-  font-size: 10px;
-}
-
-.worktree-branch {
-  min-width: 0;
-  overflow: hidden;
-  color: #747783;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.worktree-error {
-  padding-left: 17px;
-  color: #f5a191;
-  font-size: 10px;
 }
 
 .resize-handle {
@@ -379,27 +297,42 @@ body {
 }
 
 .tab-bar {
-  height: 36px;
+  height: 42px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 0 8px;
   border-bottom: 1px solid #242428;
   background: #18181a;
   -webkit-app-region: drag;
 }
 
-.tau-sidebar-collapsed + .tau-main .tab-bar {
-  padding-left: 52px;
+.tau-shell-sidebar-hidden .tab-bar {
+  padding-left: 92px;
+}
+
+.titlebar-navigation {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-button {
+  width: 24px;
+  height: 24px;
 }
 
 .tab-list {
   min-width: 0;
+  align-self: stretch;
   flex: 1 1 auto;
   display: flex;
-  align-items: center;
-  gap: 4px;
+  align-items: stretch;
+  gap: 0;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-app-region: no-drag;
@@ -408,24 +341,38 @@ body {
 .tab-item {
   min-width: 108px;
   max-width: 220px;
-  height: 26px;
+  height: auto;
   display: flex;
   align-items: center;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  border: 0;
+  border-left: 1px solid #242428;
+  border-radius: 0;
   background: transparent;
   user-select: none;
   -webkit-app-region: no-drag;
 }
 
+.tab-item:last-child {
+  border-right: 1px solid #242428;
+}
+
 .tab-item:hover {
-  border-color: #303035;
   background: #1f1f22;
 }
 
 .tab-item-active {
-  border-color: #424246;
-  background: #242428;
+  position: relative;
+  background: #25262b;
+}
+
+.tab-item-active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: #c9c7cd;
+  content: '';
 }
 
 .tab-select-button,
@@ -444,7 +391,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 7px;
+  padding: 0 10px;
   color: #c9c7cd;
   cursor: pointer;
 }
@@ -459,14 +406,13 @@ body {
 }
 
 .tab-close-button {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 100%;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-right: 2px;
-  border-radius: 4px;
+  border-radius: 0;
   color: #747783;
   cursor: pointer;
 }
@@ -554,24 +500,6 @@ body {
   outline: none;
 }
 
-.pane-close-button {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #303035;
-  border-radius: 4px;
-  background: #18181a;
-  color: #747783;
-  cursor: pointer;
-  opacity: 0;
-}
-
 .pane-status {
   position: absolute;
   top: 10px;
@@ -602,18 +530,6 @@ body {
   border-color: #aca1cf;
   background: #aca1cf;
   box-shadow: 0 0 0 4px rgb(172 161 207 / 14%);
-}
-
-.pane-tile:hover .pane-close-button,
-.pane-close-button:focus-visible {
-  opacity: 1;
-}
-
-.pane-close-button:hover,
-.pane-close-button:focus-visible {
-  border-color: #424246;
-  color: #cac9dd;
-  outline: none;
 }
 
 .pane-tile-active {
@@ -663,7 +579,7 @@ body {
 .terminal-container {
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: 10px 12px;
   border-radius: 0;
   /*
    * CSS containment: tells the browser this subtree is self-contained.
@@ -683,8 +599,14 @@ body {
   isolation: isolate;
 }
 
+.terminal-surface {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
 /* ── Canvas: crisp text, GPU layer ── */
-.terminal-container canvas {
+.terminal-surface canvas {
   display: block;
   image-rendering: auto;
   /*
@@ -702,14 +624,14 @@ body {
 }
 
 /* ── Hidden textarea (for focus/IME) ── */
-.terminal-container textarea {
+.terminal-surface textarea {
   opacity: 0;
   position: absolute;
   pointer-events: none;
 }
 
 /* ── Selection color overrides ── */
-.terminal-container ::selection {
+.terminal-surface ::selection {
   background: #2a2a2d;
   color: #c1c0d4;
 }

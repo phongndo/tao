@@ -21,7 +21,7 @@ export function TerminalPane({
   focusToken: number
   onTitleChange?(title: string): void
 }) {
-  const containerRef = useRef<HTMLDivElement | null>(null)
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const onTitleChangeRef = useRef(onTitleChange)
   const cwdRef = useRef(cwd)
@@ -39,8 +39,8 @@ export function TerminalPane({
     let disposed = false
 
     async function mountTerminal() {
-      const container = containerRef.current
-      if (!container) return
+      const surface = surfaceRef.current
+      if (!surface) return
 
       if (!window.electronAPI) {
         setTerminalError({
@@ -52,7 +52,7 @@ export function TerminalPane({
 
       try {
         setTerminalError(null)
-        const terminal = await createTerminal(container, sessionId, {
+        const terminal = await createTerminal(surface, sessionId, {
           cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
         })
@@ -103,7 +103,8 @@ export function TerminalPane({
   }, [focusToken, isActive])
 
   return (
-    <div className="terminal-container" ref={containerRef}>
+    <div className="terminal-container">
+      <div className="terminal-surface" ref={surfaceRef} />
       {terminalError ? (
         <div className="terminal-error">
           {terminalError.title ? <h2>{terminalError.title}</h2> : null}
