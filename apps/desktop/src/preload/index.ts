@@ -6,7 +6,6 @@ import type { AppCommand } from '@tau/shared/app-command'
 import {
   WorkspaceError,
   WorkspacePickDirectoryResponseSchema,
-  WORKSPACE_IPC_TIMEOUT_MS,
   decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
   workspaceErrorFromUnknown,
@@ -413,16 +412,6 @@ function pickWorkspaceDirectory(): Promise<string | null> {
       try: () => ipcRenderer.invoke(channel) as Promise<unknown>,
       catch: (error) => workspaceErrorFromUnknown(error, 'ipc-failed'),
     }).pipe(
-      Effect.timeoutOrElse({
-        duration: WORKSPACE_IPC_TIMEOUT_MS,
-        orElse: () =>
-          Effect.fail(
-            new WorkspaceError(
-              'ipc-timeout',
-              `${channel} timed out after ${WORKSPACE_IPC_TIMEOUT_MS}ms`,
-            ),
-          ),
-      }),
       Effect.flatMap((response) =>
         decodeWorkspaceIpcResponse(response, WorkspacePickDirectoryResponseSchema, channel),
       ),
