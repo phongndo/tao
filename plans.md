@@ -472,11 +472,11 @@ Independent PTY sessions per pane remain Phase 4.
 
 ### Phase 5: Key Bindings + Navigation
 
-- [ ] Cmd+1..0 workspace switching
-- [ ] Ctrl+1..0 tab switching
-- [ ] Ctrl+HJKL pane navigation
-- [ ] Cmd+L focus terminal pane
-- [ ] All keyboard shortcuts via react-hotkeys-hook
+- [x] Cmd+1..0 workspace switching
+- [x] Ctrl+1..0 tab switching
+- [x] Ctrl+HJKL pane navigation
+- [x] Cmd+L focus terminal pane
+- [x] All keyboard shortcuts centralized through Electron `before-input-event`
 
 ### Phase 6: Polish
 
