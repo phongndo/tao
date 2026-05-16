@@ -1,18 +1,49 @@
 # Persistence Plan
 
 **Status**: Planning  
-**Last updated**: 2026-05-15
+**Last updated**: 2026-05-16
 
 ## Overview
 
-Tao currently uses Zustand's `persist` middleware backed by browser `localStorage` for UI state (workspaces, tabs, panes, sidebar). There is no terminal scrollback persistence, no settings file, no database. This plan migrates all persistence to a proper architecture centered on:
+Tao's persistence goal is broader than restoring a terminal viewport. Tao is a terminal for
+orchestrating AI agents through CLIs such as `pi`, `codex`, `claude`, and similar tools. Persistence
+therefore needs to preserve three things:
 
-- **SQLite** (via `@effect/sql-sqlite-node`) for relational data
-- **JSON files** for UI layout and user settings
-- **Binary state snapshots + PTY logs** for terminal scrollback
-- **Plain text excerpt** for search
+1. **Live process continuity** — if an AI CLI is still running, Tao should reattach to the same PTY
+   and conversation after the UI restarts.
+2. **Instant visual restore** — the terminal should redraw from a compact Ghostty snapshot instead
+   of replaying a large log.
+3. **Cold semantic resume** — if the live process is gone, Tao should relaunch supported AI CLIs via
+   their native resume/session mechanisms and show the previous terminal context immediately.
 
-The core principle: terminal persistence must be O(1) — reopen should be instant, regardless of session length. This is achieved by adding a serialization API to ghostty-web via a Zig patch to Ghostty's WASM parser.
+The architecture is a hybrid:
+
+- **`taod` daemon** (Zig) owns PTYs, AI CLI subprocesses, terminal event logs, snapshots, and agent
+  adapters. The Electron UI is a client that attaches/detaches.
+- **Ghostty binary snapshots** provide fast visual restore and bounded catch-up. The daemon links
+  Ghostty's terminal parser directly as a Zig library — no WASM overhead.
+- **Framed PTY event logs** provide crash recovery and precise replay, including resize events.
+- **Agent adapters/hooks** capture native AI CLI session IDs and resume commands.
+- **SQLite** stores session metadata, snapshot metadata, agent session metadata, and searchable
+  excerpts.
+- **JSON files** remain the source of truth for human-editable settings and UI layout.
+
+This replaces the current Zustand `persist` + browser `localStorage` model.
+
+---
+
+## Restore Guarantees
+
+Tao should make explicit, honest guarantees:
+
+| Level | Scenario | Restore behavior |
+|---|---|---|
+| **1. Live reattach** | `taod` and the PTY process are still alive | Reattach to the same PTY and same AI CLI process. This is true full restore. |
+| **2. Agent resume** | PTY/process died, but Tao captured a supported AI CLI native session ID | Restore terminal snapshot immediately, spawn the adapter-specific resume command, attach to the new PTY. |
+| **3. Visual archive** | No live process and no known resume path | Restore terminal snapshot/transcript as an archived terminal view; user can start a fresh shell. |
+
+Tao cannot generally resurrect arbitrary dead Unix process memory. Full live-process restore requires
+keeping the process alive in `taod`.
 
 ---
 
@@ -20,13 +51,74 @@ The core principle: terminal persistence must be O(1) — reopen should be insta
 
 | Goal | Why |
 |---|---|
-| **O(1) terminal reopen** | Serialize full terminal state as compact binary. Deserialize into a fresh GhosttyTerminal in one memcpy. |
-| **100% fidelity** | Every escape sequence, cursor position, alt-screen state, color, hyperlink — nothing lost. |
-| **Crash resilience** | PTY output log serves as fallback if state file is missing or corrupted. |
-| **Searchable history** | Plain text excerpt of last N lines stored in SQLite for grep/search. |
-| **Effect-TS throughout** | Every DB/file operation is an Effect. Layers for DI. Schema-validated. |
-| **No chat/agent session storage** | CLI tools (pi, codex, claude) own their own sessions. Tao only persists terminal and workspace state. |
-| **Tough data integrity** | SQLite with strict types, foreign keys, migrations (via `@effect/sql/Migrator`), CRC32 on state blobs. |
+| **Live AI CLI reattach** | Closing/restarting Tao UI must not kill long-running AI agent chats. |
+| **Instant visual restore** | Deserialize a Ghostty checkpoint, then replay only the small event-log tail. |
+| **Crash resilience** | Event logs allow recovery if the latest snapshot is missing/corrupted. |
+| **Agent-aware cold resume** | Capture native AI session IDs and relaunch supported agents after daemon/process death. |
+| **Pane/session correctness** | Sessions attach to logical terminal/pane IDs, not just workspaces. |
+| **Efficient hot path** | PTY output is bytes → log append → Ghostty parser → stream; no SQLite writes per chunk. |
+| **Searchable history** | Store bounded plaintext excerpts/FTS rows for search without indexing huge binary logs. |
+| **Effect-TS services** | DB/file/daemon services use Effect layers and typed errors across desktop/taod bridge. |
+| **Security/privacy** | Terminal logs can contain secrets; use restrictive permissions, retention controls, and clear-history UX. |
+
+---
+
+## Non-Goals / Boundaries
+
+- Tao does **not** become the source of truth for proprietary agent memory. Agent CLIs own their own
+  chat/session storage.
+- Tao does **not** promise exact restoration of a dead process unless that process stayed alive in
+  `taod`.
+- Tao does **not** store shell input history as a separate feature. Shells still own shell history.
+- Tao does not put PTY output chunks on the SQLite hot path.
+
+---
+
+## Architecture
+
+```
+[Renderer React]
+    ├── Ghostty renderer
+    └── UI layout/store
+        ↓ IPC / MessagePort
+[Electron main]
+    ├── authorization
+    ├── window lifecycle
+    └── TaodRpcClient (sends NDJSON via Unix socket)
+        ↓ ~/.tao/run/taod.sock
+[taod (Zig binary)]
+    ├── SessionManager          owns logical terminal sessions
+    ├── PtyDriver               owns PTY master fds and child processes
+    ├── GhosttyParser           Zig-native Ghostty terminal parser (no WASM)
+    ├── EventLog                append-only framed PTY log
+    ├── SnapshotStore           Ghostty binary checkpoints (zstd)
+    ├── AgentRegistry           spawns adapter scripts for pi/codex/claude
+    ├── SqliteDb                session/agent metadata (zig-sqlite)
+    └── Maintenance             retention, cleanup, integrity checks
+```
+
+Critical lifecycle rule:
+
+> Pane unmount / window close detaches from a session. It does not kill the PTY by default.
+
+Killing is explicit: `Kill Session`, `Stop Agent`, or retention cleanup after configured policy.
+
+---
+
+## Why Zig for `taod`
+
+| Factor | Reason |
+|---|---|
+| **Ghostty link** | Ghostty's terminal parser is pure Zig. `taod` in Zig links it as a library — no WASM, no ABI boundary, direct struct access, zero-copy serialization. |
+| **Self-contained** | Single static binary. No Node runtime, no npm dependencies, no version conflicts with the Electron app. |
+| **Performance** | PTY hot path is memory-safe zero-copy: PTY read → Ghostty parser → event log append → socket broadcast. All in one process, no GC pauses. |
+| **Same patch, two uses** | The Zig serialization code for Ghostty's WASM build (`ghostty-web`) is the *same code* the native daemon uses. One implementation. |
+
+Trade-off acknowledged:
+
+- Agent adapter logic (pi/codex/claude detection, resume commands, environment setup) is more
+  verbose in Zig than TypeScript. Solution: agent adapters live as **small separate scripts**
+  (TypeScript/Node or shell) that taod spawns on demand. The core daemon stays Zig.
 
 ---
 
@@ -34,14 +126,28 @@ The core principle: terminal persistence must be O(1) — reopen should be insta
 
 ```
 ~/.tao/
-├── tao.db                  # SQLite — workspaces, terminal sessions, settings
-├── settings.json           # User preferences (theme, font, window bounds)
-├── pane-layouts.json       # Per-workspace UI state (tabs, mosaic layouts, active pane)
-└── sessions/               # Terminal session artifacts
-    ├── <session-id>.log        # Raw PTY output (append-only, crash-safe)
-    ├── <session-id>.state.bin  # Compressed binary serialized terminal state
-    └── ...
+├── tao.db                         # SQLite metadata
+├── settings.json                  # Human-editable user preferences
+├── pane-layouts.json              # UI layout/workspaces/tabs/panes
+├── run/
+│   ├── taod.sock                  # Local daemon socket
+│   └── taod.pid
+├── sessions/
+│   └── <session-id>/
+│       ├── events.taoev           # Framed PTY event log, append-only
+│       ├── snapshot.state.zst     # Latest compressed Ghostty checkpoint
+│       └── excerpt.txt            # Bounded plain text excerpt for search/debug
+└── adapters/                      # Optional agent adapter scripts
+    ├── pi.js
+    ├── codex.js
+    └── claude.js
 ```
+
+Permissions:
+
+- `~/.tao`: `0700`
+- `~/.tao/run`: `0700`
+- session files: `0600`
 
 ---
 
@@ -52,430 +158,456 @@ tao/
 ├── packages/
 │   └── shared/
 │       └── src/
-│           ├── session.ts                NEW: session type schemas
-│           └── storage-path.ts           NEW: ~/.tao/ path resolution
+│           ├── session.ts                  NEW: session/agent schemas
+│           ├── storage-path.ts             NEW: ~/.tao path resolution
+│           └── taod-protocol.ts            NEW: daemon RPC/stream message schemas
 │
-├── apps/desktop/
-│   ├── package.json                     MODIFY: add @effect/sql-sqlite-node, better-sqlite3
+├── apps/
+│   ├── taod/                               NEW: Zig daemon package
+│   │   ├── build.zig
+│   │   ├── build.zig.zon
+│   │   ├── src/
+│   │   │   ├── main.zig                    entrypoint, signal handling
+│   │   │   ├── daemon.zig                  socket server, session registry
+│   │   │   ├── rpc.zig                     NDJSON RPC frame encoding
+│   │   │   ├── session.zig                 terminal session state machine
+│   │   │   ├── pty.zig                     PTY master via posix_openpt / fork
+│   │   │   ├── ghostty.zig                 Zig-native Ghostty terminal wrapper
+│   │   │   ├── event_log.zig               framed binary log, append/read/seek
+│   │   │   ├── snapshot.zig                zstd compress/decompress, file I/O
+│   │   │   ├── db.zig                      SQLite schema, migrations, queries
+│   │   │   ├── adapter.zig                 agent adapter process spawning
+│   │   │   └── cleanup.zig                 retention, periodic maintenance
+│   │   └── ghostty/                        (git submodule or zig dep)
+│   │       └── src/                        Ghostty terminal parser sources
 │   │
-│   ├── patches/
-│   │   └── ghostty-serialization.patch  NEW: Zig serialization patch for ghostty-web
-│   │
-│   └── src/
-│       ├── main/
-│       │   ├── index.ts                 MODIFY: init DB, run migrations on app.ready
-│       │   ├── db/
-│       │   │   ├── client.ts            NEW: Effect SQLite client layer (TaoDbLive)
-│       │   │   ├── migrate.ts           NEW: migration runner layer
-│       │   │   ├── migrations/
-│       │   │   │   ├── 001_create_workspaces.ts
-│       │   │   │   ├── 002_create_terminal_sessions.ts
-│       │   │   │   └── 003_create_settings.ts
-│       │   │   └── service.ts           NEW: typed DB operations as Effects
-│       │   ├── session-store.ts         NEW: terminal session lifecycle
-│       │   ├── file-store.ts            NEW: read/write session logs + state files
-│       │   ├── pty-service.ts           MODIFY: tee PTY output to session log
-│       │   └── workspace-service.ts     (unchanged)
-│       │
-│       ├── preload/
-│       │   └── index.ts                 MODIFY: expose session IPC channels
-│       │
-│       └── renderer/
-│           ├── terminal.ts              MODIFY: serialize on close, restore on open
-│           ├── session.ts               NEW: renderer-side session manager
-│           ├── state/store.ts           MODIFY: remove persist middleware
-│           ├── storage.ts               REMOVE
-│           └── ui/TerminalPane.tsx      MODIFY: pass session data to createTerminal()
-│
-│   └── electron.vite.config.ts          MODIFY: add alias for @tao/shared
+│   └── desktop/
+│       ├── package.json                    MODIFY: add build:taod script
+│       ├── patches/
+│       │   └── ghostty-serialization.patch NEW: Zig serialization for WASM build
+│       └── src/
+│           ├── main/
+│           │   ├── index.ts                MODIFY: launch/connect taod, bridge IPC
+│           │   ├── taod-rpc-client.ts      NEW: Unix socket NDJSON client
+│           │   ├── session-ipc.ts          NEW: session IPC handlers
+│           │   ├── layout-store.ts         NEW: pane-layouts.json service
+│           │   ├── settings-store.ts       NEW: settings.json service
+│           │   └── pty-service.ts          REMOVE/REPLACE with taod bridge
+│           ├── preload/
+│           │   └── index.ts                MODIFY: expose session APIs
+│           └── renderer/
+│               ├── terminal.ts             MODIFY: attach/deserialize/live stream
+│               ├── session.ts              NEW: renderer session manager
+│               ├── state/store.ts          MODIFY: remove localStorage persist
+│               └── storage.ts              REMOVE
 ```
 
 ---
 
-## Effect-TS Integration
+## Ghostty Zig Integration (the key insight)
 
-Every database/filesystem operation is an Effect. The layered architecture:
-
-```
-[Renderer React]
-    ↓ IPC (window.electronAPI.*)
-[Preload bridge]
-    ↓ ipcMain.handle()
-[Main Process — Effect Runtime]
-    ├── TaoDb (SqliteClient layer)
-    ├── FileStore (read/write files — @effect/platform/FileSystem)
-    ├── SessionRepo (typed DB operations)
-    ├── WorkspaceRepo (typed DB operations)
-    └── WorkspaceService (existing)
-```
-
-### Layers
-
-```typescript
-// SQLite client
-TaoDbLive = SqliteClient.layer({
-  filename: join(homedir(), ".tao", "tao.db"),
-  transformResultNames: (str) => str,  // snake_case in DB
-  transformQueryNames: (str) => str,
-  disableWAL: false,                    // WAL for renderer reads
-})
-
-// Migration runner
-MigrateLive = SqliteMigrator.run({
-  loader: SqliteMigrator.fromGlob(import.meta.glob('./db/migrations/*.ts')),
-  table: 'tao_migrations',
-  schemaDirectory: join(__dirname, 'db/migrations'),
-})
-
-// Service layers
-SessionRepoLive = Layer.effect(SessionRepo, ...)
-WorkspaceRepoLive = Layer.effect(WorkspaceRepo, ...)
-FileStoreLive = Layer.effect(FileStore, ...)
-
-// Composition
-MainLive = TaoDbLive >>> MigrateLive >>> SessionRepoLive
-        >>> WorkspaceRepoLive >>> FileStoreLive >>> WorkspaceServiceLive
-```
-
----
-
-## Ghostty-Web Serialization — Zig Patch
-
-### Why a Zig patch
-
-ghostty-web (v0.4.0-next) has no serialize/deserialize API. The WASM exports are read-only lifecycle functions (`_new`, `_write`, `_resize`, `_get_scrollback_*`). Ghostty's terminal parser is written in Zig, and ghostty-web already patches it (`patches/ghostty-wasm-api.patch`). We add our own patch to expose serialization.
-
-### New WASM exports
+Ghostty's terminal parser lives in its `src/` tree, written entirely in Zig. `taod` imports it as a
+Zig dependency:
 
 ```zig
-// Get required buffer size — call first to allocate
-ghostty_terminal_serialize_size(ptr) -> u32
+// apps/taod/src/ghostty.zig
+const ghostty = @import("ghostty");
 
-// Serialize full terminal state into buffer
-ghostty_terminal_serialize(ptr, out_buf, buf_len) -> i32  // bytes written, or 0 on error
+pub const Terminal = struct {
+    inner: *ghostty.Terminal,
 
-// Deserialize buffer into a fresh terminal
-ghostty_terminal_deserialize(ptr, in_buf, buf_len) -> bool
+    pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Terminal {
+        const inner = try allocator.create(ghostty.Terminal);
+        // ghostty.Terminal.init(...)
+        return .{ .inner = inner };
+    }
 
-// Get last error message (for diagnostics)
-ghostty_terminal_last_error(ptr) -> [*:0]u8
-```
+    pub fn write(self: *Terminal, bytes: []const u8) void {
+        self.inner.write(bytes);
+    }
 
-### Serialization format
+    pub fn serialize(self: *Terminal, allocator: std.mem.Allocator) ![]u8 {
+        // Direct access to Ghostty's internal render state and cell storage.
+        // This is the same code that gets compiled to WASM for ghostty-web.
+        // Returns zstd-compressed binary snapshot.
+    }
 
-```
-┌───────────────────────────────────────────┐
-│ Magic: "TAOS" (u32 x2 = 8 bytes)          │
-│ Version: u32 (1)                          │
-│ CRC32: u32 of everything after             │
-│ HeaderSize: u32 offset to first section    │
-│ SectionFlags: u64 bitmask of sections      │
-├───────────────────────────────────────────┤
-│ SCREEN_NORMAL (required):                  │
-│   cols, rows, cursor_x, cursor_y,          │
-│   cursor_visible, cursor_style,            │
-│   saved_cursor_x, saved_cursor_y,          │
-│   viewport_y, scrollback_len               │
-│   Cells: [GhosttyCell × rows×cols]         │
-│   Scrollback: [GhosttyCell × scrollback]   │
-├───────────────────────────────────────────┤
-│ SCREEN_ALT (required):                     │
-│   Same layout as normal                    │
-├───────────────────────────────────────────┤
-│ MODES (required):                          │
-│   mode_bitfield: [u8 × 256]               │
-├───────────────────────────────────────────┤
-│ COLORS (required):                        │
-│   palette: [u32 × 16]                     │
-│   fg, bg, cursor: u32                     │
-├───────────────────────────────────────────┤
-│ REGION (required):                        │
-│   top, bottom, left, right: u16           │
-├───────────────────────────────────────────┤
-│ GRAPHEMES (optional):                     │
-│   count: u32                              │
-│   entries: [{ type, row, col, cps[] }]    │
-├───────────────────────────────────────────┤
-│ TABSTOPS (optional):                      │
-│   bitfield: [u64 × ceil(cols/64)]         │
-├───────────────────────────────────────────┤
-│ HYPERLINKS (optional):                    │
-│   count: u32                              │
-│   entries: [{ id, uri_len, uri }]         │
-└───────────────────────────────────────────┘
-```
-
-`GhosttyCell` is 16 bytes:
-
-```zig
-pub const GhosttyCell = extern struct {
-    codepoint: u32,
-    fg_r: u8, fg_g: u8, fg_b: u8,
-    bg_r: u8, bg_g: u8, bg_b: u8,
-    flags: u8,
-    width: u8,
-    hyperlink_id: u16,
-    grapheme_len: u8,
-    _pad: u8,
+    pub fn deserialize(self: *Terminal, data: []const u8) !void {
+        // Restore terminal state from snapshot.
+    }
 };
 ```
 
-### Storage estimates
+This is the single most important performance advantage: the daemon never goes through WASM JS glue
+for terminal parsing. It calls Ghostty's Zig functions directly.
 
-| Component | Raw | Compressed (zstd) |
-|---|---|---|
-| Viewport (80×24) | ~30 KB | ~5 KB |
-| Scrollback (10,000 lines) | ~12.8 MB | ~200-800 KB |
-| Alt screen | ~30 KB | ~5 KB |
-| Modes + colors + metadata | ~500 B | ~500 B |
-| **Total** | **~13 MB** | **~200-800 KB** |
+### The serialization patch
 
-### Patching approach
+The same serialization code serves two builds:
 
-We maintain a fork of `coder/ghostty-web` at `tao-terminal/ghostty-web` with the serialization patch baked in. Tao's `package.json` points to the fork:
+1. **Native Zig** (`taod` binary) — direct struct access, no overhead.
+2. **WASM target** (`ghostty-web` WASM binary) — compiled with `-target wasm32-wasi`,
+   exports the serialize/deserialize functions for the renderer.
 
-```json
-"ghostty-web": "github:tao-terminal/ghostty-web#serialization-v1"
+```zig
+// shared serialization logic, compiled for both targets
+pub fn terminalSerialize(term: *ghostty.Terminal, writer: anytype) !void { ... }
+pub fn terminalDeserialize(term: *ghostty.Terminal, reader: anytype) !void { ... }
 ```
 
-The patch file (`patches/ghostty-serialization.patch`) is kept in Tao's repo for documentation and upstream contribution.
+The patch file in `apps/desktop/patches/ghostty-serialization.patch` patches Ghostty's WASM build
+to export these functions. The binary logic lives in `apps/taod/src/ghostty_internal/g_terminal_serialize.zig`
+(or similar) and is shared via Zig's package system.
 
 ---
 
-## Database Schema (Effect SQL Migrations)
+## SQLite
 
-Migration files live in `src/main/db/migrations/` as TypeScript files. Each exports a default `Effect<void>` that runs SQL via `SqlClient`.
+`taod` uses a Zig SQLite binding (either `zig-sqlite` package or direct `sqlite3.h` C ABI calls).
+Schema uses STRICT tables, WAL, foreign keys.
 
-### Migration 001 — `workspaces`
-
-```sql
-CREATE TABLE workspaces (
-    id              TEXT PRIMARY KEY,
-    project_path    TEXT NOT NULL,
-    name            TEXT,
-    branch          TEXT,
-    head_sha        TEXT,
-    worktrees_json  TEXT,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX idx_workspaces_project_path ON workspaces(project_path);
-
-CREATE TRIGGER update_workspaces_updated_at
-    AFTER UPDATE ON workspaces
-    BEGIN
-        UPDATE workspaces SET updated_at = datetime('now') WHERE id = NEW.id;
-    END;
-```
-
-### Migration 002 — `terminal_sessions`
+### Migration 001 — `terminal_sessions`
 
 ```sql
 CREATE TABLE terminal_sessions (
-    id               TEXT PRIMARY KEY,
-    workspace_id     TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
-    cwd              TEXT,
-    cols             INTEGER,
-    rows             INTEGER,
-    title            TEXT,
-    state_path       TEXT,
-    log_path         TEXT,
-    state_size       INTEGER,
-    log_size         INTEGER,
-    scrollback_text  TEXT,
-    alternate_screen INTEGER DEFAULT 0,
-    bracketed_paste  INTEGER DEFAULT 0,
-    started_at       TEXT NOT NULL,
-    ended_at         TEXT,
-    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
-);
+    id                 TEXT PRIMARY KEY,
+    terminal_id        TEXT NOT NULL,
+    workspace_id       TEXT,
+    cwd                TEXT,
+    argv_json          TEXT,
+    status             TEXT NOT NULL CHECK(status IN (
+        'live', 'detached', 'exited', 'crashed', 'archived', 'killed'
+    )),
+    daemon_id          TEXT,
+    pid                INTEGER,
+    cols               INTEGER NOT NULL,
+    rows               INTEGER NOT NULL,
+    title              TEXT,
+    event_log_path     TEXT NOT NULL,
+    last_seq           INTEGER NOT NULL DEFAULT 0,
+    snapshot_path      TEXT,
+    snapshot_seq       INTEGER NOT NULL DEFAULT 0,
+    snapshot_crc32     INTEGER,
+    snapshot_size      INTEGER,
+    scrollback_excerpt TEXT,
+    started_at         TEXT NOT NULL,
+    last_activity_at   TEXT,
+    ended_at           TEXT,
+    exit_code          INTEGER,
+    signal             INTEGER,
+    created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
 
+CREATE INDEX idx_terminal_sessions_terminal ON terminal_sessions(terminal_id);
 CREATE INDEX idx_terminal_sessions_workspace ON terminal_sessions(workspace_id);
-CREATE INDEX idx_terminal_sessions_ended   ON terminal_sessions(ended_at);
-```
+CREATE INDEX idx_terminal_sessions_status ON terminal_sessions(status);
+CREATE INDEX idx_terminal_sessions_activity ON terminal_sessions(last_activity_at);
 
-### Migration 003 — `settings`
-
-```sql
-CREATE TABLE settings (
-    key         TEXT PRIMARY KEY,
-    value       TEXT NOT NULL,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TRIGGER update_settings_updated_at
-    AFTER UPDATE ON settings
+CREATE TRIGGER update_terminal_sessions_updated_at
+    AFTER UPDATE ON terminal_sessions
     BEGIN
-        UPDATE settings SET updated_at = datetime('now') WHERE key = NEW.key;
+        UPDATE terminal_sessions SET updated_at = datetime('now') WHERE id = NEW.id;
     END;
 ```
 
-Migration table: `tao_migrations` (controlled by Migrator's `table` option).
-
----
-
-## DB Service Layer
-
-All database operations are exposed as Effect service tags. Examples:
-
-```typescript
-export class SessionRepo extends Context.Tag("Tao/SessionRepo")<
-  SessionRepo,
-  {
-    readonly insert: (session: NewSession) => Effect.Effect<void, SqlError>
-    readonly getById: (id: string) => Effect.Effect<SessionRow | null, SqlError>
-    readonly getByWorkspace: (workspaceId: string) => Effect.Effect<readonly SessionRow[], SqlError>
-    readonly getLatestForWorkspace: (workspaceId: string) => Effect.Effect<SessionRow | null, SqlError>
-    readonly updateEndedAt: (id: string, endedAt: string) => Effect.Effect<void, SqlError>
-    readonly setStatePath: (id: string, path: string) => Effect.Effect<void, SqlError>
-    readonly delete: (id: string) => Effect.Effect<void, SqlError>
-    readonly cleanupOlderThan: (days: number) => Effect.Effect<number, SqlError>
-    readonly search: (query: string, limit: number) => Effect.Effect<readonly SessionRow[], SqlError>
-  }
->() {}
-
-export class WorkspaceRepo extends Context.Tag("Tao/WorkspaceRepo")<
-  WorkspaceRepo,
-  {
-    readonly upsert: (workspace: Workspace) => Effect.Effect<void, SqlError>
-    readonly getAll: () => Effect.Effect<readonly WorkspaceRow[], SqlError>
-    readonly getById: (id: string) => Effect.Effect<WorkspaceRow | null, SqlError>
-    readonly delete: (id: string) => Effect.Effect<void, SqlError>
-  }
->() {}
-
-export class FileStore extends Context.Tag("Tao/FileStore")<
-  FileStore,
-  {
-    readonly initSessionDir: () => Effect.Effect<void, FileStoreError>
-    readonly readState: (sessionId: string) => Effect.Effect<Uint8Array, FileStoreError>
-    readonly writeState: (sessionId: string, data: Uint8Array) => Effect.Effect<void, FileStoreError>
-    readonly readLog: (sessionId: string) => Effect.Effect<Uint8Array, FileStoreError>
-    readonly appendLog: (sessionId: string, chunk: Uint8Array) => Effect.Effect<void, FileStoreError>
-    readonly finalizeLog: (sessionId: string) => Effect.Effect<void, FileStoreError>
-    readonly deleteSessionFiles: (sessionId: string) => Effect.Effect<void, FileStoreError>
-    readonly totalSize: () => Effect.Effect<number, FileStoreError>
-  }
->() {}
-```
-
-Each service layer is implemented via `Layer.effect` with the `SqlClient` tag:
-
-```typescript
-export const SessionRepoLive = Layer.effect(
-  SessionRepo,
-  SqlClient.pipe(
-    Effect.map((sql) => ({
-      insert: (session) =>
-        sql`INSERT INTO terminal_sessions ${sql.insert(session)}`.withoutTransform,
-      getById: (id) =>
-        sql`SELECT * FROM terminal_sessions WHERE id = ${id}`.pipe(
-          Effect.map((rows: SessionRow[]) => rows[0] ?? null),
-        ),
-      // ...
-    })),
-  ),
-)
-```
-
----
-
-## Session Lifecycle
-
-### Open
-
-```
-User creates tab / reopens workspace
-  │
-  ├─► Renderer: window.electronAPI.openSession(workspaceId, cwd, cols, rows)
-  │
-  ├─► Main Process:
-  │     ├─► SessionRepo.create({ id, workspaceId, cwd, cols, rows, started_at })
-  │     ├─► FileStore.initSessionDir()
-  │     ├─► FileStore.appendLog(id, "")     // create empty log file
-  │     └─► spawn PTY (existing flow, now with log file path)
-  │
-  └─► Renderer:
-        ├─► If restoring: fetch from DB → try deserialize() → fallback to replay log
-        └─► createTerminal(id, options)
-```
-
-### PTY Output Tee
-
-In `pty-service.ts`, the existing chunked output buffer is also written to the log file:
-
-```
-PTY output → batch into chunks[] → IPC to renderer
-                                 → append to <session-id>.log
-```
-
-The log file path is passed to the PTY utility process via the IPC setup message.
-
-### Close
-
-```
-User closes tab / pane
-  │
-  ├─► Renderer:
-  │     ├─► term.wasmTerm.serialize() → Uint8Array
-  │     ├─► Extract last 100 lines from ghostty scrollback buffer
-  │     ├─► window.electronAPI.closeSession(id, stateBuffer, text, title, altScreen)
-  │     └─► term.dispose()
-  │
-  ├─► Main Process:
-  │     ├─► Compress stateBuffer → write to <id>.state.bin
-  │     ├─► SessionRepo.update({
-  │     │     ended_at, state_path, state_size,
-  │     │     scrollback_text, title, alternate_screen
-  │     │   })
-  │     └─► FileStore.finalizeLog(id)   // close file handle
-  │
-  └─► PTY Service: kill PTY process
-```
-
-### Reopen
-
-```
-User activates workspace with previous session
-  │
-  ├─► Renderer: window.electronAPI.reopenSession(workspaceId)
-  │
-  ├─► Main Process:
-  │     ├─► SessionRepo.getLatestForWorkspace(workspaceId)
-  │     ├─► FileStore.readState(id) → Uint8Array or null
-  │     ├─► If state exists → return state buffer (Primary, O(1))
-  │     ├─► If not → FileStore.readLog(id) → return log buffer (Fallback, O(n))
-  │     └─► Return: { cols, rows, cwd, state?, log? }
-  │
-  └─► Renderer:
-        ├─► createTerminal(id, { cols, rows, cwd })
-        ├─► if state: term.wasmTerm.deserialize(state)     // O(1) — ~0.1ms
-        ├─► else if log: term.write(log)                   // O(n) — 42MB/s
-        └─► wire live PTY IPC
-```
-
-### Search
+### Migration 002 — `agent_sessions`
 
 ```sql
-SELECT scrollback_text FROM terminal_sessions
-WHERE scrollback_text LIKE '%error%'
-  AND workspace_id = 'tao:/Users/dp/code/projects/tao'
-ORDER BY ended_at DESC LIMIT 10;
+CREATE TABLE agent_sessions (
+    id                  TEXT PRIMARY KEY,
+    terminal_session_id TEXT NOT NULL REFERENCES terminal_sessions(id) ON DELETE CASCADE,
+    provider            TEXT NOT NULL,
+    native_session_id   TEXT,
+    original_argv_json  TEXT,
+    resume_argv_json    TEXT,
+    cwd                 TEXT,
+    transcript_path     TEXT,
+    model               TEXT,
+    title               TEXT,
+    status              TEXT NOT NULL CHECK(status IN (
+        'detected', 'running', 'resumable', 'resumed', 'unknown', 'ended'
+    )),
+    last_activity_at    TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE INDEX idx_agent_sessions_terminal ON agent_sessions(terminal_session_id);
+CREATE INDEX idx_agent_sessions_provider_native ON agent_sessions(provider, native_session_id);
+CREATE INDEX idx_agent_sessions_status ON agent_sessions(status);
+
+CREATE TRIGGER update_agent_sessions_updated_at
+    AFTER UPDATE ON agent_sessions
+    BEGIN
+        UPDATE agent_sessions SET updated_at = datetime('now') WHERE id = NEW.id;
+    END;
+```
+
+### Migration 003 — search index
+
+```sql
+CREATE VIRTUAL TABLE terminal_search USING fts5(
+    terminal_session_id UNINDEXED,
+    workspace_id UNINDEXED,
+    title,
+    excerpt,
+    tokenize = 'unicode61'
+);
 ```
 
 ---
 
-## JSON Files
+## Event Log Format
 
-### `~/.tao/pane-layouts.json`
+Framed binary event log. Each session has one append-only file.
 
-Stores non-relational UI state that changes frequently. No ACID needed.
+```
+File header:
+  magic       "TAOEV\0\1"    (8 bytes)
+  session_id  uuid            (36 bytes)
+  created_at  unix_ms         (u64, 8 bytes)
+
+Repeated frames:
+  magic       u32             (0x54414546 = "TAEF")
+  version     u16             (1)
+  kind        u16             (enum: 1=OUTPUT, 2=INPUT, 3=RESIZE, 4=TITLE, 5=CWD, 6=AGENT_EVENT, 7=SNAPSHOT_MARK, 8=EXIT)
+  seq         u64             (monotonic per session)
+  monotic_ms  u64
+  length      u32
+  crc32       u32
+  payload     u8[length]
+```
+
+Frame kinds:
+
+| Kind | Payload |
+|---|---|
+| `OUTPUT` | raw PTY bytes (use encoding:null) |
+| `INPUT` | optional user input bytes (default off, privacy setting) |
+| `RESIZE` | `{ cols: u16, rows: u16 }` |
+| `TITLE` | UTF-8 title string |
+| `CWD` | UTF-8 cwd string |
+| `AGENT_EVENT` | adapter-specific JSON |
+| `SNAPSHOT_MARK` | `{ snapshot_seq: u64, snapshot_path: str }` |
+| `EXIT` | `{ exit_code: i32, signal: i32 }` |
+
+Important rules:
+
+- `seq` is monotonically increasing per terminal session.
+- Each snapshot records the `seq` up to which state is fully captured.
+- Reopen flow: `deserialize(snapshot)` → replay frames after `snapshot_seq`.
+- SQLite stores metadata, not each frame. The frames live on disk.
+
+---
+
+## Daemon Protocol — NDJSON over Unix socket
+
+Taod exposes a single Unix domain socket `~/.tao/run/taod.sock`.
+
+Two logical channels are multiplexed over the same connection using message type prefixes:
+
+### Control messages (request/response)
+
+```json
+--> {"type":"create","id":"req-1","terminalId":"pane-xxx","cols":80,"rows":24,"cwd":"/home","argv":["/bin/bash"]}
+<-- {"type":"create:ok","id":"req-1","sessionId":"ses-abc","pid":12345}
+
+--> {"type":"attach","id":"req-2","sessionId":"ses-abc"}
+<-- {"type":"attach:ok","id":"req-2","seq":421,"snapshot":"<base64>","cwd":"/home/project"}
+
+--> {"type":"input","sessionId":"ses-abc","data":"<base64>"}
+<-- {"type":"input:ok"}
+
+--> {"type":"resize","sessionId":"ses-abc","cols":120,"rows":40}
+<-- {"type":"resize:ok"}
+
+--> {"type":"detach","sessionId":"ses-abc"}
+<-- {"type":"detach:ok"}
+
+--> {"type":"kill","sessionId":"ses-abc"}
+<-- {"type":"kill:ok"}
+```
+
+### Stream messages (daemon → client)
+
+After `attach`, the daemon sends a continuous stream of output frames until `detach`:
+
+```json
+{"type":"output","sessionId":"ses-abc","seq":422,"data":"<base64>"}
+{"type":"resize","sessionId":"ses-abc","seq":423,"cols":120,"rows":40}
+{"type":"snapshot","sessionId":"ses-abc","seq":500,"data":"<base64>"}
+{"type":"exit","sessionId":"ses-abc","exitCode":0,"signal":null}
+```
+
+Backpressure:
+
+- Active pane receives live bytes.
+- If the client falls behind, taod sends a fresh snapshot and discards the backlog for that client.
+- Background panes may receive coalesced output or periodic snapshot refreshes only.
+
+---
+
+## Agent Adapters
+
+Agent adapters are **separate scripts** that taod spawns as child processes. The core daemon remains
+Zig; adapters are TypeScript/Node (or whatever each agent's ecosystem prefers).
+
+```zig
+// adapter.zig — taod spawns adapters as child processes
+pub const Adapter = struct {
+    provider: []const u8,   // "pi", "codex", "claude", "unknown"
+
+    /// Register a session as agent-driven.
+    /// Spawns adapter script with env vars pointing to the session directory.
+    pub fn detect(session: *Session, argv: []const []const u8) !?Adapter
+
+    /// Ask the adapter to discover a native session ID.
+    pub fn discoverNativeSessionId(adapter: *Adapter) !?[]const u8
+
+    /// Get the resume command line for a known native session.
+    pub fn resumeCommand(adapter: *Adapter, native_id: []const u8) ![]const []const u8
+};
+```
+
+Adapter scripts live at `~/.tao/adapters/<provider>.js` (or `.ts` compiled to `.js` shared from the
+shared package). Taod communicates with them via stdin/stdout NDJSON.
+
+Example adapter interface:
+
+```typescript
+// ~/.tao/adapters/pi.js
+import { readFileSync, writeFileSync } from 'fs'
+
+// Called by taod with JSON on stdin
+const msg = JSON.parse(process.argv[2] || '')
+
+switch (msg.command) {
+  case 'detect': {
+    // Return whether argv matches this agent
+    process.stdout.write(JSON.stringify({ detected: true }) + '\n')
+    break
+  }
+  case 'discover-session': {
+    // Scan terminal output / env / files for native session id
+    const sessionDir = msg.sessionDir
+    const match = readFileSync(`${sessionDir}/events.taoev`)
+      .toString().match(/pi-session-([a-f0-9]+)/)
+    process.stdout.write(JSON.stringify({
+      nativeSessionId: match?.[1] ?? null
+    }) + '\n')
+    break
+  }
+  case 'resume-command': {
+    process.stdout.write(JSON.stringify({
+      argv: ['pi', '--session', msg.nativeSessionId]
+    }) + '\n')
+    break
+  }
+}
+```
+
+Cold resume flow:
+
+```
+Tao opens previous terminal
+  ├─► ask taod for live session
+  ├─► if live: attach same PTY
+  ├─► else: read agent_sessions row
+  ├─► if provider + native_session_id:
+  │      spawn adapter.resumeCommand()
+  │      attach new PTY
+  └─► else: show archived snapshot/transcript
+```
+
+---
+
+## Source of Truth Decisions
+
+| Data | Source of truth | Notes |
+|---|---|---|
+| Terminal session metadata | SQLite | Written by taod. |
+| Agent resume metadata | SQLite | Written by taod via adapter scripts. |
+| Search excerpts | SQLite FTS | Bounded text only. |
+| UI layout/workspaces/tabs/panes | `pane-layouts.json` | Loaded before rendering app shell. |
+| User settings | `settings.json` | Human-editable. |
+| PTY output | `events.taoev` files | Append-only binary logs. |
+| Terminal state | `snapshot.state.zst` files | Compressed Ghostty snapshots. |
+
+---
+
+## taod Build & Launch
+
+### Build
+
+```zig
+// apps/taod/build.zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const exe = b.addExecutable(.{
+        .name = "taod",
+        .root_source_file = b.path("src/main.zig"),
+        .target = b.standardTargetOptions(.{}),
+        .optimize = .ReleaseSafe,
+    });
+
+    // Link Ghostty terminal parser as a Zig dependency
+    const ghostty = b.dependency("ghostty", .{});
+    exe.root_module.addImport("ghostty", ghostty.module("terminal"));
+
+    // Link sqlite3
+    exe.linkSystemLibrary("sqlite3");
+
+    // Build the WASM snapshot for ghostty-web
+    const wasm_step = b.addObject(.{
+        .name = "ghostty-serialization",
+        .root_source_file = b.path("src/serialize.zig"),
+        .target = .{ .cpu_arch = .wasm32, .os_tag = .wasi },
+        .optimize = .ReleaseSmall,
+    });
+
+    b.installArtifact(exe);
+    b.installArtifact(wasm_step);
+}
+```
+
+### Integrated into desktop build
+
+```json
+// apps/desktop/package.json
+{
+  "scripts": {
+    "build:taod": "cd ../taod && zig build",
+    "dev": "pnpm build:taod && electron-vite dev",
+    "build": "pnpm build:taod && electron-vite build"
+  }
+}
+```
+
+### Launch from Electron main
+
+```typescript
+async function ensureTaodRunning() {
+  if (await canConnectToTaod()) return
+
+  const taodPath = join(app.getAppPath(), '..', 'taod', 'zig-out', 'bin', 'taod')
+  spawn(taodPath, [], {
+    detached: true,
+    stdio: 'ignore',
+  }).unref()
+}
+```
+
+---
+
+## UI Layout JSON
+
+`pane-layouts.json` stores workspace/tab/pane layout. Must be read before rendering app shell.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "workspaces": [
     { "id": "tao:local", "name": "Local", "projectPath": null, "order": 0 }
   ],
@@ -484,7 +616,16 @@ Stores non-relational UI state that changes frequently. No ACID needed.
     { "id": "tab-xxx", "workspaceId": "tao:local", "name": "Terminal", "layout": "pane-yyy", "order": 0 }
   ],
   "panes": [
-    { "id": "pane-yyy", "tabId": "tab-xxx", "type": "terminal", "name": "Terminal 1", "cwd": null, "status": "idle" }
+    {
+      "id": "pane-yyy",
+      "terminalId": "term-yyy",
+      "tabId": "tab-xxx",
+      "type": "terminal",
+      "name": "Terminal 1",
+      "cwd": null,
+      "status": "idle",
+      "lastSessionId": "session-abc"
+    }
   ],
   "activeTabId": "tab-xxx",
   "activePaneId": "pane-yyy",
@@ -493,87 +634,87 @@ Stores non-relational UI state that changes frequently. No ACID needed.
 }
 ```
 
-Read/write via `JSON.parse`/`JSON.stringify` wrapped in Effect, with fallback to defaults.
+One-time migration from existing `localStorage['tao-workspaces']` on first launch.
 
-### `~/.tao/settings.json`
+---
 
-Human-editable user preferences. Synced with the `settings` DB table on startup/write.
+## Session Lifecycle
 
-```json
-{
-  "version": 1,
-  "theme": {
-    "background": "#151515",
-    "foreground": "#c9c7cd",
-    "cursor": "#cac9dd",
-    "cursorAccent": "#151515",
-    "selectionBackground": "#2a2a2d",
-    "selectionForeground": "#c1c0d4",
-    "black": "#27272a",
-    "red": "#f5a191",
-    "green": "#90b99f",
-    "yellow": "#e6b99d",
-    "blue": "#aca1cf",
-    "magenta": "#e29eca",
-    "cyan": "#ea83a5",
-    "white": "#c1c0d4",
-    "brightBlack": "#424246",
-    "brightRed": "#ffae9f",
-    "brightGreen": "#9dc6ac",
-    "brightYellow": "#f0c5a9",
-    "brightBlue": "#b9aeda",
-    "brightMagenta": "#ecaad6",
-    "brightCyan": "#f591b2",
-    "brightWhite": "#cac9dd"
-  },
-  "font": {
-    "family": "\"SF Mono\", Menlo, Monaco, \"JetBrains Mono\", monospace",
-    "size": 14,
-    "lineHeight": 1.3
-  },
-  "ui": {
-    "cursorStyle": "block",
-    "cursorBlink": false,
-    "scrollbackLines": 10000,
-    "smoothScrollDuration": 200,
-    "sidebarExpanded": true,
-    "sidebarWidth": 240
-  },
-  "window": {
-    "width": 900,
-    "height": 600,
-    "x": null,
-    "y": null,
-    "state": "Windowed"
-  }
-}
+### Create
+
+```
+User creates pane/tab or starts AI agent
+  ├─► Renderer → Main → taod: create(terminalId, cols, rows, cwd, argv?)
+  ├─► taod: INSERT terminal_sessions (status='live')
+  ├─► taod: create session dir, init event log
+  ├─► taod: posix_openpt() → fork/exec shell or agent CLI
+  ├─► taod: start Ghostty parser for this session
+  └─► Renderer: attach → receive snapshot + live stream
+```
+
+### Detach
+
+```
+Pane hidden / window closed / renderer reloads
+  ├─► Renderer unsubscribes
+  ├─► Main sends detach to taod
+  └─► taod keeps PTY + Ghostty parser + event log running
+```
+
+### Kill
+
+```
+User explicitly kills session
+  ├─► taod sends SIGTERM to PTY child (then SIGKILL after grace)
+  ├─► writes EXIT frame to event log
+  ├─► updates terminal_sessions status/ended_at
+  └─► keeps snapshot/log until retention cleanup or clear-history
+```
+
+### Snapshot
+
+```
+Timer (30s) / output threshold (1MB) / before shutdown
+  ├─► GhosttyParser.serialize()
+  ├─► zstd compress
+  ├─► atomic write snapshot.state.zst.tmp → snapshot.state.zst
+  ├─► update snapshot_seq/crc/size in DB
+  └─► write SNAPSHOT_MARK frame to event log
+```
+
+### Reattach
+
+```
+Tao UI starts
+  ├─► load pane-layouts.json before rendering terminals
+  ├─► connect to taod socket
+  ├─► for each visible pane: attach(lastSessionId | terminalId)
+  ├─► if live: receive snapshot + live stream
+  ├─► if not live but resumable: show snapshot, spawn resume command via adapter
+  └─► if archived: show visual archive
 ```
 
 ---
 
-## IPC Surface
+## IPC Surface (Renderer → Electron Main)
 
-### New preload API
+Renderer sees session primitives, not raw PTY operations.
 
 ```typescript
 interface ElectronAPI {
-  // Existing PTY methods (unchanged):
-  spawnPty(sessionId, cols, rows, cwd): Promise<PtySize>
-  sendPtyInput(sessionId, data): void
-  resizePty(sessionId, cols, rows): void
-  killPty(sessionId): void
-  onPtyData(sessionId, callback): () => void
-  onPtyError(sessionId, callback): () => void
-  onPtyExit(sessionId, callback): () => void
+  createSession(input: CreateSessionInput): Promise<CreateSessionResult>
+  attachSession(input: AttachSessionInput): Promise<AttachSessionResult>
+  detachSession(sessionId: string): Promise<void>
+  writeSessionInput(sessionId: string, data: Uint8Array): void
+  resizeSession(sessionId: string, cols: number, rows: number): void
+  killSession(sessionId: string): Promise<void>
+  resumeAgent(agentSessionId: string): Promise<CreateSessionResult>
 
-  // New — sessions:
-  openSession(workspaceId: string, cwd: string | null, cols: number, rows: number): Promise<SessionInfo>
-  closeSession(id: string, state: Uint8Array, text: string, title: string, altScreen: boolean): Promise<void>
-  reopenSession(workspaceId: string): Promise<ReopenData | null>
-  getSessionList(workspaceId: string): Promise<SessionSummary[]>
-  deleteSession(id: string): Promise<void>
+  onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void
+  onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void
+  onSessionExit(sessionId: string, callback: (info: ExitInfo) => void): () => void
+  onAgentStatus(sessionId: string, callback: (status: AgentStatus) => void): () => void
 
-  // New — files:
   readLayout(): Promise<PaneLayoutData | null>
   writeLayout(data: PaneLayoutData): Promise<void>
   readSettings(): Promise<SettingsData | null>
@@ -581,92 +722,30 @@ interface ElectronAPI {
 }
 ```
 
-### IPC handlers (main process)
+---
 
-```typescript
-ipcMain.handle('session:open', sessionOpenHandler)
-ipcMain.handle('session:close', sessionCloseHandler)
-ipcMain.handle('session:reopen', sessionReopenHandler)
-ipcMain.handle('session:list', sessionListHandler)
-ipcMain.handle('session:delete', sessionDeleteHandler)
-ipcMain.handle('layout:read', layoutReadHandler)
-ipcMain.handle('layout:write', layoutWriteHandler)
-ipcMain.handle('settings:read', settingsReadHandler)
-ipcMain.handle('settings:write', settingsWriteHandler)
-```
+## Search
 
-Each handler wraps the Effect with `authorizeRenderer` and provides the service layers:
+Bounded plaintext excerpts extracted periodically from Ghostty parser and stored in SQLite FTS5.
 
-```typescript
-function sessionOpenHandler(event, ...args): Promise<Result> {
-  return Effect.runPromise(
-    authorizeRenderer(event).pipe(
-      Effect.flatMap(() => sessionOpenEffect(...args)),
-      Effect.provide(SessionRepoLive),
-      Effect.provide(FileStoreLive),
-      Effect.provide(TaoDbLive),
-    ),
-  )
-}
+```sql
+SELECT terminal_session_id, title, snippet(terminal_search, 3, '[', ']', '…', 12)
+FROM terminal_search
+WHERE terminal_search MATCH 'error'
+ORDER BY rank
+LIMIT 20;
 ```
 
 ---
 
-## App Startup Sequence (`src/main/index.ts`)
+## Session Cleanup / Retention
 
-```typescript
-app.whenReady().then(() => {
-  // 1. Ensure ~/.tao/ and ~/.tao/sessions/ exist
-  // 2. Run DB migrations (create tables if needed)
-  // 3. Sync settings.json → DB (if file is newer)
-  // 4. Read pane-layouts.json (deferred — renderer requests it)
-  // 5. Create window
-  // 6. Setup PTY service
-})
-```
+Configurable maintenance runs in taod:
 
-Migration runner:
-
-```typescript
-const runMigrations = Effect.gen(function* () {
-  const result = yield* SqliteMigrator.run({
-    loader: SqliteMigrator.fromGlob(import.meta.glob('./db/migrations/*.ts')),
-    table: 'tao_migrations',
-    schemaDirectory: join(__dirname, 'db/migrations'),
-  })
-  yield* Effect.log(`Applied ${result.length} migrations`)
-})
-```
-
----
-
-## Session Cleanup
-
-Background maintenance effect, runs hourly:
-
-- **Age-based**: Delete sessions older than 30 days
-- **Size-based**: Cap total session storage at 2 GB (delete oldest first)
-- **Calls** `FileStore.deleteSessionFiles(id)` + `SessionRepo.delete(id)`
-
-```typescript
-const sessionCleanup = Effect.repeat(
-  Effect.gen(function* () {
-    const repo = yield* SessionRepo
-    const store = yield* FileStore
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
-    const oldSessions = yield* repo.getOlderThan(new Date(cutoff))
-    for (const session of oldSessions) {
-      yield* store.deleteSessionFiles(session.id)
-      yield* repo.delete(session.id)
-    }
-    const totalSize = yield* store.totalSize()
-    if (totalSize > 2 * 1024 * 1024 * 1024) {
-      // Delete oldest sessions until under limit
-    }
-  }),
-  Schedule.spaced(Duration.hours(1)),
-)
-```
+- delete archived/exited sessions older than retention period (default 30 days).
+- cap total `~/.tao/sessions` size (default 2 GB).
+- keep `status = 'live'` or `'detached'` sessions regardless of age.
+- explicit "Clear History" per session / per workspace / all.
 
 ---
 
@@ -674,40 +753,39 @@ const sessionCleanup = Effect.repeat(
 
 | Scenario | Handling |
 |---|---|
-| **Crash before serialize** | Log file exists up to crash point. Reopen falls back to PTY log replay. Text excerpt is empty. |
-| **State file corrupted** | CRC32 mismatch in deserialize() → return false. Fall back to log replay. |
-| **Both state and log missing** | Fresh terminal in workspace CWD. No scrollback. |
-| **Multiple sessions per workspace** | `getLatestForWorkspace` returns most recent. User can list all. |
-| **Settings.json manually edited** | Startup sync detects newer mtime → import into DB. |
-| **Ghostty-web upgrade breaks patch** | Our fork maintains the serialization patch. We control the rebase. |
-| **Zig not installed** | WASM binary is pre-built and committed. Only need Zig if regenerating. |
-| **Concurrent write to state file** | Serialized via main process — single writer. |
+| **Renderer crash/reload** | Reconnect to taod; live PTY never dies. |
+| **Electron app quit** | Default detach; taod keeps sessions alive. |
+| **Daemon crash** | Load latest snapshot + event tail. If agent resumable, spawn resume command via adapter. |
+| **Machine reboot** | No live PTY process. Use agent resume if available, else archive restore. |
+| **Snapshot corrupted** | CRC/version failure → load prior snapshot if available, else replay event log from start. |
+| **Event log tail huge** | Periodic snapshots bound replay. If renderer lags, taod sends fresh snapshot. |
+| **Resize during replay** | Event log includes RESIZE frames with seq; replay at correct dimensions. |
+| **Multiple panes per workspace** | Sessions keyed by terminal_id/lastSessionId, not workspace. |
+| **Secrets in terminal output** | User can disable persistence, reduce retention, clear history, or chmod session files. |
 
 ---
 
 ## Dependencies
 
-### NPM
+### Zig (apps/taod)
 
-```json
-{
-  "@effect/sql": "^0.51.0",
-  "@effect/sql-sqlite-node": "^0.52.0",
-  "@effect/platform": "^0.72.0",
-  "@effect/platform-node": "^0.66.0",
-  "better-sqlite3": "^12.6.0",
-  "uuid": "^11.0.0"
-}
-```
+- `ghostty` Zig package (terminal parser, git submodule or zig dependency).
+- `zig-sqlite` or direct `sqlite3.h` C ABI.
+- `zstd` via Zig package or system library.
+- No Node/npm dependencies in the daemon itself.
 
-### Zig (maintainers only)
+### TypeScript (apps/desktop, packages/shared)
+
+- `@effect/sql` (schema validation for desktop-side reads, optional).
+- `uuid` (session ID generation in renderer).
+- Agent adapter scripts may use Node built-ins only (no heavy deps).
+
+### Maintainers only
 
 ```bash
 brew install zig
 zig version  # 0.15.2+
 ```
-
-The WASM binary is pre-built. The `patches/` directory and build scripts are for maintainer use when regenerating.
 
 ---
 
@@ -715,25 +793,55 @@ The WASM binary is pre-built. The `patches/` directory and build scripts are for
 
 | Phase | What | Est. time |
 |---|---|---|
-| **1** | Write & test the Zig serialization patch. Build WASM binary. | 2-3 weeks |
-| **2** | Add `@effect/sql` deps, set up TaoDbLive layer, write migrations | 2 days |
-| **3** | Write DB services (SessionRepo, WorkspaceRepo) | 2 days |
-| **4** | Write FileStore layer | 1 day |
-| **5** | Modify PTY service to tee output to log file | 1 day |
-| **6** | Wire IPC (preload + main handlers) | 2 days |
-| **7** | Modify renderer terminal lifecycle (serialize/deserialize) | 2 days |
-| **8** | Add session cleanup maintenance | 1 day |
-| **9** | Write settings.json / pane-layouts.json readers | 1 day |
-| **10** | Remove localStorage Zustand persist + `storage.ts` | 0.5 day |
-| **11** | Testing and integration | 3 days |
+| **0** | Set up `apps/taod` Zig project with `build.zig`, dependency on Ghostty terminal parser | 1 week |
+| **1** | Write core daemon: Unix socket server, NDJSON RPC, session manager | 2 weeks |
+| **2** | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
+| **3** | Link Ghostty terminal parser; write `ghostty.zig` wrapper | 1-2 weeks |
+| **4** | Write Zig serialization patch (shared between native daemon and WASM build) | 2-3 weeks |
+| **5** | Write event log (framed binary, append/read/seek/crc) | 1 week |
+| **6** | Write SQLite layer (zig-sqlite, migrations, query functions) | 1 week |
+| **7** | Integrate daemon with Electron main (launch, socket client, IPC bridge) | 1 week |
+| **8** | Renderer attach from snapshot + live stream; remove old pty-service path | 1 week |
+| **9** | Add agent adapter spawning + pi/codex/claude adapter scripts | 1-2 weeks |
+| **10** | Add pane-layouts.json / settings.json services; migrate localStorage | 3-4 days |
+| **11** | Search excerpts / FTS, cleanup/retention, clear-history UX | 1 week |
+| **12** | Stress testing: crash, restart, daemon fail, large logs, agent resume | 1-2 weeks |
 
-**Total: ~6-8 weeks**
+**Total**: roughly 10-14 weeks, dominated by Ghostty serialization and robust daemon lifecycle.
 
 ---
 
-## What We DON'T Persist
+## Revised Summary
 
-- ❌ No chat/agent session history (CLI tools own this)
-- ❌ No terminal input history (shell history is the shell's job)
-- ❌ No PTY process state (reopen spawns a fresh shell)
-- ❌ No binary state for sessions outside ~30-day retention
+The persistence architecture is now:
+
+```
+┌──────────────────────────────┐
+│ Tao Renderer / React         │
+│ Ghostty renderer (WASM)      │
+│ Zustand (layout only)        │
+└──────────┬───────────────────┘
+           │ IPC (MessagePort)
+┌──────────▼───────────────────┐
+│ Electron main process        │
+│ TaodRpcClient (TypeScript)   │
+└──────────┬───────────────────┘
+           │ Unix socket (NDJSON)
+┌──────────▼───────────────────┐
+│ taod (Zig binary)            │
+│                              │
+│ PTY driver                   │
+│ Ghostty terminal parser      │ ← direct Zig link, no WASM
+│ Event log                    │
+│ Snapshot store (zstd)        │
+│ SQLite metadata              │
+│ Agent adapter processes      │ ← spawns small scripts
+└──────────────────────────────┘
+```
+
+- `taod` is a single static Zig binary. No Node, no npm, no WASM runtime for terminal parsing.
+- Ghostty serialization code is written once in Zig, shared between native daemon and WASM renderer.
+- Agent adapters are lightweight scripts spawned by `taod` — the only part that stays in
+  TypeScript/Node.
+- The Electron UI is a thin client that attaches/detaches from sessions. The daemon owns the
+  persistence and process lifecycle.
