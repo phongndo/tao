@@ -4,6 +4,12 @@ dist/
 *.log
 .DS_Store
 
+# zig
+.zig-cache/
+zig-cache/
+zig-out/
+zls.log
+
 # nix
 result
 bench/data/

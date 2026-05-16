@@ -28,6 +28,7 @@ Tao is a pnpm workspace. Root scripts delegate to `apps/desktop`, leaving room f
 
 ```text
 tao/
+├── apps/daemon/    # Zig taod persistence daemon
 ├── apps/desktop/   # Electron terminal app
 ├── packages/       # Shared workspace packages
 ├── docs/           # Architecture notes and plans
@@ -80,11 +81,15 @@ pnpm bench:all          # Run everything
 Desktop source lives in `apps/desktop`. Run commands from the repository root unless you need to target the package directly with `pnpm --filter @tao/desktop <script>`.
 
 ```bash
-pnpm tsc          # Type check
-pnpm lint         # Lint
-pnpm fmt          # Format
-pnpm check        # Format + lint (CI)
+pnpm tsc              # Type check TypeScript
+pnpm lint             # Lint TypeScript + Zig syntax
+pnpm fmt              # Format TypeScript + Zig
+pnpm check            # CI-equivalent TypeScript + Zig checks
+pnpm zig:check        # Zig-only lint + format check + tests
+pnpm fmt:nix:check    # Check flake.nix formatting
 ```
+
+`nix develop` provides `zig 0.16`, `zls` for Zig LSP, Node 22, pnpm 10, and `nixpkgs-fmt`.
 
 ## License
 

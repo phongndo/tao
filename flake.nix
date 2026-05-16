@@ -20,9 +20,11 @@
 
           # Build-time dependencies
           nativeBuildInputs = with pkgs; [
-            nodejs_22          # LTS (matches CI)
-            pnpm_10            # Package manager
-            zig_0_16           # For tao-gl WASM module
+            nodejs_22 # LTS (matches CI)
+            pnpm_10 # Package manager
+            zig_0_16 # taod daemon + Ghostty/Zig tooling
+            zls # Zig language server
+            nixpkgs-fmt # nix fmt / CI format check
           ];
 
           # Runtime dependencies for Electron
@@ -58,8 +60,11 @@
             echo "   node:  $(node --version)"
             echo "   pnpm:  $(pnpm --version)"
             echo "   zig:   $(zig version)"
+            echo "   zls:   $(zls --version)"
             echo ""
             echo "   pnpm install && pnpm dev"
+            echo "   pnpm check        # TS + Zig lint/format/type/test checks"
+            echo "   pnpm zig:lsp      # verify Zig language server availability"
             echo ""
           '';
         };

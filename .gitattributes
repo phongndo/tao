@@ -18,9 +18,9 @@
 *.yaml text eol=lf
 *.toml text eol=lf
 *.nix text eol=lf
+pnpm-lock.yaml text eol=lf
 
 # Binary files
 *.wasm binary
 *.png binary
 *.svg binary
-pnpm-lock.yaml binary

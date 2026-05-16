@@ -23,9 +23,8 @@ pnpm dev             # Start terminal with HMR
 3. **Make your changes**
 4. **Run checks:**
    ```bash
-   pnpm tsc        # Type check
-   pnpm lint       # Lint
-   pnpm build      # Production build
+   pnpm check      # TypeScript + Zig lint/format/type/test checks
+   pnpm build      # Production build, including taod
    pnpm bench      # Verify no performance regressions
    ```
 5. **Commit** using [Conventional Commits](https://www.conventionalcommits.org/):
@@ -42,6 +41,7 @@ pnpm dev             # Start terminal with HMR
 ```
 tao/
 ├── apps/
+│   ├── daemon/        # Zig taod persistence daemon
 │   └── desktop/
 │       ├── src/
 │       │   ├── main/       # Electron main process (window, PTY, IPC)
@@ -63,7 +63,10 @@ See [docs](docs/README.md) for architecture notes and plans.
 
 ## Code Style
 
-- **TypeScript**: `oxlint` for linting and `oxfmt` for formatting. `pnpm fmt` to auto-format.
+- **TypeScript**: `oxlint` for linting and `oxfmt` for formatting.
+- **Zig**: `zig fmt`, `zig ast-check`, and `zig build test` are wired through `pnpm zig:*` scripts.
+- **Nix**: `nix fmt` formats `flake.nix`; the dev shell provides `zig`, `zls`, `node`, and `pnpm`.
+- Run `pnpm fmt` to auto-format TypeScript and Zig. Run `pnpm zig:lsp` inside `nix develop` to verify the Zig language server is available.
 - **Commit messages**: [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## License
