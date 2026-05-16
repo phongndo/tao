@@ -1,6 +1,7 @@
 import {
   FiChevronLeft,
   FiChevronRight,
+  FiArchive,
   FiDatabase,
   FiFolderPlus,
   FiGitBranch,
@@ -347,6 +348,7 @@ const TabBar = memo(function TabBar({
   onSelectTab,
   onCloseTab,
   onReorderTab,
+  archivedTabIds,
 }: {
   tabs: Tab[]
   activeTabId: string | null
@@ -362,6 +364,7 @@ const TabBar = memo(function TabBar({
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
+  archivedTabIds: ReadonlySet<string>
 }) {
   return (
     <div className="tab-bar">
@@ -378,9 +381,17 @@ const TabBar = memo(function TabBar({
       <div className="tab-list" role="tablist" aria-label="Terminal tabs">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
+          const isArchived = archivedTabIds.has(tab.id)
+          const className = [
+            'tab-item',
+            isActive ? 'tab-item-active' : null,
+            isArchived ? 'tab-item-archived' : null,
+          ]
+            .filter(Boolean)
+            .join(' ')
           return (
             <div
-              className={isActive ? 'tab-item tab-item-active' : 'tab-item'}
+              className={className}
               key={tab.id}
               draggable
               onDragStart={(event) => {
@@ -405,10 +416,19 @@ const TabBar = memo(function TabBar({
                 className="tab-select-button"
                 role="tab"
                 aria-selected={isActive}
+                title={
+                  isArchived ? `${tab.name} — contains a read-only archived session` : tab.name
+                }
                 onClick={() => onSelectTab(tab.id)}
               >
                 <FiTerminal size={13} />
                 <span>{tab.name}</span>
+                {isArchived ? (
+                  <span className="tab-archive-pill" aria-label="Read-only archive">
+                    <FiArchive size={10} />
+                    Archive
+                  </span>
+                ) : null}
               </button>
               <button
                 type="button"
@@ -503,6 +523,7 @@ const PaneTile = memo(function PaneTile({
   onSelect,
   onTitleChange,
   onRestartSession,
+  onArchiveStateChange,
 }: {
   pane: Pane
   terminalCwd?: string
@@ -511,12 +532,21 @@ const PaneTile = memo(function PaneTile({
   onSelect(): void
   onTitleChange(title: string): void
   onRestartSession(): void
+  onArchiveStateChange(archived: boolean): void
 }) {
   const status = pane.status ?? 'idle'
+  const isArchived = status === 'archived'
+  const className = [
+    'pane-tile',
+    isActive ? 'pane-tile-active' : null,
+    isArchived ? 'pane-tile-archived' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
     <div
-      className={isActive ? 'pane-tile pane-tile-active' : 'pane-tile'}
+      className={className}
       data-pane-id={pane.id}
       onPointerDown={(event) => {
         if (event.target instanceof Node && event.currentTarget.contains(event.target)) onSelect()
@@ -537,6 +567,7 @@ const PaneTile = memo(function PaneTile({
           focusToken={focusToken}
           onTitleChange={onTitleChange}
           onRestartSession={onRestartSession}
+          onArchiveStateChange={onArchiveStateChange}
         />
       ) : (
         <div className="pane-standby" aria-hidden="true">
@@ -557,6 +588,7 @@ const PaneGrid = memo(function PaneGrid({
   onSelectPane,
   onPaneTitle,
   onRestartPaneSession,
+  onPaneArchiveState,
 }: {
   tab: Tab
   terminalCwd?: string
@@ -567,6 +599,7 @@ const PaneGrid = memo(function PaneGrid({
   onSelectPane(paneId: string): void
   onPaneTitle(paneId: string, title: string): void
   onRestartPaneSession(paneId: string): void
+  onPaneArchiveState(paneId: string, archived: boolean): void
 }) {
   const [draftLayout, setDraftLayout] = useState<MosaicNode<string> | null>(tab.layout)
 
@@ -602,12 +635,14 @@ const PaneGrid = memo(function PaneGrid({
           onSelect={() => onSelectPane(pane.id)}
           onTitleChange={(title) => onPaneTitle(pane.id, title)}
           onRestartSession={() => onRestartPaneSession(pane.id)}
+          onArchiveStateChange={(archived) => onPaneArchiveState(pane.id, archived)}
         />
       )
     },
     [
       activePaneId,
       onPaneTitle,
+      onPaneArchiveState,
       onRestartPaneSession,
       onSelectPane,
       panesById,
@@ -652,6 +687,7 @@ export function App() {
   const selectPaneByDirection = useTaoStore((state) => state.selectPaneByDirection)
   const restartPaneSession = useTaoStore((state) => state.restartPaneSession)
   const setPaneTitle = useTaoStore((state) => state.setPaneTitle)
+  const setPaneStatus = useTaoStore((state) => state.setPaneStatus)
   const splitActivePane = useTaoStore((state) => state.splitActivePane)
   const closeActivePane = useTaoStore((state) => state.closeActivePane)
   const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
@@ -711,6 +747,10 @@ export function App() {
     [workspaces],
   )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
+  const archivedTabIds = useMemo(
+    () => new Set(panes.filter((pane) => pane.status === 'archived').map((pane) => pane.tabId)),
+    [panes],
+  )
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
     [terminalFocusCounts],
@@ -931,6 +971,19 @@ export function App() {
     }
   }
 
+  const handlePaneArchiveState = useCallback(
+    (paneId: string, archived: boolean) => {
+      if (archived) {
+        setPaneStatus(paneId, 'archived')
+        return
+      }
+
+      const pane = useTaoStore.getState().panes.find((candidate) => candidate.id === paneId)
+      if (pane?.status === 'archived') setPaneStatus(paneId, 'idle')
+    },
+    [setPaneStatus],
+  )
+
   const handleResizeSidebar = useCallback(
     (nextWidth: number) => {
       const clampedWidth =
@@ -1022,6 +1075,7 @@ export function App() {
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
+            archivedTabIds={archivedTabIds}
           />
           <div className="pane-grid">
             {mountedTabs.length > 0 ? (
@@ -1045,6 +1099,7 @@ export function App() {
                       onSelectPane={selectPane}
                       onPaneTitle={setPaneTitle}
                       onRestartPaneSession={restartPaneSession}
+                      onPaneArchiveState={handlePaneArchiveState}
                     />
                   </div>
                 )

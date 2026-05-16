@@ -83,7 +83,7 @@ export interface Pane {
 }
 
 export type PaneType = 'terminal' | 'webview'
-export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
+export type PaneStatus = 'idle' | 'working' | 'permission' | 'review' | 'archived'
 export type ReorderPlacement = 'before' | 'after'
 
 const PaneStatusSchema = Schema.Union([
@@ -91,6 +91,7 @@ const PaneStatusSchema = Schema.Union([
   Schema.Literal('working'),
   Schema.Literal('permission'),
   Schema.Literal('review'),
+  Schema.Literal('archived'),
 ])
 const PaneTypeSchema = Schema.Union([Schema.Literal('terminal'), Schema.Literal('webview')])
 

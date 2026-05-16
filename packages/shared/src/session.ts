@@ -87,6 +87,7 @@ export const PaneLayoutSchema = Schema.Struct({
       Schema.Literal('working'),
       Schema.Literal('permission'),
       Schema.Literal('review'),
+      Schema.Literal('archived'),
     ]),
   ),
   lastSessionId: Schema.optional(Schema.String),

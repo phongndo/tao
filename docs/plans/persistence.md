@@ -59,6 +59,10 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
   utility-process PTY, Tao now restores the bounded terminal history as an archived/read-only view
   instead of starting a fake live shell. The archive banner explains the state and provides a
   **Start fresh shell** action that creates a new session ID for the pane.
+- **Archived-session visual hardening**: archived/read-only panes now get an explicit persisted pane
+  status, amber pane/tab treatment, an archive pill in affected tabs, a dimmed read-only terminal
+  surface, hidden active cursor, and clearer copy explaining that input is ignored until a fresh
+  shell is started.
 - **Current file-store retention maintenance**: the utility PTY service periodically applies the
   persistence retention settings to inactive session directories while preserving known live
   sessions.
@@ -82,15 +86,19 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
   `build.zig`, `src/main.zig`, module boundaries for daemon/session/RPC/PTY/event-log/snapshot/DB/
   adapter/cleanup/VT work, placeholder PTY/VT boundaries, SQLite migration strings, and Zig unit
   tests for the scaffolded pieces. The skeleton is buildable but not yet used by the Electron app.
+- **Daemon control RPC/session registry prototype**: `taod` now binds `~/.tao/run/taod.sock`, accepts
+  newline-delimited JSON control requests, handles create/attach/resize/detach/kill against an
+  in-memory session registry, and returns typed JSON responses. PTY streaming is still scaffolded.
 - **Zig tooling and CI support**: Nix now provides Zig 0.16, ZLS, and `nixpkgs-fmt`; root pnpm
   `zig:*` scripts wrap build/test/lint/format/LSP checks; CI installs Zig, runs `pnpm check`, verifies
   the Nix dev-shell/ZLS path, and builds `taod` before desktop production builds.
 
 ### Important limitations of the current slice
 
-- There is **no usable Zig `taod` daemon yet**. A buildable `apps/daemon` skeleton exists, but it has
-  no enabled socket accept loop, no live PTY driver, no Electron client bridge, and no daemon-owned
-  session runtime. PTYs are still owned by the Electron utility process.
+- There is **no production-usable Zig `taod` daemon yet**. A buildable `apps/daemon` prototype exists
+  with a JSON control socket and in-memory session registry, but it has no live PTY driver, no binary
+  stream framing, no Electron client bridge, and no daemon-owned PTY runtime. PTYs are still owned by
+  the Electron utility process.
 - Live reattach currently works only while the utility process remains alive. It is not yet the
   durable app-independent daemon guarantee described below.
 - There are **no libghostty-vt snapshots yet**. Visual restore into a new live shell is intentionally
@@ -105,18 +113,15 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
 
 ### Next recommended work
 
-1. **Make archived mode harder to confuse with a live shell**: keep the read-only fallback, but improve
-   tab/pane labeling and visual treatment so users immediately understand why input is ignored.
-2. **Turn the `apps/daemon` skeleton into a real daemon**: implement the socket accept loop, JSON
-   control RPC handling, binary stream framing, and real session registry behavior; keep the current
-   Electron utility service as a fallback until the daemon is usable.
-3. **Implement the POSIX PTY driver in `apps/daemon/src/pty.zig`** using `posix_openpt`/fork/exec,
+1. **Implement binary stream framing in `apps/daemon`** for PTY output, resize, exit, snapshot, and
+   agent frames; keep the current Electron utility service as a fallback until the daemon is usable.
+2. **Implement the POSIX PTY driver in `apps/daemon/src/pty.zig`** using `posix_openpt`/fork/exec,
    resize, input writes, output reads, and exit handling.
-4. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
+3. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
    PTYs.
-5. **Wire SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
+4. **Wire SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
    session files already being written; migration SQL is currently scaffolded in `apps/daemon/src/db.zig`.
-6. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
+5. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
    the largest unknown and should be isolated behind `apps/daemon/src/vt.zig`.
 
 ---

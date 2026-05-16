@@ -8,6 +8,17 @@ pub const Status = enum {
     crashed,
     archived,
     killed,
+
+    pub fn text(self: Status) []const u8 {
+        return switch (self) {
+            .live => "live",
+            .detached => "detached",
+            .exited => "exited",
+            .crashed => "crashed",
+            .archived => "archived",
+            .killed => "killed",
+        };
+    }
 };
 
 pub const TerminalSession = struct {
@@ -74,10 +85,22 @@ pub const Manager = struct {
         return true;
     }
 
+    pub fn attach(self: *Manager, session_id: []const u8) ?*TerminalSession {
+        const item = self.find(session_id) orelse return null;
+        if (item.status == .detached) item.status = .live;
+        return item;
+    }
+
     pub fn resize(self: *Manager, session_id: []const u8, cols: u16, rows: u16) bool {
         const item = self.find(session_id) orelse return false;
         item.cols = cols;
         item.rows = rows;
+        return true;
+    }
+
+    pub fn kill(self: *Manager, session_id: []const u8) bool {
+        const item = self.find(session_id) orelse return false;
+        item.status = .killed;
         return true;
     }
 };
@@ -100,4 +123,8 @@ test "session manager creates and updates sessions" {
     try std.testing.expectEqual(@as(u16, 120), manager.find("session-1").?.cols);
     try std.testing.expect(manager.detach("session-1"));
     try std.testing.expectEqual(Status.detached, manager.find("session-1").?.status);
+    try std.testing.expect(manager.attach("session-1") != null);
+    try std.testing.expectEqual(Status.live, manager.find("session-1").?.status);
+    try std.testing.expect(manager.kill("session-1"));
+    try std.testing.expectEqualStrings("killed", manager.find("session-1").?.status.text());
 }

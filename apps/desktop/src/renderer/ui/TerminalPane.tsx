@@ -15,6 +15,7 @@ export function TerminalPane({
   focusToken,
   onTitleChange,
   onRestartSession,
+  onArchiveStateChange,
 }: {
   sessionId: string
   cwd?: string
@@ -22,10 +23,12 @@ export function TerminalPane({
   focusToken: number
   onTitleChange?(title: string): void
   onRestartSession?(): void
+  onArchiveStateChange?(archived: boolean): void
 }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const onTitleChangeRef = useRef(onTitleChange)
+  const onArchiveStateChangeRef = useRef(onArchiveStateChange)
   const cwdRef = useRef(cwd)
   const terminalReadyRef = useRef(false)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
@@ -34,6 +37,10 @@ export function TerminalPane({
   useEffect(() => {
     onTitleChangeRef.current = onTitleChange
   }, [onTitleChange])
+
+  useEffect(() => {
+    onArchiveStateChangeRef.current = onArchiveStateChange
+  }, [onArchiveStateChange])
 
   useEffect(() => {
     cwdRef.current = cwd
@@ -57,11 +64,15 @@ export function TerminalPane({
       try {
         setTerminalError(null)
         setIsArchived(false)
+        onArchiveStateChangeRef.current?.(false)
         const terminal = await createTerminal(surface, sessionId, {
           cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
           onArchived: () => {
-            if (!disposed) setIsArchived(true)
+            if (!disposed) {
+              setIsArchived(true)
+              onArchiveStateChangeRef.current?.(true)
+            }
           },
         })
         if (disposed) {
@@ -71,8 +82,8 @@ export function TerminalPane({
 
         terminalRef.current = terminal
         terminalReadyRef.current = true
-        setTerminalCursorVisible(terminal, isActive)
-        if (isActive) {
+        setTerminalCursorVisible(terminal, isActive && !isArchived)
+        if (isActive && !isArchived) {
           terminal.focus()
           window.electronAPI.signalReady()
         } else {
@@ -104,17 +115,21 @@ export function TerminalPane({
     const terminal = terminalRef.current
     if (!terminal) return
 
-    setTerminalCursorVisible(terminal, isActive)
-    if (isActive) {
+    setTerminalCursorVisible(terminal, isActive && !isArchived)
+    if (isActive && !isArchived) {
       terminal.focus()
       if (terminalReadyRef.current) window.electronAPI.signalReady()
     } else {
       terminal.blur()
     }
-  }, [focusToken, isActive])
+  }, [focusToken, isActive, isArchived])
 
   return (
-    <div className="terminal-container">
+    <div
+      className={
+        isArchived ? 'terminal-container terminal-container-archived' : 'terminal-container'
+      }
+    >
       <div className="terminal-surface" ref={surfaceRef} />
       {terminalError ? (
         <div className="terminal-error">
@@ -125,7 +140,8 @@ export function TerminalPane({
       ) : null}
       {isArchived && !terminalError ? (
         <div className="terminal-archive-banner">
-          <span>Archived session</span>
+          <span className="terminal-archive-label">Read-only archive</span>
+          <span className="terminal-archive-detail">Input is ignored until you start fresh.</span>
           <button type="button" onClick={onRestartSession} disabled={!onRestartSession}>
             Start fresh shell
           </button>
