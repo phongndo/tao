@@ -303,6 +303,28 @@ pub fn appendExit(
     return last_seq.*;
 }
 
+pub fn appendSnapshotMark(
+    allocator: std.mem.Allocator,
+    event_log_path: []const u8,
+    last_seq: *u64,
+    snapshot_seq: u64,
+    snapshot_path: []const u8,
+) !u64 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    try out.writer.print(
+        "{{\"snapshotSeq\":{d},\"path\":{f}}}",
+        .{ snapshot_seq, std.json.fmt(snapshot_path, .{}) },
+    );
+    const payload = try out.toOwnedSlice();
+    defer allocator.free(payload);
+
+    last_seq.* += 1;
+    try appendFramePath(allocator, event_log_path, .snapshot_mark, last_seq.*, payload);
+    return last_seq.*;
+}
+
 pub fn readOwnedFrames(allocator: std.mem.Allocator, path: []const u8) ![]OwnedFrame {
     const data = try readFileAlloc(allocator, path, file_header_size + max_payload_bytes);
     defer if (data) |bytes| allocator.free(bytes);

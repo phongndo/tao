@@ -121,8 +121,10 @@ const create_migrations_table_sql =
 const upsert_terminal_session_sql =
     \\INSERT INTO terminal_sessions (
     \\    id, terminal_id, workspace_id, cwd, argv_json, status, daemon_id, pid,
-    \\    cols, rows, title, event_log_path, last_seq, started_at, last_activity_at
-    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    \\    cols, rows, title, event_log_path, last_seq,
+    \\    snapshot_path, snapshot_seq, snapshot_crc32, snapshot_size,
+    \\    started_at, last_activity_at
+    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     \\ON CONFLICT(id) DO UPDATE SET
     \\    terminal_id = excluded.terminal_id,
     \\    workspace_id = excluded.workspace_id,
@@ -136,6 +138,10 @@ const upsert_terminal_session_sql =
     \\    title = COALESCE(excluded.title, terminal_sessions.title),
     \\    event_log_path = excluded.event_log_path,
     \\    last_seq = excluded.last_seq,
+    \\    snapshot_path = COALESCE(excluded.snapshot_path, terminal_sessions.snapshot_path),
+    \\    snapshot_seq = CASE WHEN excluded.snapshot_path IS NULL THEN terminal_sessions.snapshot_seq ELSE excluded.snapshot_seq END,
+    \\    snapshot_crc32 = CASE WHEN excluded.snapshot_path IS NULL THEN terminal_sessions.snapshot_crc32 ELSE excluded.snapshot_crc32 END,
+    \\    snapshot_size = CASE WHEN excluded.snapshot_path IS NULL THEN terminal_sessions.snapshot_size ELSE excluded.snapshot_size END,
     \\    last_activity_at = datetime('now')
     \\;
 ;
@@ -243,6 +249,10 @@ pub const TerminalSessionRecord = struct {
     title: ?[]const u8 = null,
     event_log_path: []const u8,
     last_seq: u64,
+    snapshot_path: ?[]const u8 = null,
+    snapshot_seq: u64 = 0,
+    snapshot_crc32: ?u32 = null,
+    snapshot_size: ?usize = null,
 };
 
 pub const TerminalEndedRecord = struct {
@@ -410,6 +420,12 @@ pub const Database = struct {
         try stmt.bindNullableText(11, record.title);
         try stmt.bindText(12, record.event_log_path);
         try stmt.bindInt64(13, record.last_seq);
+        try stmt.bindNullableText(14, record.snapshot_path);
+        try stmt.bindInt64(15, record.snapshot_seq);
+        const snapshot_crc32: ?i64 = if (record.snapshot_crc32) |value| @intCast(value) else null;
+        const snapshot_size: ?i64 = if (record.snapshot_size) |value| @intCast(value) else null;
+        try stmt.bindNullableInt64(16, snapshot_crc32);
+        try stmt.bindNullableInt64(17, snapshot_size);
         try stmt.stepDone();
     }
 

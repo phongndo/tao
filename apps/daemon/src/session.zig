@@ -2,6 +2,7 @@ const std = @import("std");
 const event_log = @import("event_log.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
+const snapshot = @import("snapshot.zig");
 const vt = @import("vt.zig");
 
 pub const max_pending_output_bytes = 1024 * 1024;
@@ -43,6 +44,7 @@ pub const TerminalSession = struct {
     session_dir: ?[]const u8,
     event_log_path: ?[]const u8,
     excerpt_path: ?[]const u8,
+    snapshot_path: ?[]const u8,
     subscribers: std.ArrayList(std.c.fd_t),
     pending_output: std.ArrayList(PendingOutputFrame),
     pending_output_bytes: usize,
@@ -52,6 +54,9 @@ pub const TerminalSession = struct {
     vt_terminal: ?vt.Terminal,
     status: Status,
     last_seq: u64,
+    snapshot_seq: u64,
+    snapshot_crc32: ?u32,
+    snapshot_size: usize,
     reader_started: bool,
 
     pub fn deinit(self: *TerminalSession, allocator: std.mem.Allocator) void {
@@ -63,21 +68,33 @@ pub const TerminalSession = struct {
         if (self.session_dir) |path| allocator.free(path);
         if (self.event_log_path) |path| allocator.free(path);
         if (self.excerpt_path) |path| allocator.free(path);
+        if (self.snapshot_path) |path| allocator.free(path);
         self.subscribers.deinit(allocator);
         self.clearPendingOutput(allocator);
         self.pending_output.deinit(allocator);
         self.* = undefined;
     }
 
-    pub fn installPersistence(self: *TerminalSession, allocator: std.mem.Allocator, files: event_log.SessionFiles) void {
+    pub fn installPersistence(self: *TerminalSession, allocator: std.mem.Allocator, files: event_log.SessionFiles) !void {
+        const next_snapshot_path = try snapshot.pathAlloc(allocator, files.dir);
+        errdefer allocator.free(next_snapshot_path);
+
         if (self.session_dir) |path| allocator.free(path);
         if (self.event_log_path) |path| allocator.free(path);
         if (self.excerpt_path) |path| allocator.free(path);
+        if (self.snapshot_path) |path| allocator.free(path);
 
         self.session_dir = files.dir;
         self.event_log_path = files.event_log_path;
         self.excerpt_path = files.excerpt_path;
+        self.snapshot_path = next_snapshot_path;
         self.last_seq = files.last_seq;
+    }
+
+    pub fn clearSnapshotMetadata(self: *TerminalSession) void {
+        self.snapshot_seq = 0;
+        self.snapshot_crc32 = null;
+        self.snapshot_size = 0;
     }
 
     pub fn updateCreateMetadata(
@@ -139,6 +156,21 @@ pub const TerminalSession = struct {
         return try terminal.plainTextAlloc(allocator);
     }
 
+    pub fn currentScreenSnapshotAlloc(self: *const TerminalSession, allocator: std.mem.Allocator) !?[]u8 {
+        if (!vt.supports_current_screen_snapshots) return null;
+        const terminal = self.vt_terminal orelse return null;
+        return try terminal.serializeCurrentScreenAlloc(allocator);
+    }
+
+    pub fn restoreCurrentScreenSnapshot(self: *TerminalSession, allocator: std.mem.Allocator, payload: []const u8) !bool {
+        if (!vt.supports_current_screen_snapshots) return false;
+        const terminal = if (self.vt_terminal) |*terminal| terminal else return false;
+        try terminal.deserializeCurrentScreen(allocator, payload);
+        self.cols = terminal.cols;
+        self.rows = terminal.rows;
+        return true;
+    }
+
     pub fn pidU32(self: *const TerminalSession) ?u32 {
         const child = self.pty_child orelse return null;
         if (child.pid <= 0) return null;
@@ -177,6 +209,7 @@ pub const Manager = struct {
             .session_dir = null,
             .event_log_path = null,
             .excerpt_path = null,
+            .snapshot_path = null,
             .subscribers = .empty,
             .pending_output = .empty,
             .pending_output_bytes = 0,
@@ -186,6 +219,9 @@ pub const Manager = struct {
             .vt_terminal = vt_terminal,
             .status = .live,
             .last_seq = 0,
+            .snapshot_seq = 0,
+            .snapshot_crc32 = null,
+            .snapshot_size = 0,
             .reader_started = false,
         });
         return &self.sessions.items[self.sessions.items.len - 1];

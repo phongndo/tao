@@ -6,6 +6,8 @@ const event_log = @import("event_log.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
 const session = @import("session.zig");
+const snapshot = @import("snapshot.zig");
+const vt = @import("vt.zig");
 
 const control_payload_max = 64 * 1024;
 
@@ -278,9 +280,11 @@ pub const Daemon = struct {
     fn handleDetachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         if (!self.sessions.detach(session_id)) return notFound(allocator, request);
-        self.recordTerminalSessionLocked(self.sessions.find(session_id).?, null);
+        const item = self.sessions.find(session_id).?;
+        if (item.subscribers.items.len == 0) self.checkpointCurrentScreenLocked(item);
+        self.recordTerminalSessionLocked(item, null);
 
-        return sessionResponse(allocator, request, self.sessions.find(session_id).?);
+        return sessionResponse(allocator, request, item);
     }
 
     fn handleKillLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -467,16 +471,19 @@ pub const Daemon = struct {
     }
 
     fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
-        if (item.event_log_path != null and item.excerpt_path != null and item.session_dir != null) return;
+        if (item.event_log_path != null and item.excerpt_path != null and item.session_dir != null and item.snapshot_path != null) return;
 
-        const files = try event_log.openPersistentSession(self.allocator, self.config.sessions_dir, item.id);
-        item.installPersistence(self.allocator, files);
+        var files = try event_log.openPersistentSession(self.allocator, self.config.sessions_dir, item.id);
+        errdefer files.deinit(self.allocator);
+        try item.installPersistence(self.allocator, files);
     }
 
     fn resetSessionHistoryLocked(self: *Daemon, item: *session.TerminalSession) !void {
-        const files = try event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item.id);
-        item.installPersistence(self.allocator, files);
+        var files = try event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item.id);
+        errdefer files.deinit(self.allocator);
+        try item.installPersistence(self.allocator, files);
         item.clearPendingOutput(self.allocator);
+        self.clearSnapshotFileLocked(item);
 
         if (self.database) |*database| {
             database.clearTerminalHistoryMetadata(item.id) catch |err| {
@@ -566,6 +573,11 @@ pub const Daemon = struct {
         const item = self.sessions.find(session_id) orelse return false;
         if (!isLiveAttachable(item)) return false;
         if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+        self.sendCurrentScreenSnapshotToSubscriberLocked(item, socket_fd) catch |err| {
+            std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ item.id, err });
+            _ = self.sessions.removeSubscriber(session_id, socket_fd);
+            return false;
+        };
         self.flushPendingOutputToSubscriberLocked(item, socket_fd) catch |err| {
             std.log.warn("failed to flush pending output for {s}: {t}", .{ item.id, err });
             _ = self.sessions.removeSubscriber(session_id, socket_fd);
@@ -580,7 +592,10 @@ pub const Daemon = struct {
 
         const removed = self.sessions.removeSubscriber(session_id, socket_fd);
         if (removed) {
-            if (self.sessions.find(session_id)) |item| self.recordTerminalSessionLocked(item, null);
+            if (self.sessions.find(session_id)) |item| {
+                if (item.subscribers.items.len == 0) self.checkpointCurrentScreenLocked(item);
+                self.recordTerminalSessionLocked(item, null);
+            }
         }
         return removed;
     }
@@ -728,6 +743,7 @@ pub const Daemon = struct {
         const database = if (self.database) |*database| database else return;
         const event_log_path = item.event_log_path orelse return;
         const pid: ?i64 = if (item.pidU32()) |value| @intCast(value) else null;
+        const snapshot_path = if (item.snapshot_crc32 != null) item.snapshot_path else null;
 
         database.recordTerminalSession(.{
             .id = item.id,
@@ -740,6 +756,10 @@ pub const Daemon = struct {
             .rows = item.rows,
             .event_log_path = event_log_path,
             .last_seq = item.last_seq,
+            .snapshot_path = snapshot_path,
+            .snapshot_seq = item.snapshot_seq,
+            .snapshot_crc32 = item.snapshot_crc32,
+            .snapshot_size = if (item.snapshot_crc32 != null) item.snapshot_size else null,
         }) catch |err| {
             std.log.warn("failed to record terminal session {s}: {t}", .{ item.id, err });
         };
@@ -849,6 +869,70 @@ pub const Daemon = struct {
         var payload: [8]u8 = undefined;
         const encoded_payload = try rpc.encodeExitPayload(&payload, exit_code, signal_value);
         try self.broadcastStreamFrameLocked(item, .exit, seq, encoded_payload);
+    }
+
+    fn checkpointCurrentScreenLocked(self: *Daemon, item: *session.TerminalSession) void {
+        const snapshot_path = item.snapshot_path orelse return;
+        const payload = item.currentScreenSnapshotAlloc(self.allocator) catch |err| {
+            std.log.warn("failed to serialize current-screen snapshot for {s}: {t}", .{ item.id, err });
+            return;
+        };
+        const snapshot_payload = payload orelse return;
+        defer self.allocator.free(snapshot_payload);
+
+        const snapshot_seq = item.last_seq;
+        const meta = snapshot.writeCurrentScreenPath(self.allocator, snapshot_path, .{
+            .seq = snapshot_seq,
+            .cols = item.cols,
+            .rows = item.rows,
+            .backend_name = vt.backend_name,
+            .payload = snapshot_payload,
+        }) catch |err| {
+            std.log.warn("failed to write current-screen snapshot for {s}: {t}", .{ item.id, err });
+            return;
+        };
+
+        item.snapshot_seq = meta.seq;
+        item.snapshot_crc32 = meta.crc32;
+        item.snapshot_size = meta.size;
+
+        if (item.event_log_path) |event_log_path| {
+            _ = event_log.appendSnapshotMark(self.allocator, event_log_path, &item.last_seq, meta.seq, snapshot_path) catch |err| {
+                std.log.warn("failed to append snapshot mark for {s}: {t}", .{ item.id, err });
+            };
+        }
+    }
+
+    fn clearSnapshotFileLocked(self: *Daemon, item: *session.TerminalSession) void {
+        _ = self;
+        if (item.snapshot_path) |path| {
+            snapshot.deleteCurrentScreenPath(path) catch |err| {
+                std.log.warn("failed to delete current-screen snapshot for {s}: {t}", .{ item.id, err });
+            };
+        }
+        item.clearSnapshotMetadata();
+    }
+
+    fn sendCurrentScreenSnapshotToSubscriberLocked(self: *Daemon, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
+        const payload = try item.currentScreenSnapshotAlloc(self.allocator);
+        const snapshot_payload = payload orelse return;
+        defer self.allocator.free(snapshot_payload);
+
+        const encoded_snapshot = try snapshot.encodeAlloc(self.allocator, .{
+            .seq = item.last_seq,
+            .cols = item.cols,
+            .rows = item.rows,
+            .backend_name = vt.backend_name,
+            .payload = snapshot_payload,
+        });
+        defer self.allocator.free(encoded_snapshot);
+
+        const encoded_len = rpc.encodedStreamFrameSize(encoded_snapshot.len);
+        const buffer = try self.allocator.alloc(u8, encoded_len);
+        defer self.allocator.free(buffer);
+
+        const encoded = try rpc.encodeStreamFrame(buffer, .snapshot, item.id, item.last_seq, encoded_snapshot);
+        try writeAllFd(socket_fd, encoded);
     }
 
     fn broadcastStreamFrameLocked(
@@ -1209,4 +1293,49 @@ test "daemon control RPC reports missing sessions" {
 
     try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "session not found") != null);
+}
+
+test "daemon detach checkpoints current-screen snapshot" {
+    if (!vt.supports_current_screen_snapshots) return;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+    try daemon.prepareStorage(std.testing.io);
+
+    const created = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"1","method":"create","session_id":"snapshot-session","terminal_id":"snapshot-terminal","cols":24,"rows":4}
+    );
+    defer std.testing.allocator.free(created);
+
+    const item = daemon.sessions.find("snapshot-session").?;
+    try item.writeVt("snapshot text");
+
+    const detached = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"2","method":"detach","session_id":"snapshot-session"}
+    );
+    defer std.testing.allocator.free(detached);
+
+    try std.testing.expect(item.snapshot_crc32 != null);
+    try std.testing.expect(item.snapshot_size > 0);
+
+    var decoded = (try snapshot.readCurrentScreenPath(std.testing.allocator, item.snapshot_path.?)).?;
+    defer decoded.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings(vt.backend_name, decoded.backend_name);
+
+    var restored = try vt.Terminal.init(std.testing.allocator, 1, 1);
+    defer restored.deinit(std.testing.allocator);
+    try restored.deserializeCurrentScreen(std.testing.allocator, decoded.payload);
+
+    const text = try restored.plainTextAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+    try std.testing.expect(std.mem.indexOf(u8, text, "snapshot text") != null);
 }

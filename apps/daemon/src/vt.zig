@@ -9,6 +9,7 @@ else
 pub const Options = backend.Options;
 pub const Terminal = backend.Terminal;
 pub const backend_name = backend.backend_name;
+pub const supports_current_screen_snapshots = backend.supports_current_screen_snapshots;
 
 pub fn isLibghosttyBacked() bool {
     return build_options.libghostty_vt_c;
@@ -35,6 +36,29 @@ test "vt wrapper tracks a smoke-test current screen" {
     const text = try terminal.plainTextAlloc(std.testing.allocator);
     defer std.testing.allocator.free(text);
 
+    try std.testing.expect(std.mem.indexOf(u8, text, "hello") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "  VT") != null);
+}
+
+test "vt wrapper round-trips current-screen snapshots when supported" {
+    if (!supports_current_screen_snapshots) return;
+
+    var terminal = try Terminal.init(std.testing.allocator, 12, 4);
+    defer terminal.deinit(std.testing.allocator);
+    try terminal.write("hello\r\n\x1b[2;3HVT");
+
+    const snapshot = try terminal.serializeCurrentScreenAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(snapshot);
+
+    var restored = try Terminal.init(std.testing.allocator, 4, 2);
+    defer restored.deinit(std.testing.allocator);
+    try restored.deserializeCurrentScreen(std.testing.allocator, snapshot);
+
+    const text = try restored.plainTextAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+
+    try std.testing.expectEqual(@as(u16, 12), restored.cols);
+    try std.testing.expectEqual(@as(u16, 4), restored.rows);
     try std.testing.expect(std.mem.indexOf(u8, text, "hello") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "  VT") != null);
 }

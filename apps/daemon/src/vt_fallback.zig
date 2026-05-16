@@ -1,6 +1,12 @@
 const std = @import("std");
 
 pub const backend_name = "fallback";
+pub const supports_current_screen_snapshots = true;
+
+const current_screen_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x56, 0x46, 0x42, 0x01, 0x00 }; // TAOVFB\1\0
+const current_screen_version: u16 = 1;
+const current_screen_header_size: usize = 30;
+const max_current_screen_bytes: usize = 16 * 1024 * 1024;
 
 pub const Options = struct {
     max_scrollback: u32 = 0,
@@ -100,6 +106,67 @@ pub const Terminal = struct {
         }
 
         return try out.toOwnedSlice();
+    }
+
+    pub fn serializeCurrentScreenAlloc(self: *const Terminal, allocator: std.mem.Allocator) ![]u8 {
+        if (self.screen.len > max_current_screen_bytes) return error.SnapshotTooLarge;
+
+        const total_len = current_screen_header_size + self.screen.len;
+        const out = try allocator.alloc(u8, total_len);
+        errdefer allocator.free(out);
+
+        @memcpy(out[0..current_screen_magic.len], &current_screen_magic);
+        std.mem.writeInt(u16, out[8..10], current_screen_version, .big);
+        std.mem.writeInt(u16, out[10..12], self.cols, .big);
+        std.mem.writeInt(u16, out[12..14], self.rows, .big);
+        std.mem.writeInt(u16, out[14..16], @min(self.cursor_x, self.cols - 1), .big);
+        std.mem.writeInt(u16, out[16..18], @min(self.cursor_y, self.rows - 1), .big);
+        std.mem.writeInt(u32, out[18..22], self.max_scrollback, .big);
+        std.mem.writeInt(u32, out[22..26], @intCast(self.screen.len), .big);
+        std.mem.writeInt(u32, out[26..30], std.hash.Crc32.hash(self.screen), .big);
+        @memcpy(out[current_screen_header_size..total_len], self.screen);
+
+        return out;
+    }
+
+    pub fn deserializeCurrentScreen(self: *Terminal, allocator: std.mem.Allocator, data: []const u8) !void {
+        if (data.len < current_screen_header_size) return error.InvalidSnapshot;
+        if (!std.mem.eql(u8, data[0..current_screen_magic.len], &current_screen_magic)) return error.InvalidSnapshot;
+
+        const version = std.mem.readInt(u16, data[8..10], .big);
+        if (version != current_screen_version) return error.UnsupportedSnapshotVersion;
+
+        const cols = std.mem.readInt(u16, data[10..12], .big);
+        const rows = std.mem.readInt(u16, data[12..14], .big);
+        const cursor_x = std.mem.readInt(u16, data[14..16], .big);
+        const cursor_y = std.mem.readInt(u16, data[16..18], .big);
+        const max_scrollback = std.mem.readInt(u32, data[18..22], .big);
+        const screen_len: usize = @intCast(std.mem.readInt(u32, data[22..26], .big));
+        const expected_crc = std.mem.readInt(u32, data[26..30], .big);
+
+        if (cols == 0 or rows == 0) return error.InvalidSnapshot;
+        if (cursor_x >= cols or cursor_y >= rows) return error.InvalidSnapshot;
+        if (screen_len > max_current_screen_bytes) return error.SnapshotTooLarge;
+        const expected_len = std.math.mul(usize, @as(usize, cols), @as(usize, rows)) catch return error.InvalidSnapshot;
+        if (screen_len != expected_len) return error.InvalidSnapshot;
+        if (data.len != current_screen_header_size + screen_len) return error.InvalidSnapshot;
+
+        const screen = data[current_screen_header_size..];
+        if (std.hash.Crc32.hash(screen) != expected_crc) return error.InvalidSnapshot;
+
+        const next = try allocator.alloc(u8, screen_len);
+        errdefer allocator.free(next);
+        @memcpy(next, screen);
+
+        allocator.free(self.screen);
+        self.screen = next;
+        self.cols = cols;
+        self.rows = rows;
+        self.cursor_x = cursor_x;
+        self.cursor_y = cursor_y;
+        self.max_scrollback = max_scrollback;
+        self.parser_state = .normal;
+        self.csi_len = 0;
     }
 
     fn writeByte(self: *Terminal, byte: u8) void {

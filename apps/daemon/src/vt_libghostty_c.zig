@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const backend_name = "libghostty_c";
+pub const supports_current_screen_snapshots = false;
 
 pub const Options = struct {
     max_scrollback: u32 = 0,
@@ -159,6 +160,19 @@ pub const Terminal = struct {
 
         const source = if (out_ptr) |ptr| ptr[0..out_len] else &[_]u8{};
         return try allocator.dupe(u8, source);
+    }
+
+    pub fn serializeCurrentScreenAlloc(self: *const Terminal, allocator: std.mem.Allocator) ![]u8 {
+        _ = self;
+        _ = allocator;
+        return error.SnapshotUnsupported;
+    }
+
+    pub fn deserializeCurrentScreen(self: *Terminal, allocator: std.mem.Allocator, data: []const u8) !void {
+        _ = self;
+        _ = allocator;
+        _ = data;
+        return error.SnapshotUnsupported;
     }
 };
 
