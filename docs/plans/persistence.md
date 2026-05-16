@@ -11,8 +11,8 @@ therefore needs to preserve three things:
 
 1. **Live process continuity** — if an AI CLI is still running, Tao should reattach to the same PTY
    and conversation after the UI restarts.
-2. **Instant visual restore** — the terminal should redraw from a compact Ghostty snapshot instead
-   of replaying a large log.
+2. **Instant visual restore** — the terminal should redraw from a compact libghostty-vt snapshot
+   instead of replaying a large log.
 3. **Cold semantic resume** — if the live process is gone, Tao should relaunch supported AI CLIs via
    their native resume/session mechanisms and show the previous terminal context immediately.
 
@@ -20,8 +20,9 @@ The architecture is a hybrid:
 
 - **`taod` daemon** (Zig) owns PTYs, AI CLI subprocesses, terminal event logs, snapshots, and agent
   adapters. The Electron UI is a client that attaches/detaches.
-- **Ghostty binary snapshots** provide fast visual restore and bounded catch-up. The daemon links
-  Ghostty's terminal parser directly as a Zig library — no WASM overhead.
+- **libghostty-vt binary snapshots** provide fast visual restore and bounded catch-up. The daemon
+  builds on **`libghostty-vt`**, Ghostty's embeddable virtual-terminal core, as a Zig library — no
+  WASM overhead in the daemon.
 - **Framed PTY event logs** provide crash recovery and precise replay, including resize events.
 - **Agent adapters/hooks** capture native AI CLI session IDs and resume commands.
 - **SQLite** stores session metadata, snapshot metadata, agent session metadata, and searchable
@@ -52,11 +53,11 @@ keeping the process alive in `taod`.
 | Goal | Why |
 |---|---|
 | **Live AI CLI reattach** | Closing/restarting Tao UI must not kill long-running AI agent chats. |
-| **Instant visual restore** | Deserialize a Ghostty checkpoint, then replay only the small event-log tail. |
+| **Instant visual restore** | Deserialize a libghostty-vt checkpoint, then replay only the small event-log tail. |
 | **Crash resilience** | Event logs allow recovery if the latest snapshot is missing/corrupted. |
 | **Agent-aware cold resume** | Capture native AI session IDs and relaunch supported agents after daemon/process death. |
 | **Pane/session correctness** | Sessions attach to logical terminal/pane IDs, not just workspaces. |
-| **Efficient hot path** | PTY output is bytes → log append → Ghostty parser → stream; no SQLite writes per chunk. |
+| **Efficient hot path** | PTY output is bytes → log append → libghostty-vt parser → stream; no SQLite writes per chunk. |
 | **Searchable history** | Store bounded plaintext excerpts/FTS rows for search without indexing huge binary logs. |
 | **Effect-TS services** | DB/file/daemon services use Effect layers and typed errors across desktop/taod bridge. |
 | **Security/privacy** | Terminal logs can contain secrets; use restrictive permissions, retention controls, and clear-history UX. |
@@ -84,14 +85,14 @@ keeping the process alive in `taod`.
 [Electron main]
     ├── authorization
     ├── window lifecycle
-    └── TaodRpcClient (sends NDJSON via Unix socket)
+    └── TaodClient (control RPC + binary stream)
         ↓ ~/.tao/run/taod.sock
 [taod (Zig binary)]
     ├── SessionManager          owns logical terminal sessions
     ├── PtyDriver               owns PTY master fds and child processes
-    ├── GhosttyParser           Zig-native Ghostty terminal parser (no WASM)
+    ├── LibghosttyVt            Zig-native libghostty-vt parser/state (no WASM)
     ├── EventLog                append-only framed PTY log
-    ├── SnapshotStore           Ghostty binary checkpoints (zstd)
+    ├── SnapshotStore           libghostty-vt binary checkpoints (zstd)
     ├── AgentRegistry           spawns adapter scripts for pi/codex/claude
     ├── SqliteDb                session/agent metadata (zig-sqlite)
     └── Maintenance             retention, cleanup, integrity checks
@@ -109,16 +110,44 @@ Killing is explicit: `Kill Session`, `Stop Agent`, or retention cleanup after co
 
 | Factor | Reason |
 |---|---|
-| **Ghostty link** | Ghostty's terminal parser is pure Zig. `taod` in Zig links it as a library — no WASM, no ABI boundary, direct struct access, zero-copy serialization. |
+| **libghostty-vt link** | `libghostty-vt` is Ghostty's embeddable VT core for parsing terminal sequences and maintaining terminal state. `taod` links it directly as a Zig library — no WASM, no JS ABI boundary. |
 | **Self-contained** | Single static binary. No Node runtime, no npm dependencies, no version conflicts with the Electron app. |
-| **Performance** | PTY hot path is memory-safe zero-copy: PTY read → Ghostty parser → event log append → socket broadcast. All in one process, no GC pauses. |
-| **Same patch, two uses** | The Zig serialization code for Ghostty's WASM build (`ghostty-web`) is the *same code* the native daemon uses. One implementation. |
+| **Performance** | PTY hot path is memory-safe zero-copy: PTY read → libghostty-vt parser → event log append → socket broadcast. All in one process, no GC pauses. |
+| **Same snapshot format, two runtimes** | The serialization extension lives at the `libghostty-vt` layer and emits a stable snapshot format consumed by both native `taod` and the renderer's Ghostty WASM build. |
 
 Trade-off acknowledged:
 
 - Agent adapter logic (pi/codex/claude detection, resume commands, environment setup) is more
   verbose in Zig than TypeScript. Solution: agent adapters live as **small separate scripts**
   (TypeScript/Node or shell) that taod spawns on demand. The core daemon stays Zig.
+
+---
+
+## Why `libghostty-vt`, not full `libghostty`
+
+`taod` is headless. It needs Ghostty's virtual-terminal core, not a renderer or platform frontend.
+
+Use `libghostty-vt` for:
+
+- VT escape sequence parsing
+- screen, scrollback, cursor, styles, colors, and modes
+- resize/reflow
+- render-state data for clients
+- plain-text/formatter extraction for search
+- input/key/mouse encoding where useful
+
+Do **not** put Ghostty's GUI/platform layer in `taod`:
+
+- no Metal/OpenGL rendering
+- no font discovery/layout
+- no platform windows/tabs/splits
+- no renderer event loop
+
+Tao owns daemon/session/process concerns around the VT core: PTY lifecycle, live reattach, event
+logs, snapshots, SQLite metadata, retention, and AI-agent resume orchestration.
+
+Note: `libghostty-vt` is still API-in-flux upstream. Tao should wrap it behind `apps/taod/src/vt.zig`
+so upstream API churn is isolated to one file.
 
 ---
 
@@ -135,7 +164,7 @@ Trade-off acknowledged:
 ├── sessions/
 │   └── <session-id>/
 │       ├── events.taoev           # Framed PTY event log, append-only
-│       ├── snapshot.state.zst     # Latest compressed Ghostty checkpoint
+│       ├── snapshot.state.zst     # Latest compressed libghostty-vt checkpoint
 │       └── excerpt.txt            # Bounded plain text excerpt for search/debug
 └── adapters/                      # Optional agent adapter scripts
     ├── pi.js
@@ -169,26 +198,26 @@ tao/
 │   │   ├── src/
 │   │   │   ├── main.zig                    entrypoint, signal handling
 │   │   │   ├── daemon.zig                  socket server, session registry
-│   │   │   ├── rpc.zig                     NDJSON RPC frame encoding
+│   │   │   ├── rpc.zig                     JSON control RPC + binary stream frames
 │   │   │   ├── session.zig                 terminal session state machine
 │   │   │   ├── pty.zig                     PTY master via posix_openpt / fork
-│   │   │   ├── ghostty.zig                 Zig-native Ghostty terminal wrapper
+│   │   │   ├── vt.zig                      libghostty-vt wrapper / API isolation
 │   │   │   ├── event_log.zig               framed binary log, append/read/seek
 │   │   │   ├── snapshot.zig                zstd compress/decompress, file I/O
 │   │   │   ├── db.zig                      SQLite schema, migrations, queries
 │   │   │   ├── adapter.zig                 agent adapter process spawning
 │   │   │   └── cleanup.zig                 retention, periodic maintenance
-│   │   └── ghostty/                        (git submodule or zig dep)
-│   │       └── src/                        Ghostty terminal parser sources
+│   │   └── libghostty-vt/                  (git submodule or Zig dependency)
+│   │       └── src/                        Ghostty virtual-terminal core
 │   │
 │   └── desktop/
 │       ├── package.json                    MODIFY: add build:taod script
 │       ├── patches/
-│       │   └── ghostty-serialization.patch NEW: Zig serialization for WASM build
+│       │   └── libghostty-vt-snapshot.patch NEW: snapshot exports for WASM build
 │       └── src/
 │           ├── main/
 │           │   ├── index.ts                MODIFY: launch/connect taod, bridge IPC
-│           │   ├── taod-rpc-client.ts      NEW: Unix socket NDJSON client
+│           │   ├── taod-client.ts          NEW: Unix socket control/stream client
 │           │   ├── session-ipc.ts          NEW: session IPC handlers
 │           │   ├── layout-store.ts         NEW: pane-layouts.json service
 │           │   ├── settings-store.ts       NEW: settings.json service
@@ -204,32 +233,37 @@ tao/
 
 ---
 
-## Ghostty Zig Integration (the key insight)
+## libghostty-vt Integration (the key insight)
 
-Ghostty's terminal parser lives in its `src/` tree, written entirely in Zig. `taod` imports it as a
-Zig dependency:
+`libghostty-vt` is Ghostty's embeddable virtual-terminal core. It handles VT parsing,
+terminal state, scrollback, resize/reflow, modes, styles, render state, input encoding, and
+formatting. `taod` imports this layer as a Zig dependency instead of using Ghostty's app/frontend
+code:
 
 ```zig
-// apps/taod/src/ghostty.zig
-const ghostty = @import("ghostty");
+// apps/taod/src/vt.zig
+const vt = @import("libghostty_vt");
 
 pub const Terminal = struct {
-    inner: *ghostty.Terminal,
+    inner: vt.Terminal,
 
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Terminal {
-        const inner = try allocator.create(ghostty.Terminal);
-        // ghostty.Terminal.init(...)
+        const inner = try vt.Terminal.init(allocator, .{
+            .cols = cols,
+            .rows = rows,
+            .max_scrollback = 10_000,
+        });
         return .{ .inner = inner };
     }
 
     pub fn write(self: *Terminal, bytes: []const u8) void {
-        self.inner.write(bytes);
+        self.inner.vtWrite(bytes);
     }
 
     pub fn serialize(self: *Terminal, allocator: std.mem.Allocator) ![]u8 {
-        // Direct access to Ghostty's internal render state and cell storage.
-        // This is the same code that gets compiled to WASM for ghostty-web.
-        // Returns zstd-compressed binary snapshot.
+        // Calls Tao's libghostty-vt snapshot extension.
+        // Produces a stable, pointer-free, versioned binary snapshot.
+        // Compression is applied by SnapshotStore, not by the terminal core.
     }
 
     pub fn deserialize(self: *Terminal, data: []const u8) !void {
@@ -239,25 +273,27 @@ pub const Terminal = struct {
 ```
 
 This is the single most important performance advantage: the daemon never goes through WASM JS glue
-for terminal parsing. It calls Ghostty's Zig functions directly.
+for terminal parsing. It calls `libghostty-vt` directly. The daemon still owns PTY lifecycle,
+session management, persistence, and agent orchestration; `libghostty-vt` owns terminal emulation.
 
-### The serialization patch
+### The snapshot extension
 
-The same serialization code serves two builds:
+The snapshot extension should live at the `libghostty-vt` boundary and serve two builds:
 
-1. **Native Zig** (`taod` binary) — direct struct access, no overhead.
-2. **WASM target** (`ghostty-web` WASM binary) — compiled with `-target wasm32-wasi`,
-   exports the serialize/deserialize functions for the renderer.
+1. **Native Zig** (`taod` binary) — direct `libghostty-vt` calls, no WASM overhead.
+2. **WASM target** (`ghostty-web` / renderer build) — exports the same snapshot read/write
+   functions through WASM.
 
 ```zig
 // shared serialization logic, compiled for both targets
-pub fn terminalSerialize(term: *ghostty.Terminal, writer: anytype) !void { ... }
-pub fn terminalDeserialize(term: *ghostty.Terminal, reader: anytype) !void { ... }
+pub fn terminalSerialize(term: *vt.Terminal, writer: anytype) !void { ... }
+pub fn terminalDeserialize(term: *vt.Terminal, reader: anytype) !void { ... }
 ```
 
-The patch file in `apps/desktop/patches/ghostty-serialization.patch` patches Ghostty's WASM build
-to export these functions. The binary logic lives in `apps/taod/src/ghostty_internal/g_terminal_serialize.zig`
-(or similar) and is shared via Zig's package system.
+If upstream `libghostty-vt` does not expose snapshot APIs, Tao maintains a small extension and
+upstreams it if possible. The patch file in `apps/desktop/patches/libghostty-vt-snapshot.patch`
+patches the renderer/WASM build to export the same snapshot functions. The format must be stable,
+versioned, endian-defined, pointer-free, CRC-checked, and tagged with the libghostty-vt version.
 
 ---
 
@@ -373,7 +409,7 @@ Repeated frames:
   version     u16             (1)
   kind        u16             (enum: 1=OUTPUT, 2=INPUT, 3=RESIZE, 4=TITLE, 5=CWD, 6=AGENT_EVENT, 7=SNAPSHOT_MARK, 8=EXIT)
   seq         u64             (monotonic per session)
-  monotic_ms  u64
+  monotonic_ms  u64
   length      u32
   crc32       u32
   payload     u8[length]
@@ -401,11 +437,11 @@ Important rules:
 
 ---
 
-## Daemon Protocol — NDJSON over Unix socket
+## Daemon Protocol — control RPC + binary stream
 
-Taod exposes a single Unix domain socket `~/.tao/run/taod.sock`.
-
-Two logical channels are multiplexed over the same connection using message type prefixes:
+Taod exposes local Unix domain sockets under `~/.tao/run/`. Use JSON/NDJSON only for low-volume
+control messages. PTY output, snapshots, and event-log catch-up use binary frames to avoid base64
+overhead.
 
 ### Control messages (request/response)
 
@@ -414,10 +450,9 @@ Two logical channels are multiplexed over the same connection using message type
 <-- {"type":"create:ok","id":"req-1","sessionId":"ses-abc","pid":12345}
 
 --> {"type":"attach","id":"req-2","sessionId":"ses-abc"}
-<-- {"type":"attach:ok","id":"req-2","seq":421,"snapshot":"<base64>","cwd":"/home/project"}
+<-- {"type":"attach:ok","id":"req-2","streamId":"stream-1","seq":421,"cwd":"/home/project"}
 
---> {"type":"input","sessionId":"ses-abc","data":"<base64>"}
-<-- {"type":"input:ok"}
+// Input bytes are sent on the binary stream as kind=INPUT frames.
 
 --> {"type":"resize","sessionId":"ses-abc","cols":120,"rows":40}
 <-- {"type":"resize:ok"}
@@ -429,15 +464,20 @@ Two logical channels are multiplexed over the same connection using message type
 <-- {"type":"kill:ok"}
 ```
 
-### Stream messages (daemon → client)
+### Binary stream messages
 
-After `attach`, the daemon sends a continuous stream of output frames until `detach`:
+After `attach`, daemon and client exchange binary frames until `detach`:
 
-```json
-{"type":"output","sessionId":"ses-abc","seq":422,"data":"<base64>"}
-{"type":"resize","sessionId":"ses-abc","seq":423,"cols":120,"rows":40}
-{"type":"snapshot","sessionId":"ses-abc","seq":500,"data":"<base64>"}
-{"type":"exit","sessionId":"ses-abc","exitCode":0,"signal":null}
+```txt
+frame_header { magic, version, kind, session_id, seq, length, crc32 }
+payload[length]
+
+kind=OUTPUT     payload = raw PTY bytes
+kind=INPUT      payload = raw user input bytes (client → daemon)
+kind=RESIZE     payload = packed cols/rows
+kind=SNAPSHOT   payload = compressed snapshot bytes
+kind=EXIT       payload = packed exit_code/signal
+kind=AGENT      payload = compact JSON/msgpack agent status
 ```
 
 Backpressure:
@@ -532,7 +572,7 @@ Tao opens previous terminal
 | UI layout/workspaces/tabs/panes | `pane-layouts.json` | Loaded before rendering app shell. |
 | User settings | `settings.json` | Human-editable. |
 | PTY output | `events.taoev` files | Append-only binary logs. |
-| Terminal state | `snapshot.state.zst` files | Compressed Ghostty snapshots. |
+| Terminal state | `snapshot.state.zst` files | Compressed libghostty-vt snapshots. |
 
 ---
 
@@ -552,16 +592,16 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSafe,
     });
 
-    // Link Ghostty terminal parser as a Zig dependency
-    const ghostty = b.dependency("ghostty", .{});
-    exe.root_module.addImport("ghostty", ghostty.module("terminal"));
+    // Link libghostty-vt as a Zig dependency
+    const libghostty_vt = b.dependency("libghostty_vt", .{});
+    exe.root_module.addImport("libghostty_vt", libghostty_vt.module("vt"));
 
     // Link sqlite3
     exe.linkSystemLibrary("sqlite3");
 
-    // Build the WASM snapshot for ghostty-web
+    // Build snapshot exports for the renderer/WASM build
     const wasm_step = b.addObject(.{
-        .name = "ghostty-serialization",
+        .name = "libghostty-vt-snapshot",
         .root_source_file = b.path("src/serialize.zig"),
         .target = .{ .cpu_arch = .wasm32, .os_tag = .wasi },
         .optimize = .ReleaseSmall,
@@ -648,7 +688,7 @@ User creates pane/tab or starts AI agent
   ├─► taod: INSERT terminal_sessions (status='live')
   ├─► taod: create session dir, init event log
   ├─► taod: posix_openpt() → fork/exec shell or agent CLI
-  ├─► taod: start Ghostty parser for this session
+  ├─► taod: start libghostty-vt terminal state for this session
   └─► Renderer: attach → receive snapshot + live stream
 ```
 
@@ -658,7 +698,7 @@ User creates pane/tab or starts AI agent
 Pane hidden / window closed / renderer reloads
   ├─► Renderer unsubscribes
   ├─► Main sends detach to taod
-  └─► taod keeps PTY + Ghostty parser + event log running
+  └─► taod keeps PTY + libghostty-vt state + event log running
 ```
 
 ### Kill
@@ -675,7 +715,7 @@ User explicitly kills session
 
 ```
 Timer (30s) / output threshold (1MB) / before shutdown
-  ├─► GhosttyParser.serialize()
+  ├─► libghostty-vt snapshot extension serialize()
   ├─► zstd compress
   ├─► atomic write snapshot.state.zst.tmp → snapshot.state.zst
   ├─► update snapshot_seq/crc/size in DB
@@ -726,7 +766,7 @@ interface ElectronAPI {
 
 ## Search
 
-Bounded plaintext excerpts extracted periodically from Ghostty parser and stored in SQLite FTS5.
+Bounded plaintext excerpts extracted periodically through libghostty-vt formatter/grid APIs and stored in SQLite FTS5.
 
 ```sql
 SELECT terminal_session_id, title, snippet(terminal_search, 3, '[', ']', '…', 12)
@@ -769,7 +809,7 @@ Configurable maintenance runs in taod:
 
 ### Zig (apps/taod)
 
-- `ghostty` Zig package (terminal parser, git submodule or zig dependency).
+- `libghostty-vt` Zig package or C API from Ghostty (git submodule or Zig dependency).
 - `zig-sqlite` or direct `sqlite3.h` C ABI.
 - `zstd` via Zig package or system library.
 - No Node/npm dependencies in the daemon itself.
@@ -793,11 +833,11 @@ zig version  # 0.15.2+
 
 | Phase | What | Est. time |
 |---|---|---|
-| **0** | Set up `apps/taod` Zig project with `build.zig`, dependency on Ghostty terminal parser | 1 week |
-| **1** | Write core daemon: Unix socket server, NDJSON RPC, session manager | 2 weeks |
+| **0** | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt` | 1 week |
+| **1** | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager | 2 weeks |
 | **2** | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
-| **3** | Link Ghostty terminal parser; write `ghostty.zig` wrapper | 1-2 weeks |
-| **4** | Write Zig serialization patch (shared between native daemon and WASM build) | 2-3 weeks |
+| **3** | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests | 1-2 weeks |
+| **4** | Add `libghostty-vt` snapshot extension (native + WASM exports) | 2-3 weeks |
 | **5** | Write event log (framed binary, append/read/seek/crc) | 1 week |
 | **6** | Write SQLite layer (zig-sqlite, migrations, query functions) | 1 week |
 | **7** | Integrate daemon with Electron main (launch, socket client, IPC bridge) | 1 week |
@@ -807,7 +847,8 @@ zig version  # 0.15.2+
 | **11** | Search excerpts / FTS, cleanup/retention, clear-history UX | 1 week |
 | **12** | Stress testing: crash, restart, daemon fail, large logs, agent resume | 1-2 weeks |
 
-**Total**: roughly 10-14 weeks, dominated by Ghostty serialization and robust daemon lifecycle.
+**Total**: roughly 10-14 weeks, dominated by the libghostty-vt snapshot extension and robust daemon
+lifecycle.
 
 ---
 
@@ -824,14 +865,14 @@ The persistence architecture is now:
            │ IPC (MessagePort)
 ┌──────────▼───────────────────┐
 │ Electron main process        │
-│ TaodRpcClient (TypeScript)   │
+│ TaodClient (TypeScript)      │
 └──────────┬───────────────────┘
-           │ Unix socket (NDJSON)
+           │ Unix socket (control RPC + binary stream)
 ┌──────────▼───────────────────┐
 │ taod (Zig binary)            │
 │                              │
 │ PTY driver                   │
-│ Ghostty terminal parser      │ ← direct Zig link, no WASM
+│ libghostty-vt terminal core  │ ← direct Zig link, no WASM
 │ Event log                    │
 │ Snapshot store (zstd)        │
 │ SQLite metadata              │
@@ -840,7 +881,7 @@ The persistence architecture is now:
 ```
 
 - `taod` is a single static Zig binary. No Node, no npm, no WASM runtime for terminal parsing.
-- Ghostty serialization code is written once in Zig, shared between native daemon and WASM renderer.
+- Snapshot serialization lives at the `libghostty-vt` layer and is shared by native daemon and WASM renderer builds.
 - Agent adapters are lightweight scripts spawned by `taod` — the only part that stays in
   TypeScript/Node.
 - The Electron UI is a thin client that attaches/detaches from sessions. The daemon owns the
