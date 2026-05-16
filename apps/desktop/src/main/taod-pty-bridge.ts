@@ -2,14 +2,6 @@ import { Schema } from 'effect'
 import type { MessagePortMain } from 'electron'
 import { StringDecoder } from 'node:string_decoder'
 import { TaodStreamFrameKind } from '@tao/shared/taod-protocol'
-import {
-  appendResize,
-  clearAllSessionPersistence,
-  clearSessionPersistence,
-  cleanupSessionPersistence,
-  openPersistentSession,
-  resetPersistentSession,
-} from './session-persistence'
 import { defaultSettings, readSettings } from './settings-store'
 import {
   type PtyClientMessage,
@@ -55,10 +47,6 @@ function sanitizeCwd(cwd: unknown): string | undefined {
 
 function isValidSize(cols: number, rows: number): boolean {
   return Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0
-}
-
-function bigintToSafeNumber(value: bigint): number {
-  return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value)
 }
 
 function responseSeq(response: TaodControlResponse): number {
@@ -164,7 +152,7 @@ export class TaodPtyBridge {
         await this.killSession(message.sessionId)
         break
       case 'clear-history':
-        this.clearSessionHistory(message.sessionIds)
+        await this.clearSessionHistory(message.sessionIds)
         break
     }
   }
@@ -349,30 +337,20 @@ export class TaodPtyBridge {
     stream.close()
   }
 
-  private clearSessionHistory(sessionIds?: readonly string[]): void {
+  private async clearSessionHistory(sessionIds?: readonly string[]): Promise<void> {
     const targetSessionIds = sessionIds ? new Set(sessionIds) : null
 
-    for (const [sessionId, session] of this.sessions) {
-      if (targetSessionIds && !targetSessionIds.has(sessionId)) continue
-      const persistentSession = openPersistentSession(sessionId)
-      resetPersistentSession(persistentSession)
-      appendResize(persistentSession, session.cols, session.rows)
-      this.postReady(
-        sessionId,
-        { cols: session.cols, rows: session.rows },
-        bigintToSafeNumber(persistentSession.seq),
-        session.archived,
-      )
-    }
-
-    if (targetSessionIds) {
-      for (const sessionId of targetSessionIds) {
-        if (!this.sessions.has(sessionId)) clearSessionPersistence(sessionId)
-      }
+    try {
+      await this.client.clearHistory(sessionIds)
+    } catch (error) {
+      console.warn('[taod-bridge] Clear history failed:', error)
       return
     }
 
-    clearAllSessionPersistence({ activeSessionIds: new Set(this.sessions.keys()) })
+    for (const [sessionId, session] of this.sessions) {
+      if (targetSessionIds && !targetSessionIds.has(sessionId)) continue
+      this.postReady(sessionId, { cols: session.cols, rows: session.rows }, 0, session.archived)
+    }
   }
 
   private async runSessionCleanup(): Promise<void> {
@@ -381,10 +359,10 @@ export class TaodPtyBridge {
       const persistence = settings.persistence ?? defaultSettings.persistence
       if (!persistence?.enabled) return
 
-      cleanupSessionPersistence({
+      await this.client.cleanupSessions({
         retainDays: persistence.retainDays,
         maxSessionBytes: persistence.maxSessionBytes,
-        activeSessionIds: new Set(this.sessions.keys()),
+        activeSessionIds: [...this.sessions.keys()],
       })
     } catch (error) {
       console.warn('[taod-bridge] Session cleanup failed:', error)

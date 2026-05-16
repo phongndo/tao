@@ -180,6 +180,38 @@ pub fn openPersistentSession(
     };
 }
 
+pub fn resetPersistentSession(
+    allocator: std.mem.Allocator,
+    sessions_dir: []const u8,
+    session_id: []const u8,
+) !SessionFiles {
+    try mkdirPath(allocator, sessions_dir, 0o700);
+
+    const sanitized_id = try sanitizeSessionId(allocator, session_id);
+    defer allocator.free(sanitized_id);
+
+    const dir = try std.fs.path.join(allocator, &.{ sessions_dir, sanitized_id });
+    errdefer allocator.free(dir);
+    try mkdirPath(allocator, dir, 0o700);
+
+    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    errdefer allocator.free(event_log_path);
+    const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
+    errdefer allocator.free(excerpt_path);
+
+    var header: [file_header_size]u8 = undefined;
+    const encoded = try encodeFileHeader(&header, session_id, nowMs());
+    try writeFile(event_log_path, encoded, 0o600);
+    try writeFile(excerpt_path, &.{}, 0o600);
+
+    return .{
+        .dir = dir,
+        .event_log_path = event_log_path,
+        .excerpt_path = excerpt_path,
+        .last_seq = 0,
+    };
+}
+
 pub fn openExistingSession(
     allocator: std.mem.Allocator,
     sessions_dir: []const u8,
@@ -532,7 +564,7 @@ fn mkdirOne(path: [*:0]const u8, mode: std.c.mode_t) !void {
     }
 }
 
-fn sanitizeSessionId(allocator: std.mem.Allocator, session_id: []const u8) ![]u8 {
+pub fn sanitizeSessionId(allocator: std.mem.Allocator, session_id: []const u8) ![]u8 {
     if (session_id.len == 0) return error.InvalidSessionId;
 
     const out = try allocator.alloc(u8, session_id.len);

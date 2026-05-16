@@ -1,4 +1,5 @@
 const std = @import("std");
+const cleanup = @import("cleanup.zig");
 const db = @import("db.zig");
 const event_log = @import("event_log.zig");
 const pty = @import("pty.zig");
@@ -55,6 +56,7 @@ pub const Daemon = struct {
     sessions: session.Manager,
     pty_driver: pty.Driver,
     database: ?db.Database,
+    io: ?std.Io,
     mutex: std.atomic.Mutex = .unlocked,
 
     pub fn init(allocator: std.mem.Allocator, config: Config) Daemon {
@@ -64,6 +66,7 @@ pub const Daemon = struct {
             .sessions = session.Manager.init(allocator),
             .pty_driver = pty.Driver.init(allocator),
             .database = null,
+            .io = null,
         };
     }
 
@@ -73,6 +76,7 @@ pub const Daemon = struct {
     }
 
     pub fn prepareStorage(self: *Daemon, io: std.Io) !void {
+        self.io = io;
         try std.Io.Dir.cwd().createDirPath(io, self.config.run_dir);
         try std.Io.Dir.cwd().createDirPath(io, self.config.sessions_dir);
         if (self.database == null) self.database = try db.Database.open(self.allocator, self.config.database_path);
@@ -150,6 +154,8 @@ pub const Daemon = struct {
             .resize => self.handleResizeLocked(allocator, request),
             .detach => self.handleDetachLocked(allocator, request),
             .kill => self.handleKillLocked(allocator, request),
+            .clear_history => self.handleClearHistoryLocked(allocator, request),
+            .cleanup => self.handleCleanupLocked(allocator, request),
             .ping => rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
                 .ok = true,
@@ -294,11 +300,119 @@ pub const Daemon = struct {
         return sessionResponse(allocator, request, self.sessions.find(session_id).?);
     }
 
+    fn handleClearHistoryLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        var result: cleanup.MaintenanceResult = .{};
+
+        if (request.requestSessionIds()) |session_ids| {
+            for (session_ids) |session_id| {
+                if (self.sessions.find(session_id)) |item| {
+                    try self.resetSessionHistoryLocked(item);
+                    result.removed_sessions += 1;
+                    continue;
+                }
+
+                if (self.io) |io| {
+                    const removed = cleanup.deleteSessionDir(self.allocator, io, self.config.sessions_dir, session_id) catch |err| {
+                        std.log.warn("failed to clear persisted session {s}: {t}", .{ session_id, err });
+                        continue;
+                    };
+                    result.add(removed);
+                }
+            }
+        } else {
+            var active_ids: std.ArrayList([]const u8) = .empty;
+            defer active_ids.deinit(self.allocator);
+
+            for (self.sessions.sessions.items) |*item| {
+                try self.resetSessionHistoryLocked(item);
+                try active_ids.append(self.allocator, item.id);
+                result.removed_sessions += 1;
+            }
+
+            if (self.io) |io| {
+                const removed = cleanup.deleteInactiveSessionDirs(
+                    self.allocator,
+                    io,
+                    self.config.sessions_dir,
+                    active_ids.items,
+                ) catch |err| blk: {
+                    std.log.warn("failed to clear inactive session history: {t}", .{err});
+                    break :blk cleanup.MaintenanceResult{};
+                };
+                result.add(removed);
+            }
+        }
+
+        return rpc.responseJsonAlloc(allocator, .{
+            .id = request.requestId(),
+            .ok = true,
+            .removed_sessions = result.removed_sessions,
+            .removed_bytes = result.removed_bytes,
+        });
+    }
+
+    fn handleCleanupLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        const io = self.io orelse return rpc.responseJsonAlloc(allocator, .{
+            .id = request.requestId(),
+            .ok = false,
+            .error_message = "storage is not prepared",
+        });
+
+        var active_ids: std.ArrayList([]const u8) = .empty;
+        defer active_ids.deinit(self.allocator);
+
+        for (self.sessions.sessions.items) |*item| {
+            try active_ids.append(self.allocator, item.id);
+        }
+        if (request.requestActiveSessionIds()) |request_active_ids| {
+            for (request_active_ids) |active_id| {
+                if (cleanup.isActiveSession(active_id, active_ids.items)) continue;
+                try active_ids.append(self.allocator, active_id);
+            }
+        }
+
+        const result = cleanup.runSessionRetention(self.allocator, io, self.config.sessions_dir, .{
+            .retain_days = request.requestRetainDays() orelse 30,
+            .max_session_bytes = request.requestMaxSessionBytes() orelse 2 * 1024 * 1024 * 1024,
+            .active_session_ids = active_ids.items,
+        }) catch |err| {
+            std.log.warn("session cleanup failed: {t}", .{err});
+            return rpc.responseJsonAlloc(allocator, .{
+                .id = request.requestId(),
+                .ok = false,
+                .error_message = @errorName(err),
+            });
+        };
+
+        return rpc.responseJsonAlloc(allocator, .{
+            .id = request.requestId(),
+            .ok = true,
+            .removed_sessions = result.removed_sessions,
+            .removed_bytes = result.removed_bytes,
+        });
+    }
+
     fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
         if (item.event_log_path != null and item.excerpt_path != null and item.session_dir != null) return;
 
         const files = try event_log.openPersistentSession(self.allocator, self.config.sessions_dir, item.id);
         item.installPersistence(self.allocator, files);
+    }
+
+    fn resetSessionHistoryLocked(self: *Daemon, item: *session.TerminalSession) !void {
+        const files = try event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item.id);
+        item.installPersistence(self.allocator, files);
+        item.clearPendingOutput(self.allocator);
+
+        if (isLiveAttachable(item)) {
+            if (item.event_log_path) |path| {
+                _ = event_log.appendResize(self.allocator, path, &item.last_seq, item.cols, item.rows) catch |err| {
+                    std.log.warn("failed to append reset resize frame for {s}: {t}", .{ item.id, err });
+                };
+            }
+        }
+
+        self.recordTerminalSessionLocked(item, null);
     }
 
     fn ensureSessionProcess(self: *Daemon, item: *session.TerminalSession, argv: []const []const u8) !void {

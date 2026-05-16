@@ -34,6 +34,8 @@ export type TaodControlResponse = {
   readonly cols?: number
   readonly rows?: number
   readonly last_seq?: number
+  readonly removed_sessions?: number
+  readonly removed_bytes?: number
   readonly error_message?: string
 }
 
@@ -52,6 +54,12 @@ export type TaodAttachSessionInput = {
   readonly cols?: number
   readonly rows?: number
   readonly cwd?: string
+}
+
+export type TaodCleanupSessionsInput = {
+  readonly retainDays: number
+  readonly maxSessionBytes: number
+  readonly activeSessionIds?: readonly string[]
 }
 
 export type TaodSessionStreamEvents = {
@@ -381,6 +389,28 @@ export class TaodClient {
   async killSession(sessionId: string): Promise<void> {
     const response = await this.request({ type: 'kill', id: nextRequestId('kill'), sessionId })
     if (!response.ok) throw responseError(response)
+  }
+
+  async clearHistory(sessionIds?: readonly string[]): Promise<TaodControlResponse> {
+    const response = await this.request({
+      type: 'clear-history',
+      id: nextRequestId('clear-history'),
+      ...(sessionIds ? { sessionIds: [...sessionIds] } : {}),
+    })
+    if (!response.ok) throw responseError(response)
+    return response
+  }
+
+  async cleanupSessions(input: TaodCleanupSessionsInput): Promise<TaodControlResponse> {
+    const response = await this.request({
+      type: 'cleanup',
+      id: nextRequestId('cleanup'),
+      retainDays: input.retainDays,
+      maxSessionBytes: input.maxSessionBytes,
+      ...(input.activeSessionIds ? { activeSessionIds: [...input.activeSessionIds] } : {}),
+    })
+    if (!response.ok) throw responseError(response)
+    return response
   }
 
   private async canConnect(): Promise<boolean> {

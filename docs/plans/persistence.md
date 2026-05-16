@@ -104,14 +104,20 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 - **Daemon-owned event-log writes**: sessions created with an argv now get `events.taoev` files under
   `~/.tao/sessions/<session-id>/`, and daemon PTY output, resize, and exit frames are appended from
   the Zig side for diagnostics/metadata extraction, not terminal replay.
+- **Daemon-owned retention and clear-history controls**: `taod` now accepts control RPCs for
+  `clear-history` and `cleanup`. Live/in-memory sessions keep their PTYs while their event logs and
+  excerpts are reset, inactive session directories can be deleted by explicit clear-history, and
+  retention cleanup honors configured age/size limits while preserving sessions known to the daemon
+  or Electron bridge.
 - **Initial daemon SQLite layer**: `taod` now opens `~/.tao/tao.db`, applies ordered migrations for
   `terminal_sessions`, `agent_sessions`, and FTS search, and mirrors terminal session create/attach/
   resize/detach/exit metadata outside the PTY-output hot path.
 - **Electron main `taod` bridge**: the desktop main process now has a `TaodClient` that launches or
   connects to `taod`, translates the existing MessagePort session protocol to daemon JSON control
   RPC plus binary stream frames, creates shell sessions through the daemon, streams output/resize/exit
-  frames back to the renderer, and falls back to the utility-process PTY service if the daemon is not
-  available during migration. `TAO_PTY_BACKEND=taod` forces daemon-only mode and
+  frames back to the renderer, forwards clear-history/retention maintenance to the daemon, and falls
+  back to the utility-process PTY service if the daemon is not available during migration.
+  `TAO_PTY_BACKEND=taod` forces daemon-only mode and
   `TAO_PTY_BACKEND=utility` forces the legacy utility process.
 - **Zig tooling and CI support**: Nix now provides Zig 0.16, ZLS, and `nixpkgs-fmt`; root pnpm
   `zig:*` scripts wrap build/test/lint/format/LSP checks; CI installs Zig, runs `pnpm check`, verifies
@@ -132,8 +138,8 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 - There is **no cold terminal scrollback restore by design**. Dead sessions start fresh or resume via
   native CLI/agent mechanisms; event-log excerpts are for diagnostics/search/adapter detection.
 - There is an **initial SQLite metadata layer**. `terminal_sessions` rows are mirrored by `taod`, but
-  agent-session discovery/resume metadata, search excerpt indexing, and richer queries are still
-  pending.
+  agent-session discovery/resume metadata, search excerpt indexing, richer queries, and metadata
+  cleanup for retained/deleted diagnostic logs are still pending.
 - There are **no agent adapters or native AI CLI resume hooks yet**.
 - There is **no search/FTS or persistence privacy toggle yet**.
 
@@ -144,7 +150,8 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 2. **Expand SQLite metadata** beyond the initial terminal-session mirror: persist agent-session
    discovery/resume rows, search excerpts, richer lookup APIs, and recovery from existing session
    files after daemon restart.
-3. **Move retention/clear-history operations into `taod`** now that daemon-owned logs exist.
+3. **Harden daemon maintenance** with richer metadata cleanup, more cleanup tests, and visible UX for
+   daemon-side retention/clear-history results.
 4. **Add command/agent restart metadata** so panes can automatically relaunch `nvim`, `btop`, or an
    AI CLI preset/resume command when no live process exists.
 5. **Add agent adapter detection/resume metadata** once daemon sessions are mirrored into SQLite.
@@ -970,7 +977,7 @@ pnpm zig:check
 | **8**  | Not started                   | Renderer attach to live stream and native command/agent resume results; remove old pty-service path once daemon lifecycle is hardened.                                                                                                                                                                                                                                                | 1 week    |
 | **9**  | Not started                   | Add agent adapter spawning + pi/codex/claude adapter scripts                                                                                                                                                                                                                                                                                                                          | 1-2 weeks |
 | **10** | **Done for Electron slice**   | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                                                                                                     | Done      |
-| **11** | Not started                   | Search excerpts / FTS and daemon cleanup/retention                                                                                                                                                                                                                                                                                                                                    | 1 week    |
+| **11** | Partial                       | Search excerpts / FTS and daemon cleanup/retention. Daemon-side clear-history and retention RPCs now reset live logs and delete inactive session directories; search indexing and richer metadata cleanup remain.                                                                                                                                                                     | 1 week    |
 | **12** | Not started                   | Stress testing: crash, restart, daemon fail, large logs, agent resume                                                                                                                                                                                                                                                                                                                 | 1-2 weeks |
 
 **Total**: dominated by robust daemon lifecycle, packaging, and agent/command resume metadata. The

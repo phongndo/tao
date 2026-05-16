@@ -6,6 +6,8 @@ pub const RequestType = enum {
     resize,
     detach,
     kill,
+    clear_history,
+    cleanup,
     ping,
     unknown,
 
@@ -15,6 +17,10 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "resize")) return .resize;
         if (std.mem.eql(u8, text, "detach")) return .detach;
         if (std.mem.eql(u8, text, "kill")) return .kill;
+        if (std.mem.eql(u8, text, "clear-history")) return .clear_history;
+        if (std.mem.eql(u8, text, "clearHistory")) return .clear_history;
+        if (std.mem.eql(u8, text, "clear_history")) return .clear_history;
+        if (std.mem.eql(u8, text, "cleanup")) return .cleanup;
         if (std.mem.eql(u8, text, "ping")) return .ping;
         return .unknown;
     }
@@ -32,6 +38,14 @@ pub const ControlRequestJson = struct {
     rows: ?u16 = null,
     cwd: ?[]const u8 = null,
     argv: ?[][]const u8 = null,
+    session_ids: ?[][]const u8 = null,
+    sessionIds: ?[][]const u8 = null,
+    active_session_ids: ?[][]const u8 = null,
+    activeSessionIds: ?[][]const u8 = null,
+    retain_days: ?u32 = null,
+    retainDays: ?u32 = null,
+    max_session_bytes: ?u64 = null,
+    maxSessionBytes: ?u64 = null,
 
     pub fn requestType(self: ControlRequestJson) RequestType {
         return RequestType.fromText(self.method orelse self.type orelse "");
@@ -47,6 +61,22 @@ pub const ControlRequestJson = struct {
 
     pub fn requestTerminalId(self: ControlRequestJson) ?[]const u8 {
         return self.terminal_id orelse self.terminalId;
+    }
+
+    pub fn requestSessionIds(self: ControlRequestJson) ?[][]const u8 {
+        return self.session_ids orelse self.sessionIds;
+    }
+
+    pub fn requestActiveSessionIds(self: ControlRequestJson) ?[][]const u8 {
+        return self.active_session_ids orelse self.activeSessionIds;
+    }
+
+    pub fn requestRetainDays(self: ControlRequestJson) ?u32 {
+        return self.retain_days orelse self.retainDays;
+    }
+
+    pub fn requestMaxSessionBytes(self: ControlRequestJson) ?u64 {
+        return self.max_session_bytes orelse self.maxSessionBytes;
     }
 };
 
@@ -96,6 +126,8 @@ pub const ControlResponse = struct {
     cols: ?u16 = null,
     rows: ?u16 = null,
     last_seq: ?u64 = null,
+    removed_sessions: ?u64 = null,
+    removed_bytes: ?u64 = null,
     error_message: ?[]const u8 = null,
 };
 
@@ -270,6 +302,9 @@ fn trimStreamSessionId(field: []const u8) []const u8 {
 
 test "request type decoding is stable" {
     try std.testing.expectEqual(RequestType.create, RequestType.fromText("create"));
+    try std.testing.expectEqual(RequestType.clear_history, RequestType.fromText("clear-history"));
+    try std.testing.expectEqual(RequestType.clear_history, RequestType.fromText("clearHistory"));
+    try std.testing.expectEqual(RequestType.cleanup, RequestType.fromText("cleanup"));
     try std.testing.expectEqual(RequestType.ping, RequestType.fromText("ping"));
     try std.testing.expectEqual(RequestType.unknown, RequestType.fromText("other"));
 }
