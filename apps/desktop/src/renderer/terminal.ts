@@ -41,6 +41,7 @@ const terminalFontFamily =
   '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tao Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
 
 const SIDEBAR_RESIZE_FIT_DELAY_MS = 80
+const STARTUP_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024
 const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
 const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 
@@ -112,7 +113,7 @@ function nextAnimationFrame(): Promise<void> {
   return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 }
 
-function forceTerminalRender(term: Terminal): void {
+export function forceTerminalRender(term: Terminal): void {
   if (term.renderer && term.wasmTerm) {
     term.renderer.render(term.wasmTerm, true, term.viewportY, term)
   }
@@ -265,6 +266,7 @@ export async function createTerminal(
     window.electronAPI.killPty(sessionId)
     throw new Error('Terminal failed to initialize')
   }
+  const openedTerm = term
 
   // Step 4: Wire IPC
   updateStatus('Wiring IPC...')
@@ -273,12 +275,15 @@ export async function createTerminal(
   const fitAddon = new FitAddon()
   let stopResizeObserver: (() => void) | null = null
   let archived = false
+  let bufferingStartupOutput = true
+  let bufferedStartupChars = 0
+  const bufferedStartupOutput: string[] = []
 
   term.loadAddon(fitAddon)
   await nextAnimationFrame()
   fitAddon.fit()
 
-  const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
+  function writePtyData(data: string) {
     if (scanTitle) {
       try {
         scanTitle(data)
@@ -286,7 +291,50 @@ export async function createTerminal(
         console.error('[terminal] title scanner error:', error)
       }
     }
-    term.write(data)
+    openedTerm.write(data)
+  }
+
+  function bufferStartupData(data: string) {
+    if (data.length === 0) return
+    bufferedStartupOutput.push(data)
+    bufferedStartupChars += data.length
+
+    while (
+      bufferedStartupChars > STARTUP_OUTPUT_BUFFER_MAX_CHARS &&
+      bufferedStartupOutput.length > 1
+    ) {
+      bufferedStartupChars -= bufferedStartupOutput.shift()?.length ?? 0
+    }
+
+    if (
+      bufferedStartupChars > STARTUP_OUTPUT_BUFFER_MAX_CHARS &&
+      bufferedStartupOutput.length === 1
+    ) {
+      bufferedStartupOutput[0] = bufferedStartupOutput[0]!.slice(-STARTUP_OUTPUT_BUFFER_MAX_CHARS)
+      bufferedStartupChars = bufferedStartupOutput[0]!.length
+    }
+  }
+
+  function flushStartupOutput() {
+    bufferingStartupOutput = false
+    if (bufferedStartupOutput.length === 0) return
+
+    const data =
+      bufferedStartupOutput.length === 1
+        ? bufferedStartupOutput[0]!
+        : bufferedStartupOutput.join('')
+    bufferedStartupOutput.length = 0
+    bufferedStartupChars = 0
+    writePtyData(data)
+  }
+
+  const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
+    if (bufferingStartupOutput) {
+      bufferStartupData(data)
+      return
+    }
+
+    writePtyData(data)
   })
 
   let applyingReplayResize = false
@@ -360,6 +408,11 @@ export async function createTerminal(
       term.resize(initialPtySize.cols, initialPtySize.rows)
     }
     fitAddon.fit()
+    // Startup output can arrive between attach:ok and the final fit above. Writing it before the
+    // final resize makes Ghostty preserve/reflow the early shell prompt at the wrong screen origin,
+    // which presents as a blank terminal until the next input-triggered repaint. Flush only after
+    // the terminal dimensions have settled for first paint.
+    flushStartupOutput()
     await revealTerminalAfterStableRender(container, term)
   } catch (err) {
     unsubPtyData()

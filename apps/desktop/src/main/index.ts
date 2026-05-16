@@ -447,6 +447,7 @@ ipcMain.on('renderer:ready', (event) => {
   mainWindow?.show()
   // Focus the window so the terminal receives keyboard input immediately
   mainWindow?.focus()
+  event.sender.send('renderer:shown')
 })
 
 ipcMain.on('pty:requestPort', (event) => {

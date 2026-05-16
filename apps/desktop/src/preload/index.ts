@@ -57,7 +57,9 @@ const MAX_PENDING_DATA_CHARS = 1024 * 1024
 
 let ptyPort: MessagePort | null = null
 let rendererReadySignaled = false
+let rendererShown = false
 let pendingClientMessages: PtyClientMessage[] = []
+const rendererShownWaiters: Array<() => void> = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, PendingDataState>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
@@ -337,6 +339,34 @@ ipcRenderer.on('pty:service-error', (_event, error: string) => {
   }
 })
 
+ipcRenderer.on('renderer:shown', () => {
+  rendererShown = true
+  const waiters = rendererShownWaiters.splice(0)
+  for (const resolve of waiters) resolve()
+})
+
+function waitForRendererShown(): Promise<void> {
+  if (rendererShown) return Promise.resolve()
+
+  return new Promise((resolve) => {
+    let wrappedResolve: (() => void) | null = null
+    const timeout = setTimeout(() => {
+      if (wrappedResolve) removeRendererShownWaiter(wrappedResolve)
+      resolve()
+    }, 500)
+    wrappedResolve = () => {
+      clearTimeout(timeout)
+      resolve()
+    }
+    rendererShownWaiters.push(wrappedResolve)
+  })
+}
+
+function removeRendererShownWaiter(resolve: () => void) {
+  const index = rendererShownWaiters.indexOf(resolve)
+  if (index >= 0) rendererShownWaiters.splice(index, 1)
+}
+
 ipcRenderer.send('pty:requestPort')
 
 /**
@@ -512,11 +542,14 @@ const electronAPI = {
    * Signal the main process that the renderer has mounted.
    * This triggers the window to be shown for an instant-open feel.
    */
-  signalReady(): void {
+  signalReady(): Promise<void> {
     queuePtyMessage({ type: 'renderer-ready' })
-    if (rendererReadySignaled) return
-    rendererReadySignaled = true
-    ipcRenderer.send('renderer:ready')
+    const shown = waitForRendererShown()
+    if (!rendererReadySignaled) {
+      rendererReadySignaled = true
+      ipcRenderer.send('renderer:ready')
+    }
+    return shown
   },
 
   /**

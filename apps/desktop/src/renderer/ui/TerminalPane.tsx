@@ -1,11 +1,29 @@
 import type { Terminal } from 'ghostty-web'
 import { useEffect, useRef, useState } from 'react'
-import { createTerminal, setTerminalCursorVisible } from '../terminal'
+import { createTerminal, forceTerminalRender, setTerminalCursorVisible } from '../terminal'
 
 type TerminalError = {
   title?: string
   message: string
   detail?: string
+}
+
+function renderAfterWindowShown(terminal: Terminal, isCurrent: () => boolean): void {
+  void window.electronAPI.signalReady().then(() => {
+    if (!isCurrent()) return
+
+    // Chromium can drop the initial canvas upload while the BrowserWindow is still hidden.
+    // Render again after main confirms the window has been shown so the first visible frame
+    // contains the shell prompt instead of a black canvas until the next input echo.
+    forceTerminalRender(terminal)
+    const frame = window.requestAnimationFrame(() => {
+      if (isCurrent()) forceTerminalRender(terminal)
+    })
+    window.setTimeout(() => {
+      window.cancelAnimationFrame(frame)
+      if (isCurrent()) forceTerminalRender(terminal)
+    }, 50)
+  })
 }
 
 export function TerminalPane({
@@ -88,7 +106,7 @@ export function TerminalPane({
         setTerminalCursorVisible(terminal, isActive && !isArchived)
         if (isActive && !isArchived) {
           terminal.focus()
-          window.electronAPI.signalReady()
+          renderAfterWindowShown(terminal, () => !disposed && terminalRef.current === terminal)
         } else {
           terminal.blur()
         }
@@ -100,7 +118,7 @@ export function TerminalPane({
           message,
         })
         // Do not leave the BrowserWindow hidden if terminal initialization failed.
-        if (isActive) window.electronAPI.signalReady()
+        if (isActive) void window.electronAPI.signalReady()
       }
     }
 
@@ -121,7 +139,9 @@ export function TerminalPane({
     setTerminalCursorVisible(terminal, isActive && !isArchived)
     if (isActive && !isArchived) {
       terminal.focus()
-      if (terminalReadyRef.current) window.electronAPI.signalReady()
+      if (terminalReadyRef.current) {
+        renderAfterWindowShown(terminal, () => terminalRef.current === terminal)
+      }
     } else {
       terminal.blur()
     }

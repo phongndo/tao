@@ -49,7 +49,7 @@ export interface ElectronAPI {
     sessionId: string,
     callback: (info: { exitCode: number; signal?: number }) => void,
   ): () => void
-  signalReady(): void
+  signalReady(): Promise<void>
   onAppCommand(callback: (command: AppCommand) => void): () => void
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
