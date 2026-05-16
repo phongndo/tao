@@ -4,8 +4,8 @@ const NonEmptyString = Schema.Trim.check(Schema.isNonEmpty())
 
 export const TAOD_STREAM_MAGIC = 0x54415346 // TASF
 export const TAOD_STREAM_VERSION = 1
-export const TAOD_STREAM_SESSION_ID_SIZE = 36
-export const TAOD_STREAM_HEADER_SIZE = 60
+export const TAOD_STREAM_SESSION_ID_SIZE = 64
+export const TAOD_STREAM_HEADER_SIZE = 88
 export const TAOD_STREAM_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 export const TaodStreamFrameKind = {

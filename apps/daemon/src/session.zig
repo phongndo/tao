@@ -1,4 +1,6 @@
 const std = @import("std");
+const event_log = @import("event_log.zig");
+const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
 
 pub const Status = enum {
@@ -25,16 +27,41 @@ pub const TerminalSession = struct {
     id: []const u8,
     terminal_id: []const u8,
     cwd: ?[]const u8,
+    session_dir: ?[]const u8,
+    event_log_path: ?[]const u8,
+    excerpt_path: ?[]const u8,
+    pty_child: ?pty.Child,
     cols: u16,
     rows: u16,
     status: Status,
     last_seq: u64,
 
     pub fn deinit(self: *TerminalSession, allocator: std.mem.Allocator) void {
+        if (self.pty_child) |*child| child.close();
         allocator.free(self.id);
         allocator.free(self.terminal_id);
         if (self.cwd) |cwd| allocator.free(cwd);
+        if (self.session_dir) |path| allocator.free(path);
+        if (self.event_log_path) |path| allocator.free(path);
+        if (self.excerpt_path) |path| allocator.free(path);
         self.* = undefined;
+    }
+
+    pub fn installPersistence(self: *TerminalSession, allocator: std.mem.Allocator, files: event_log.SessionFiles) void {
+        if (self.session_dir) |path| allocator.free(path);
+        if (self.event_log_path) |path| allocator.free(path);
+        if (self.excerpt_path) |path| allocator.free(path);
+
+        self.session_dir = files.dir;
+        self.event_log_path = files.event_log_path;
+        self.excerpt_path = files.excerpt_path;
+        self.last_seq = files.last_seq;
+    }
+
+    pub fn pidU32(self: *const TerminalSession) ?u32 {
+        const child = self.pty_child orelse return null;
+        if (child.pid <= 0) return null;
+        return @intCast(child.pid);
     }
 };
 
@@ -64,6 +91,10 @@ pub const Manager = struct {
             .id = id,
             .terminal_id = terminal_id,
             .cwd = cwd,
+            .session_dir = null,
+            .event_log_path = null,
+            .excerpt_path = null,
+            .pty_child = null,
             .cols = input.cols,
             .rows = input.rows,
             .status = .live,

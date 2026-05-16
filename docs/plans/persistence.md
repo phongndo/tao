@@ -84,30 +84,40 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
   installs before `dev` / `start`.
 - **Initial Zig daemon skeleton**: `apps/daemon` now exists as a pnpm workspace package with
   `build.zig`, `src/main.zig`, module boundaries for daemon/session/RPC/PTY/event-log/snapshot/DB/
-  adapter/cleanup/VT work, placeholder PTY/VT boundaries, SQLite migration strings, and Zig unit
-  tests for the scaffolded pieces. The skeleton is buildable but not yet used by the Electron app.
+  adapter/cleanup/VT work, a real POSIX PTY boundary, SQLite migration strings, and Zig unit tests
+  for the scaffolded pieces. The daemon is buildable but not yet used by the Electron app.
 - **Daemon control RPC/session registry prototype**: `taod` now binds `~/.tao/run/taod.sock`, accepts
   newline-delimited JSON control requests, handles create/attach/resize/detach/kill against an
   in-memory session registry, and returns typed JSON responses. Requests now accept the documented
-  `type`/camelCase fields while preserving the scaffold's older `method`/snake_case shape. PTY
-  streaming is still scaffolded.
+  `type`/camelCase fields while preserving the scaffold's older `method`/snake_case shape.
 - **Daemon binary stream frame codec**: `apps/daemon/src/rpc.zig` now has a tested binary frame
   encoder/parser for output, input, resize, snapshot, exit, and agent frames, including session IDs,
   sequence numbers, payload lengths, CRC checks, partial-tail handling, and packed resize/exit
   payload helpers. `@tao/shared/taod-protocol` exports matching stream constants for the future
-  Electron client. The codec is not yet wired to live PTY sockets.
+  Electron client. The stream session-id field is now large enough for Tao's current prefixed UUID
+  session IDs.
+- **Daemon POSIX PTY driver**: `apps/daemon/src/pty.zig` now uses `forkpty`/`execvp`, applies
+  initial and subsequent window sizes, supports PTY input writes, output reads, termination, and
+  non-blocking child-exit polling.
+- **Daemon socket-level attach stream**: `taod` now keeps accepting control clients while per-attach
+  worker threads bridge binary INPUT/RESIZE frames from clients to the PTY and OUTPUT/EXIT frames
+  back to clients. Attach streams replay bounded logged output before switching to live PTY output.
+- **Daemon-owned event-log writes**: sessions created with an argv now get `events.taoev` files under
+  `~/.tao/sessions/<session-id>/`, and daemon PTY output, resize, and exit frames are appended from
+  the Zig side. `taod` can also attach an existing event log as an archived session and replay it.
 - **Zig tooling and CI support**: Nix now provides Zig 0.16, ZLS, and `nixpkgs-fmt`; root pnpm
   `zig:*` scripts wrap build/test/lint/format/LSP checks; CI installs Zig, runs `pnpm check`, verifies
   the Nix dev-shell/ZLS path, and builds `taod` before desktop production builds.
 
 ### Important limitations of the current slice
 
-- There is **no production-usable Zig `taod` daemon yet**. A buildable `apps/daemon` prototype exists
-  with a JSON control socket, in-memory session registry, and tested binary stream frame codec, but it
-  has no live PTY driver, no socket-level stream loop, no Electron client bridge, and no daemon-owned
-  PTY runtime. PTYs are still owned by the Electron utility process.
-- Live reattach currently works only while the utility process remains alive. It is not yet the
-  durable app-independent daemon guarantee described below.
+- There is **not yet an Electron-integrated production `taod` path**. The Zig daemon can spawn and
+  stream POSIX PTYs, append daemon-owned event logs, and replay archived logs over the binary attach
+  stream, but the Electron app still defaults to the utility-process PTY bridge. There is no packaged
+  daemon launch/client bridge yet.
+- Live reattach in the shipping Electron path currently works only while the utility process remains
+  alive. The daemon now has the lower-level live PTY runtime needed for app-independent reattach, but
+  the desktop client has not been switched over yet.
 - There are **no libghostty-vt snapshots yet**. Visual restore into a new live shell is intentionally
   not attempted from raw PTY tails; instant binary snapshot deserialization remains daemon work.
 - Archived-session restore is currently **bounded raw event-log replay into a read-only Ghostty
@@ -120,16 +130,15 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
 
 ### Next recommended work
 
-1. **Wire the daemon binary stream codec into the socket attach path** so attached clients can send
-   input/resize frames and receive output/exit/snapshot/agent frames once a PTY driver is present.
-2. **Implement the POSIX PTY driver in `apps/daemon/src/pty.zig`** using `posix_openpt`/fork/exec,
-   resize, input writes, output reads, and exit handling.
-3. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
-   PTYs.
-4. **Wire SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
+1. **Add the Electron main `TaodClient` bridge** to launch/connect to `taod`, translate the existing
+   session IPC/MessagePort protocol to daemon control + binary stream sockets, and keep the current
+   utility-process PTY path only as a fallback during migration.
+2. **Wire SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
    session files already being written; migration SQL is currently scaffolded in `apps/daemon/src/db.zig`.
-5. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
+3. **Move retention/clear-history operations into `taod`** now that daemon-owned logs exist.
+4. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
    the largest unknown and should be isolated behind `apps/daemon/src/vt.zig`.
+5. **Add agent adapter detection/resume metadata** once daemon sessions are mirrored into SQLite.
 
 ---
 
@@ -942,23 +951,23 @@ pnpm zig:check
 
 ## Implementation Order
 
-| Phase  | Status                      | What                                                                                                                                                                                                                                                                                                           | Est. time |
-| ------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| **A**  | **Done**                    | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair                                                                                                                                         | Done      |
-| **B**  | **Done**                    | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, explicit session IPC wrappers, first-paint/render stability fixes, current-file-store clear-history controls, and a read-only archived-session fallback for dead utility-process sessions. | Done      |
-| **0**  | Partial                     | Set up `apps/daemon` Zig project with `build.zig`, pnpm workspace scripts, Nix/ZLS/CI tooling, and module skeletons. Dependency on `libghostty-vt` is still pending.                                                                                                                                           | Partial   |
-| **1**  | Partial scaffold            | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager. The socket server, JSON control RPC, in-memory session registry, and binary stream frame codec exist; socket-level stream attach and live PTY streaming are not implemented yet.                                      | 2 weeks   |
-| **2**  | Placeholder                 | Write PTY driver (posix_openpt, fork/exec, raw byte read/write). `pty.zig` currently contains validation/placeholders only.                                                                                                                                                                                    | 1 week    |
-| **3**  | Not started                 | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests                                                                                                                                                                                                                                                   | 1-2 weeks |
-| **4**  | Not started                 | Add `libghostty-vt` snapshot extension (native + WASM exports)                                                                                                                                                                                                                                                 | 2-3 weeks |
-| **5**  | Partial prototype           | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests. TypeScript event logging is active; Zig event-log encode/parse tests are scaffolded.                                                                                                                          | 1 week    |
-| **6**  | Scaffolded                  | Write SQLite layer (zig-sqlite, migrations, query functions). Migration SQL strings are scaffolded in `apps/daemon/src/db.zig`; no SQLite execution layer yet.                                                                                                                                                 | 1 week    |
-| **7**  | Not started                 | Integrate daemon with Electron main (launch, socket client, IPC bridge)                                                                                                                                                                                                                                        | 1 week    |
-| **8**  | Not started                 | Renderer attach from snapshot + live stream; remove old pty-service path                                                                                                                                                                                                                                       | 1 week    |
-| **9**  | Not started                 | Add agent adapter spawning + pi/codex/claude adapter scripts                                                                                                                                                                                                                                                   | 1-2 weeks |
-| **10** | **Done for Electron slice** | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                              | Done      |
-| **11** | Not started                 | Search excerpts / FTS and daemon cleanup/retention                                                                                                                                                                                                                                                             | 1 week    |
-| **12** | Not started                 | Stress testing: crash, restart, daemon fail, large logs, agent resume                                                                                                                                                                                                                                          | 1-2 weeks |
+| Phase  | Status                        | What                                                                                                                                                                                                                                                                                                           | Est. time |
+| ------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| **A**  | **Done**                      | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair                                                                                                                                         | Done      |
+| **B**  | **Done**                      | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, explicit session IPC wrappers, first-paint/render stability fixes, current-file-store clear-history controls, and a read-only archived-session fallback for dead utility-process sessions. | Done      |
+| **0**  | Partial                       | Set up `apps/daemon` Zig project with `build.zig`, pnpm workspace scripts, Nix/ZLS/CI tooling, and module skeletons. Dependency on `libghostty-vt` is still pending.                                                                                                                                           | Partial   |
+| **1**  | Substantial daemon slice done | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager. The socket server, JSON control RPC, in-memory session registry, binary stream frame codec, socket-level attach loop, and live PTY streaming are implemented. Electron is not switched to it yet.                     | 2 weeks   |
+| **2**  | Done for POSIX prototype      | Write PTY driver. `pty.zig` now uses `forkpty`/`execvp`, resize, input writes, output reads, termination, and exit polling.                                                                                                                                                                                    | Done      |
+| **3**  | Not started                   | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests                                                                                                                                                                                                                                                   | 1-2 weeks |
+| **4**  | Not started                   | Add `libghostty-vt` snapshot extension (native + WASM exports)                                                                                                                                                                                                                                                 | 2-3 weeks |
+| **5**  | Partial daemon ownership      | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests. The daemon now creates session logs and appends output/resize/exit frames; the Electron utility logging path remains until the desktop client switches to `taod`.                                             | 1 week    |
+| **6**  | Scaffolded                    | Write SQLite layer (zig-sqlite, migrations, query functions). Migration SQL strings are scaffolded in `apps/daemon/src/db.zig`; no SQLite execution layer yet.                                                                                                                                                 | 1 week    |
+| **7**  | Not started                   | Integrate daemon with Electron main (launch, socket client, IPC bridge)                                                                                                                                                                                                                                        | 1 week    |
+| **8**  | Not started                   | Renderer attach from snapshot + live stream; remove old pty-service path                                                                                                                                                                                                                                       | 1 week    |
+| **9**  | Not started                   | Add agent adapter spawning + pi/codex/claude adapter scripts                                                                                                                                                                                                                                                   | 1-2 weeks |
+| **10** | **Done for Electron slice**   | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                              | Done      |
+| **11** | Not started                   | Search excerpts / FTS and daemon cleanup/retention                                                                                                                                                                                                                                                             | 1 week    |
+| **12** | Not started                   | Stress testing: crash, restart, daemon fail, large logs, agent resume                                                                                                                                                                                                                                          | 1-2 weeks |
 
 **Total**: roughly 10-14 weeks, dominated by the libghostty-vt snapshot extension and robust daemon
 lifecycle.

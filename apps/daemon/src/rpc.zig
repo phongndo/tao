@@ -128,8 +128,12 @@ pub const StreamKind = enum(u16) {
 
 pub const stream_magic: u32 = 0x54415346; // TASF
 pub const stream_version: u16 = 1;
-pub const stream_session_id_size: usize = 36;
-pub const stream_header_size: usize = 60;
+pub const stream_session_id_size: usize = 64;
+const stream_session_id_offset: usize = 8;
+const stream_seq_offset: usize = stream_session_id_offset + stream_session_id_size;
+const stream_length_offset: usize = stream_seq_offset + 8;
+const stream_crc_offset: usize = stream_length_offset + 4;
+pub const stream_header_size: usize = stream_crc_offset + 4;
 pub const max_stream_payload_bytes: u32 = 64 * 1024 * 1024;
 
 pub const StreamFrame = struct {
@@ -174,11 +178,11 @@ pub fn encodeStreamFrame(
     std.mem.writeInt(u32, out[0..4], stream_magic, .big);
     std.mem.writeInt(u16, out[4..6], stream_version, .big);
     std.mem.writeInt(u16, out[6..8], @intFromEnum(kind), .big);
-    @memset(out[8 .. 8 + stream_session_id_size], 0);
-    @memcpy(out[8 .. 8 + session_id.len], session_id);
-    std.mem.writeInt(u64, out[44..52], seq, .big);
-    std.mem.writeInt(u32, out[52..56], @intCast(payload.len), .big);
-    std.mem.writeInt(u32, out[56..60], std.hash.Crc32.hash(payload), .big);
+    @memset(out[stream_session_id_offset .. stream_session_id_offset + stream_session_id_size], 0);
+    @memcpy(out[stream_session_id_offset .. stream_session_id_offset + session_id.len], session_id);
+    std.mem.writeInt(u64, out[stream_seq_offset..][0..8], seq, .big);
+    std.mem.writeInt(u32, out[stream_length_offset..][0..4], @intCast(payload.len), .big);
+    std.mem.writeInt(u32, out[stream_crc_offset..][0..4], std.hash.Crc32.hash(payload), .big);
     @memcpy(out[stream_header_size..total_len], payload);
 
     return out[0..total_len];
@@ -194,10 +198,10 @@ pub fn parseStreamFrames(data: []const u8, visitor: anytype) !StreamParseResult 
 
         const version = std.mem.readInt(u16, data[offset + 4 ..][0..2], .big);
         const kind_raw = std.mem.readInt(u16, data[offset + 6 ..][0..2], .big);
-        const session_field = data[offset + 8 .. offset + 8 + stream_session_id_size];
-        const seq = std.mem.readInt(u64, data[offset + 44 ..][0..8], .big);
-        const length = std.mem.readInt(u32, data[offset + 52 ..][0..4], .big);
-        const expected_crc = std.mem.readInt(u32, data[offset + 56 ..][0..4], .big);
+        const session_field = data[offset + stream_session_id_offset .. offset + stream_session_id_offset + stream_session_id_size];
+        const seq = std.mem.readInt(u64, data[offset + stream_seq_offset ..][0..8], .big);
+        const length = std.mem.readInt(u32, data[offset + stream_length_offset ..][0..4], .big);
+        const expected_crc = std.mem.readInt(u32, data[offset + stream_crc_offset ..][0..4], .big);
         const payload_start = offset + stream_header_size;
 
         const kind = StreamKind.fromRaw(kind_raw) orelse break;
