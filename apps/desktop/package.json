@@ -28,7 +28,7 @@
     "bench:startup": "bash bench/startup-bench.sh",
     "bench:all": "bash bench/run-all.sh",
     "test:persistence": "tsx --test src/main/session-persistence.test.ts src/main/taod-stream.test.ts",
-    "postinstall": "node ../../scripts/fix-node-pty-perms.mjs",
+
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
     "lint": "oxlint . --jsx-a11y-plugin --deny-warnings --report-unused-disable-directives",
@@ -41,7 +41,6 @@
     "@tao/shared": "workspace:*",
     "effect": "4.0.0-beta.66",
     "ghostty-web": "0.4.0-next.14.g6a1a50d",
-    "node-pty": "^1.1.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-icons": "^5.6.0",

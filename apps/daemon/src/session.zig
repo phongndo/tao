@@ -234,6 +234,16 @@ pub const Manager = struct {
         return null;
     }
 
+    pub fn remove(self: *Manager, session_id: []const u8) bool {
+        for (self.sessions.items, 0..) |*item, index| {
+            if (!std.mem.eql(u8, item.id, session_id)) continue;
+            var removed = self.sessions.orderedRemove(index);
+            removed.deinit(self.allocator);
+            return true;
+        }
+        return false;
+    }
+
     pub fn detach(self: *Manager, session_id: []const u8) bool {
         const item = self.find(session_id) orelse return false;
         if (item.status == .live and item.subscribers.items.len == 0) item.status = .detached;
@@ -310,6 +320,8 @@ test "session manager creates and updates sessions" {
     try std.testing.expectEqual(Status.live, manager.find("session-1").?.status);
     try std.testing.expect(manager.kill("session-1"));
     try std.testing.expectEqualStrings("killed", manager.find("session-1").?.status.text());
+    try std.testing.expect(manager.remove("session-1"));
+    try std.testing.expect(manager.find("session-1") == null);
 }
 
 test "terminal session create metadata can be refreshed for restart fallback" {

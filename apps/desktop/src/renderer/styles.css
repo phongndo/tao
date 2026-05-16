@@ -914,3 +914,38 @@ body {
   background: rgb(230 185 157 / 18%);
   outline: none;
 }
+
+.terminal-resume-banner {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 7px 11px;
+  border: 1px solid rgb(144 185 159 / 38%);
+  border-radius: 7px;
+  background: rgb(24 31 27 / 94%);
+  color: #c9c7cd;
+  font-size: 11px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+  pointer-events: none;
+}
+
+.terminal-resume-label {
+  flex: 0 0 auto;
+  color: #90b99f;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.terminal-resume-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: #9699a8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

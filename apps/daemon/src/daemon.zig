@@ -11,6 +11,39 @@ const vt = @import("vt.zig");
 
 const control_payload_max = 64 * 1024;
 
+const AttachKind = enum {
+    live,
+    command_resume,
+    agent_resume,
+
+    fn text(self: AttachKind) []const u8 {
+        return switch (self) {
+            .live => "live",
+            .command_resume => "command-resume",
+            .agent_resume => "agent-resume",
+        };
+    }
+};
+
+const RestoreResult = struct {
+    item: *session.TerminalSession,
+    attach_kind: AttachKind,
+    agent_provider: ?[]u8 = null,
+    native_session_id: ?[]u8 = null,
+
+    fn deinit(self: *RestoreResult, allocator: std.mem.Allocator) void {
+        if (self.agent_provider) |value| allocator.free(value);
+        if (self.native_session_id) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
+const SessionResponseMetadata = struct {
+    attach_kind: AttachKind = .live,
+    agent_provider: ?[]const u8 = null,
+    native_session_id: ?[]const u8 = null,
+};
+
 pub const Config = struct {
     root_dir: []const u8,
     database_path: []const u8,
@@ -239,14 +272,18 @@ pub const Daemon = struct {
         self.recordAgentSessionLocked(created, request.argv orelse &.{}, argv_json, "running");
         try self.startSessionReaderLocked(created);
 
-        return sessionResponse(allocator, request, created);
+        return sessionResponse(allocator, request, created, .{});
     }
 
     fn handleAttachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
-        const attached = self.sessions.attach(session_id) orelse
-            (try self.restoreSessionFromDatabaseLocked(session_id, request)) orelse
-            return notFound(allocator, request);
+        var restored_result: ?RestoreResult = null;
+        defer if (restored_result) |*result| result.deinit(self.allocator);
+
+        const attached = self.sessions.attach(session_id) orelse blk: {
+            restored_result = (try self.restoreSessionFromDatabaseLocked(session_id, request)) orelse return notFound(allocator, request);
+            break :blk restored_result.?.item;
+        };
         if (!isLiveAttachable(attached)) {
             return rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
@@ -255,7 +292,12 @@ pub const Daemon = struct {
             });
         }
         self.recordTerminalSessionLocked(attached, null);
-        return sessionResponse(allocator, request, attached);
+        const metadata: SessionResponseMetadata = if (restored_result) |result| .{
+            .attach_kind = result.attach_kind,
+            .agent_provider = result.agent_provider,
+            .native_session_id = result.native_session_id,
+        } else .{ .attach_kind = .live };
+        return sessionResponse(allocator, request, attached, metadata);
     }
 
     fn handleResizeLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -272,7 +314,7 @@ pub const Daemon = struct {
         }
         self.recordTerminalSessionLocked(item, null);
 
-        return sessionResponse(allocator, request, self.sessions.find(session_id).?);
+        return sessionResponse(allocator, request, self.sessions.find(session_id).?, .{});
     }
 
     fn handleDetachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -282,7 +324,7 @@ pub const Daemon = struct {
         if (item.subscribers.items.len == 0) self.checkpointCurrentScreenLocked(item);
         self.recordTerminalSessionLocked(item, null);
 
-        return sessionResponse(allocator, request, item);
+        return sessionResponse(allocator, request, item, .{});
     }
 
     fn handleKillLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -302,7 +344,7 @@ pub const Daemon = struct {
         if (!self.sessions.kill(session_id)) return notFound(allocator, request);
         self.recordTerminalEndedLocked(item, 0, 15);
 
-        return sessionResponse(allocator, request, self.sessions.find(session_id).?);
+        return sessionResponse(allocator, request, self.sessions.find(session_id).?, .{});
     }
 
     fn handleClearHistoryLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -397,7 +439,7 @@ pub const Daemon = struct {
         self: *Daemon,
         session_id: []const u8,
         request: rpc.ControlRequestJson,
-    ) !?*session.TerminalSession {
+    ) !?RestoreResult {
         const database = if (self.database) |*database| database else return null;
         var record = (try database.findTerminalSessionById(self.allocator, session_id)) orelse record: {
             const terminal_id = request.requestTerminalId() orelse return null;
@@ -432,14 +474,22 @@ pub const Daemon = struct {
             .cwd = cwd,
             .argv = argv,
         });
+        var restore_committed = false;
+        errdefer {
+            if (!restore_committed) _ = self.sessions.remove(session_id);
+        }
         restored.status = .live;
 
         try self.ensureSessionPersistence(restored);
         self.ensureSessionProcess(restored, argv) catch |err| {
             std.log.warn("failed to restore session process for {s}: {t}", .{ record.id, err });
+            _ = self.sessions.remove(session_id);
             return null;
         };
-        if (!isLiveAttachable(restored)) return null;
+        if (!isLiveAttachable(restored)) {
+            _ = self.sessions.remove(session_id);
+            return null;
+        }
 
         if (restored.event_log_path) |path| {
             _ = event_log.appendResize(self.allocator, path, &restored.last_seq, cols, rows) catch |err| {
@@ -453,8 +503,20 @@ pub const Daemon = struct {
         self.recordAgentSessionLocked(restored, argv, current_argv_json, if (mutable_resume_lookup != null) "resumed" else "running");
         try self.startSessionReaderLocked(restored);
 
-        std.log.info("restored persisted session {s} with native command resume", .{restored.id});
-        return restored;
+        std.log.info("restored persisted session {s} with native command/agent resume", .{restored.id});
+        var result: RestoreResult = .{
+            .item = restored,
+            .attach_kind = if (mutable_resume_lookup != null) .agent_resume else .command_resume,
+        };
+        errdefer result.deinit(self.allocator);
+
+        if (mutable_resume_lookup) |lookup| {
+            result.agent_provider = try self.allocator.dupe(u8, lookup.provider);
+            result.native_session_id = try self.allocator.dupe(u8, lookup.native_session_id);
+        }
+
+        restore_committed = true;
+        return result;
     }
 
     fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
@@ -1036,6 +1098,7 @@ fn sessionResponse(
     allocator: std.mem.Allocator,
     request: rpc.ControlRequestJson,
     item: *const session.TerminalSession,
+    metadata: SessionResponseMetadata,
 ) ![]u8 {
     return rpc.responseJsonAlloc(allocator, .{
         .id = request.requestId(),
@@ -1047,6 +1110,9 @@ fn sessionResponse(
         .cols = item.cols,
         .rows = item.rows,
         .last_seq = item.last_seq,
+        .attach_kind = metadata.attach_kind.text(),
+        .agent_provider = metadata.agent_provider,
+        .native_session_id = metadata.native_session_id,
     });
 }
 

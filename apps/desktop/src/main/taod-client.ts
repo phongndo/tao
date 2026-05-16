@@ -34,6 +34,9 @@ export type TaodControlResponse = {
   readonly cols?: number
   readonly rows?: number
   readonly last_seq?: number
+  readonly attach_kind?: string
+  readonly agent_provider?: string
+  readonly native_session_id?: string | null
   readonly removed_sessions?: number
   readonly removed_bytes?: number
   readonly error_message?: string

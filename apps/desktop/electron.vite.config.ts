@@ -41,9 +41,7 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
-      rollupOptions: {
-        external: ['node-pty'],
-      },
+      // node-pty has been removed — taod owns PTY lifecycle
     },
   },
   preload: {

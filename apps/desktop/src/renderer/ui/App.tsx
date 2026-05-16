@@ -822,7 +822,7 @@ export function App() {
     const nextPaneIds = new Set(panes.map((pane) => pane.id))
     for (const [paneId, sessionId] of previousPaneSessionsRef.current) {
       if (!nextPaneIds.has(paneId)) {
-        window.electronAPI.killPty(sessionId)
+        void window.electronAPI.killSession(sessionId)
       }
     }
     previousPaneSessionsRef.current = new Map(

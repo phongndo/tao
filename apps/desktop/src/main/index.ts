@@ -9,7 +9,7 @@
  * TL;DR improvements applied:
  *   - GPU rasterization + zero-copy (canvas rendering)
  *   - V8 heap limit tuned for terminal workloads
- *   - PTY isolated in a utility process with direct MessagePort IPC
+ *   - PTY isolated in taod with direct MessagePort IPC to the renderer bridge
  *   - Renderer process limit = 1 (single window app)
  *   - Disabled unused Chromium features (~15 services)
  *   - Canvas compositor layer promotion
@@ -25,9 +25,7 @@ import {
   ipcMain,
   type IpcMainInvokeEvent,
   MessageChannelMain,
-  utilityProcess,
 } from 'electron'
-import ptyServicePath from './pty-service?modulePath'
 import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { defaultSettings, readSettings, writeSettings } from './settings-store'
@@ -99,7 +97,6 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 // ─── Application State ───
 
 let mainWindow: BrowserWindow | null = null
-let ptyService: Electron.UtilityProcess | null = null
 let taodBridge: TaodPtyBridge | null = null
 
 // ─── Window Creation ───
@@ -241,42 +238,21 @@ function sendAppCommand(command: AppCommand) {
   mainWindow?.webContents.send('app:command', command)
 }
 
-// ─── PTY Service Lifecycle ───
+// ─── Session Backend Lifecycle ───
 
 async function sendPtyPortToRenderer() {
   if (!mainWindow || mainWindow.isDestroyed()) return
 
-  const backend = process.env.TAO_PTY_BACKEND?.trim().toLowerCase()
-  if (backend !== 'utility') {
-    try {
-      const bridge = ensureTaodBridge()
-      await bridge.ensureReady()
+  try {
+    const bridge = ensureTaodBridge()
+    await bridge.ensureReady()
 
-      const { port1, port2 } = new MessageChannelMain()
-      bridge.connectPort(port1)
-      mainWindow.webContents.postMessage('pty:port', null, [port2])
-      return
-    } catch (err) {
-      const message = `Tao daemon unavailable: ${errorMessageFromUnknown(err)}`
-      if (backend === 'taod') {
-        notifyPtyServiceError(message)
-        return
-      }
-      console.warn(`[main] ${message}; falling back to utility PTY service`)
-    }
+    const { port1, port2 } = new MessageChannelMain()
+    bridge.connectPort(port1)
+    mainWindow.webContents.postMessage('pty:port', null, [port2])
+  } catch (err) {
+    console.warn(`[main] Tao daemon unavailable: ${errorMessageFromUnknown(err)}`)
   }
-
-  sendUtilityPtyPortToRenderer()
-}
-
-function sendUtilityPtyPortToRenderer() {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  const service = ensurePtyService()
-  if (!service) return
-
-  const { port1, port2 } = new MessageChannelMain()
-  service.postMessage({ type: 'connect' }, [port1])
-  mainWindow.webContents.postMessage('pty:port', null, [port2])
 }
 
 function ensureTaodBridge(): TaodPtyBridge {
@@ -284,77 +260,17 @@ function ensureTaodBridge(): TaodPtyBridge {
   return taodBridge
 }
 
-function shouldWarmUtilityService(): boolean {
-  return process.env.TAO_PTY_BACKEND?.trim().toLowerCase() === 'utility'
-}
-
 function warmSessionBackend() {
-  if (shouldWarmUtilityService()) {
-    ensurePtyService()
-    return
-  }
-
-  const backend = process.env.TAO_PTY_BACKEND?.trim().toLowerCase()
   void ensureTaodBridge()
     .ensureReady()
     .catch((err) => {
-      if (backend === 'taod') {
-        console.warn(`[main] Failed to warm taod backend: ${errorMessageFromUnknown(err)}`)
-        return
-      }
-      ensurePtyService()
+      console.warn(`[main] Failed to warm taod backend: ${errorMessageFromUnknown(err)}`)
     })
-}
-
-function ensurePtyService(): Electron.UtilityProcess | null {
-  if (ptyService) return ptyService
-
-  let service: Electron.UtilityProcess
-  try {
-    service = utilityProcess.fork(ptyServicePath, [], {
-      serviceName: 'Tao PTY Service',
-      stdio: 'inherit',
-    })
-  } catch (err) {
-    notifyPtyServiceError(`Failed to start PTY service: ${errorMessageFromUnknown(err)}`)
-    return null
-  }
-
-  ptyService = service
-  ptyService.once('error', (err) => {
-    if (ptyService === service) {
-      ptyService = null
-    }
-    notifyPtyServiceError(`PTY service error: ${errorMessageFromUnknown(err)}`)
-  })
-  ptyService.once('exit', (code) => {
-    console.log(`[main] PTY service exited with code ${code}`)
-    if (ptyService === service) {
-      ptyService = null
-      if (code !== 0) {
-        notifyPtyServiceError(`PTY service exited before ready (code=${code})`)
-      }
-    }
-  })
-
-  return service
-}
-
-function disposePtyService() {
-  if (!ptyService) return
-  ptyService.kill()
-  ptyService = null
 }
 
 function disposeSessionBackends() {
   taodBridge?.dispose()
   taodBridge = null
-  disposePtyService()
-}
-
-function notifyPtyServiceError(error: string) {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  mainWindow.webContents.send('pty:service-error', error)
 }
 
 function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, WorkspaceError> {

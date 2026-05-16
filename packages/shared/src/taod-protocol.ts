@@ -28,6 +28,13 @@ export const TaodStreamFrameKindSchema = Schema.Union([
   Schema.Literal(TaodStreamFrameKind.Agent),
 ])
 
+export const AttachSessionModeSchema = Schema.Union([
+  Schema.Literal('live'),
+  Schema.Literal('fresh'),
+  Schema.Literal('command-resume'),
+  Schema.Literal('agent-resume'),
+])
+
 export const CreateSessionInputSchema = Schema.Struct({
   terminalId: NonEmptyString,
   cols: Schema.Number,
@@ -56,6 +63,9 @@ export const AttachSessionResultSchema = Schema.Struct({
   cols: Schema.Number,
   rows: Schema.Number,
   archived: Schema.optional(Schema.Boolean),
+  attachMode: Schema.optional(AttachSessionModeSchema),
+  agentProvider: Schema.optional(Schema.String),
+  nativeSessionId: Schema.optional(Schema.NullOr(Schema.String)),
 })
 
 export const OutputFrameSchema = Schema.Struct({
@@ -84,6 +94,7 @@ export const AgentStatusSchema = Schema.Struct({
 
 export type CreateSessionInput = Schema.Schema.Type<typeof CreateSessionInputSchema>
 export type CreateSessionResult = Schema.Schema.Type<typeof CreateSessionResultSchema>
+export type AttachSessionMode = Schema.Schema.Type<typeof AttachSessionModeSchema>
 export type AttachSessionInput = Schema.Schema.Type<typeof AttachSessionInputSchema>
 export type AttachSessionResult = Schema.Schema.Type<typeof AttachSessionResultSchema>
 export type OutputFrame = Schema.Schema.Type<typeof OutputFrameSchema>

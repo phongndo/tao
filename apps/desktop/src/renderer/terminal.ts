@@ -8,7 +8,11 @@ import {
   isGhosttyNativeCurrentScreenSnapshot,
   isFallbackCurrentScreenSnapshot,
 } from '@tao/shared/current-screen-snapshot'
-import type { CurrentScreenSnapshotFrame, OutputFrame } from '@tao/shared/taod-protocol'
+import type {
+  AttachSessionResult,
+  CurrentScreenSnapshotFrame,
+  OutputFrame,
+} from '@tao/shared/taod-protocol'
 import { createOscTitleScanner } from './osc-title'
 
 type CreateTerminalOptions = {
@@ -16,6 +20,7 @@ type CreateTerminalOptions = {
   readonly cwd?: string
   readonly onTitle?: (title: string) => void
   readonly onArchived?: () => void
+  readonly onAttach?: (result: AttachSessionResult) => void
 }
 
 /**
@@ -324,13 +329,13 @@ export async function createTerminal(
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
-    window.electronAPI.killPty(sessionId)
+    void window.electronAPI.killSession(sessionId)
     renderTerminalError(container, err)
     throw err
   }
 
   if (!term) {
-    window.electronAPI.killPty(sessionId)
+    void window.electronAPI.killSession(sessionId)
     throw new Error('Terminal failed to initialize')
   }
   const openedTerm = term
@@ -434,7 +439,7 @@ export async function createTerminal(
   // Terminal input → PTY (no debug overhead)
   term.onData((data: string) => {
     if (archived) return
-    window.electronAPI.sendPtyInput(sessionId, data)
+    window.electronAPI.writeSessionInput(sessionId, new TextEncoder().encode(data))
   })
 
   let pendingResize: { cols: number; rows: number } | null = null
@@ -451,17 +456,17 @@ export async function createTerminal(
       const nextResize = pendingResize
       pendingResize = null
       if (nextResize && !archived) {
-        window.electronAPI.resizePty(sessionId, nextResize.cols, nextResize.rows)
+        window.electronAPI.resizeSession(sessionId, nextResize.cols, nextResize.rows)
       }
     })
   })
 
-  const unsubPtyError = window.electronAPI.onPtyError(sessionId, (error: string) => {
-    console.error('[terminal] PTY error:', error)
-    term.write(`\r\n\x1b[31m[PTY Error: ${error}]\x1b[0m\r\n`)
+  const unsubSessionError = window.electronAPI.onSessionError(sessionId, (error: string) => {
+    console.error('[terminal] Session error:', error)
+    term.write(`\r\n\x1b[31m[Session Error: ${error}]\x1b[0m\r\n`)
   })
 
-  const unsubPtyExit = window.electronAPI.onPtyExit(
+  const unsubSessionExit = window.electronAPI.onSessionExit(
     sessionId,
     (info: { exitCode: number; signal?: number }) => {
       const msg =
@@ -484,6 +489,7 @@ export async function createTerminal(
       archived = true
       options.onArchived?.()
     }
+    options.onAttach?.(attachedSession)
     const initialPtySize = { cols: attachedSession.cols, rows: attachedSession.rows }
     if (initialPtySize.cols !== term.cols || initialPtySize.rows !== term.rows) {
       term.resize(initialPtySize.cols, initialPtySize.rows)
@@ -504,11 +510,11 @@ export async function createTerminal(
     unsubSessionOutput()
     unsubSessionSnapshot()
     unsubSessionResize()
-    unsubPtyError()
-    unsubPtyExit()
+    unsubSessionError()
+    unsubSessionExit()
     fitAddon.dispose()
     term.dispose()
-    window.electronAPI.killPty(sessionId)
+    void window.electronAPI.killSession(sessionId)
     container.classList.remove('terminal-surface-restoring')
     renderTerminalError(container, err)
     throw err
@@ -527,8 +533,8 @@ export async function createTerminal(
     unsubSessionOutput()
     unsubSessionSnapshot()
     unsubSessionResize()
-    unsubPtyError()
-    unsubPtyExit()
+    unsubSessionError()
+    unsubSessionExit()
     void window.electronAPI.detachSession(sessionId)
     stopResizeObserver?.()
     stopResizeObserver = null

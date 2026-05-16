@@ -1,7 +1,12 @@
 import { Schema } from 'effect'
 import type { MessagePortMain } from 'electron'
 import { StringDecoder } from 'node:string_decoder'
-import { TaodStreamFrameKind } from '@tao/shared/taod-protocol'
+import {
+  AgentStatusSchema,
+  TaodStreamFrameKind,
+  type AgentStatus,
+  type AttachSessionMode,
+} from '@tao/shared/taod-protocol'
 import { defaultSettings, readSettings } from './settings-store'
 import {
   type PtyClientMessage,
@@ -24,6 +29,9 @@ type BridgeSession = {
   cols: number
   rows: number
   archived: boolean
+  attachMode: AttachSessionMode
+  agentProvider?: string
+  nativeSessionId?: string | null
 }
 
 function decodeClientMessage(message: unknown): PtyClientMessage | null {
@@ -49,6 +57,15 @@ function isValidSize(cols: number, rows: number): boolean {
   return Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0
 }
 
+function sanitizeArgv(argv: readonly string[] | undefined): string[] | undefined {
+  if (!argv) return undefined
+  const normalized = argv
+    .map((arg) => (typeof arg === 'string' ? arg : ''))
+    .filter((arg) => arg.length > 0)
+
+  return normalized.length > 0 ? normalized : undefined
+}
+
 function responseSeq(response: TaodControlResponse): number {
   return typeof response.last_seq === 'number' ? response.last_seq : 0
 }
@@ -65,6 +82,31 @@ function defaultShellArgv(defaultShell?: string): string[] {
   const shell =
     defaultShell ?? process.env.SHELL ?? (process.platform === 'win32' ? 'powershell.exe' : 'bash')
   return [shell]
+}
+
+function responseAttachMode(response: TaodControlResponse): AttachSessionMode {
+  switch (response.attach_kind) {
+    case 'agent-resume':
+      return 'agent-resume'
+    case 'command-resume':
+      return 'command-resume'
+    case 'fresh':
+      return 'fresh'
+    case 'live':
+    default:
+      return 'live'
+  }
+}
+
+function decodeAgentStatus(payload: Buffer): AgentStatus | null {
+  try {
+    const decoded = Schema.decodeUnknownOption(AgentStatusSchema)(
+      JSON.parse(payload.toString('utf8')),
+    )
+    return decoded._tag === 'Some' ? decoded.value : null
+  } catch {
+    return null
+  }
 }
 
 export class TaodPtyBridge {
@@ -123,6 +165,7 @@ export class TaodPtyBridge {
           sanitizeCwd(message.cwd),
           {
             forceCreate: true,
+            argv: sanitizeArgv(message.argv),
           },
         )
         break
@@ -165,21 +208,26 @@ export class TaodPtyBridge {
     cols: number,
     rows: number,
     cwd: string | undefined,
-    options: { forceCreate: boolean },
+    options: { forceCreate: boolean; argv?: readonly string[] },
   ): Promise<void> {
     const existing = this.sessions.get(sessionId)
     if (existing?.stream) {
+      // A renderer can request attach for an already-streaming session when a terminal view is
+      // remounted during tab/layout changes. Returning a bare ready message here leaves the new
+      // Ghostty instance with no current-screen snapshot or startup bytes because the previous
+      // stream already consumed them. Treat it as a real live reattach instead: close the old
+      // subscriber socket and continue through taod attach so the daemon sends a fresh snapshot.
       existing.cols = cols
       existing.rows = rows
-      existing.stream.resize(cols, rows)
-      this.postReady(sessionId, { cols, rows }, 0, existing.archived)
-      return
+      this.closeSessionStream(sessionId)
     }
 
     let attachResponse: TaodControlResponse
     let stream: TaodSessionStream
+    let attachMode: AttachSessionMode = 'live'
     if (options.forceCreate) {
-      await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
+      await this.createShellSession(sessionId, terminalId, cols, rows, cwd, options.argv)
+      attachMode = 'fresh'
       ;({ response: attachResponse, stream } = await this.client.attachSession({
         sessionId,
         terminalId,
@@ -199,6 +247,7 @@ export class TaodPtyBridge {
       } catch (error) {
         if (!isNotFoundError(error)) throw error
         await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
+        attachMode = 'fresh'
         ;({ response: attachResponse, stream } = await this.client.attachSession({
           sessionId,
           terminalId,
@@ -208,6 +257,7 @@ export class TaodPtyBridge {
         }))
       }
     }
+    if (attachMode === 'live') attachMode = responseAttachMode(attachResponse)
 
     if (attachResponse.status === 'archived') {
       // Older daemons could attach persisted logs as read-only archive sessions.
@@ -215,6 +265,7 @@ export class TaodPtyBridge {
       // real fresh shell under the same session id.
       stream.close()
       await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
+      attachMode = 'fresh'
       ;({ response: attachResponse, stream } = await this.client.attachSession({
         sessionId,
         terminalId,
@@ -231,12 +282,15 @@ export class TaodPtyBridge {
       cols,
       rows,
       archived,
+      attachMode,
+      agentProvider: attachResponse.agent_provider,
+      nativeSessionId: attachResponse.native_session_id,
     }
     this.sessions.set(sessionId, session)
     this.wireStream(sessionId, session, stream)
 
     const size = responseSize(attachResponse, { cols, rows })
-    this.postReady(sessionId, size, responseSeq(attachResponse), archived)
+    this.postReady(sessionId, size, responseSeq(attachResponse), session)
     stream.start()
   }
 
@@ -246,6 +300,7 @@ export class TaodPtyBridge {
     cols: number,
     rows: number,
     cwd?: string,
+    argv?: readonly string[],
   ): Promise<TaodControlResponse> {
     return this.client.createSession({
       sessionId,
@@ -253,7 +308,7 @@ export class TaodPtyBridge {
       cols,
       rows,
       cwd,
-      argv: defaultShellArgv(this.defaultShell),
+      argv: argv && argv.length > 0 ? [...argv] : defaultShellArgv(this.defaultShell),
     })
   }
 
@@ -297,6 +352,11 @@ export class TaodPtyBridge {
           const exit = decodeTaodExitPayload(frame.payload) ?? { exitCode: -1 }
           this.post({ type: 'exit', sessionId, info: exit })
           this.closeSessionStream(sessionId)
+          break
+        }
+        case TaodStreamFrameKind.Agent: {
+          const status = decodeAgentStatus(frame.payload)
+          if (status) this.post({ type: 'agent', sessionId, status })
           break
         }
       }
@@ -364,7 +424,7 @@ export class TaodPtyBridge {
 
     for (const [sessionId, session] of this.sessions) {
       if (targetSessionIds && !targetSessionIds.has(sessionId)) continue
-      this.postReady(sessionId, { cols: session.cols, rows: session.rows }, 0, session.archived)
+      this.postReady(sessionId, { cols: session.cols, rows: session.rows }, 0, session)
     }
   }
 
@@ -388,9 +448,20 @@ export class TaodPtyBridge {
     sessionId: string,
     size: { cols: number; rows: number },
     seq: number,
-    archived: boolean,
+    session: Pick<BridgeSession, 'archived' | 'attachMode' | 'agentProvider' | 'nativeSessionId'>,
   ): void {
-    this.post({ type: 'ready', sessionId, size, seq, ...(archived ? { archived } : {}) })
+    this.post({
+      type: 'ready',
+      sessionId,
+      size,
+      seq,
+      ...(session.archived ? { archived: session.archived } : {}),
+      attachMode: session.attachMode,
+      ...(session.agentProvider ? { agentProvider: session.agentProvider } : {}),
+      ...(session.nativeSessionId !== undefined
+        ? { nativeSessionId: session.nativeSessionId }
+        : {}),
+    })
   }
 
   private postData(sessionId: string, data: string, seq: number): void {

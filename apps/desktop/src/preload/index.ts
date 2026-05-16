@@ -6,7 +6,9 @@ import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
 import type {
   AttachSessionInput,
+  AttachSessionMode,
   AttachSessionResult,
+  AgentStatus,
   CreateSessionInput,
   CreateSessionResult,
   CurrentScreenSnapshotFrame,
@@ -32,6 +34,8 @@ type SessionOutputCallback = (frame: OutputFrame) => void
 type SessionSnapshotCallback = (frame: CurrentScreenSnapshotFrame) => void
 type SessionResizeCallback = (cols: number, rows: number) => void
 type SessionExitCallback = (info: ExitInfo) => void
+type SessionErrorCallback = (error: string) => void
+type AgentStatusCallback = (status: AgentStatus) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
@@ -48,6 +52,9 @@ type ReadyState = {
   size: PtySize | null
   seq: number
   archived: boolean
+  attachMode: AttachSessionMode
+  agentProvider?: string
+  nativeSessionId?: string | null
   promise: Promise<PtySize>
   resolve: ((size: PtySize) => void) | null
   reject: ((err: Error) => void) | null
@@ -65,11 +72,14 @@ const rendererShownWaiters: Array<() => void> = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, PendingDataState>()
 const pendingSnapshots = new Map<string, CurrentScreenSnapshotFrame>()
+const pendingAgentStatuses = new Map<string, AgentStatus>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
 const sessionOutputCallbacks = new Map<string, SessionOutputCallback[]>()
 const sessionSnapshotCallbacks = new Map<string, SessionSnapshotCallback[]>()
 const sessionResizeCallbacks = new Map<string, SessionResizeCallback[]>()
 const sessionExitCallbacks = new Map<string, SessionExitCallback[]>()
+const sessionErrorCallbacks = new Map<string, SessionErrorCallback[]>()
+const agentStatusCallbacks = new Map<string, AgentStatusCallback[]>()
 const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
 const ptyExitCallbacks = new Map<string, PtyExitCallback[]>()
 
@@ -80,6 +90,7 @@ function createReadyState(sessionId: string): ReadyState {
     size: null,
     seq: 0,
     archived: false,
+    attachMode: 'live',
     promise: new Promise<PtySize>((resolve, reject) => {
       resolveReady = resolve
       rejectReady = reject
@@ -98,10 +109,11 @@ function createReadyState(sessionId: string): ReadyState {
   return state
 }
 
-function getReadyState(sessionId: string): ReadyState {
+function beginReadyState(sessionId: string): ReadyState {
   const existingState = readyStates.get(sessionId)
-  if (existingState) return existingState
+  if (existingState?.resolve || existingState?.reject) return existingState
 
+  if (existingState) clearReadyTimeout(existingState)
   const state = createReadyState(sessionId)
   readyStates.set(sessionId, state)
   return state
@@ -122,12 +134,23 @@ function rejectPtyReady(sessionId: string, error: Error) {
   state.reject = null
 }
 
-function resolvePtyReady(sessionId: string, size: PtySize, seq = 0, archived = false) {
+function resolvePtyReady(
+  sessionId: string,
+  size: PtySize,
+  seq = 0,
+  archived = false,
+  attachMode: AttachSessionMode = 'live',
+  agentProvider?: string,
+  nativeSessionId?: string | null,
+) {
   const state = readyStates.get(sessionId)
   if (!state) return
   state.size = size
   state.seq = seq
   state.archived = archived
+  state.attachMode = attachMode
+  state.agentProvider = agentProvider
+  state.nativeSessionId = nativeSessionId
   clearReadyTimeout(state)
   state.resolve?.(size)
   state.resolve = null
@@ -196,11 +219,14 @@ function clearSessionState(sessionId: string) {
   readyStates.delete(sessionId)
   pendingData.delete(sessionId)
   pendingSnapshots.delete(sessionId)
+  pendingAgentStatuses.delete(sessionId)
   ptyDataCallbacks.delete(sessionId)
   sessionOutputCallbacks.delete(sessionId)
   sessionSnapshotCallbacks.delete(sessionId)
   sessionResizeCallbacks.delete(sessionId)
   sessionExitCallbacks.delete(sessionId)
+  sessionErrorCallbacks.delete(sessionId)
+  agentStatusCallbacks.delete(sessionId)
   ptyErrorCallbacks.delete(sessionId)
   ptyExitCallbacks.delete(sessionId)
 }
@@ -262,10 +288,37 @@ function handleSessionSnapshot(frame: CurrentScreenSnapshotFrame) {
   }
 }
 
+function handleAgentStatus(sessionId: string, status: AgentStatus) {
+  const callbacks = agentStatusCallbacks.get(sessionId)
+  if (!callbacks || callbacks.length === 0) {
+    pendingAgentStatuses.set(sessionId, status)
+    return
+  }
+
+  for (const callback of callbacks) {
+    callback(status)
+  }
+}
+
 function handlePtyMessage(message: PtyServiceMessage) {
   switch (message.type) {
     case 'ready':
-      resolvePtyReady(message.sessionId, message.size, message.seq ?? 0, message.archived ?? false)
+      resolvePtyReady(
+        message.sessionId,
+        message.size,
+        message.seq ?? 0,
+        message.archived ?? false,
+        message.attachMode ?? 'live',
+        message.agentProvider,
+        message.nativeSessionId,
+      )
+      if (message.agentProvider) {
+        handleAgentStatus(message.sessionId, {
+          provider: message.agentProvider,
+          status: message.attachMode === 'agent-resume' ? 'resumed' : 'running',
+          nativeSessionId: message.nativeSessionId,
+        })
+      }
       break
     case 'data':
       handleSessionOutput({
@@ -293,6 +346,9 @@ function handlePtyMessage(message: PtyServiceMessage) {
       for (const callback of ptyErrorCallbacks.get(message.sessionId) ?? []) {
         callback(message.error)
       }
+      for (const callback of sessionErrorCallbacks.get(message.sessionId) ?? []) {
+        callback(message.error)
+      }
       clearSessionState(message.sessionId)
       break
     case 'exit': {
@@ -316,6 +372,9 @@ function handlePtyMessage(message: PtyServiceMessage) {
       clearSessionState(message.sessionId)
       break
     }
+    case 'agent':
+      handleAgentStatus(message.sessionId, message.status)
+      break
   }
 }
 
@@ -342,29 +401,6 @@ ipcRenderer.on('pty:port', (event) => {
   }
   ptyPort.start()
   flushPendingClientMessages()
-})
-
-ipcRenderer.on('pty:service-error', (_event, error: string) => {
-  const sessionIds = new Set([
-    ...readyStates.keys(),
-    ...pendingData.keys(),
-    ...pendingSnapshots.keys(),
-    ...ptyDataCallbacks.keys(),
-    ...sessionOutputCallbacks.keys(),
-    ...sessionSnapshotCallbacks.keys(),
-    ...sessionResizeCallbacks.keys(),
-    ...sessionExitCallbacks.keys(),
-    ...ptyErrorCallbacks.keys(),
-    ...ptyExitCallbacks.keys(),
-  ])
-
-  for (const sessionId of sessionIds) {
-    rejectPtyReady(sessionId, new Error(error))
-    for (const callback of ptyErrorCallbacks.get(sessionId) ?? []) {
-      callback(error)
-    }
-    clearSessionState(sessionId)
-  }
 })
 
 ipcRenderer.on('renderer:shown', () => {
@@ -412,13 +448,18 @@ const electronAPI = {
     }
 
     const sessionId = createSessionId()
-    await this.attachSession({
+    const state = beginReadyState(sessionId)
+    const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
+    queuePtyMessage({
+      type: 'spawn',
       sessionId,
       terminalId: input.terminalId,
       cols: input.cols,
       rows: input.rows,
-      cwd: input.cwd,
+      ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
+      ...(input.argv && input.argv.length > 0 ? { argv: [...input.argv] } : {}),
     })
+    await (state.size ? Promise.resolve(state.size) : state.promise)
     return { sessionId }
   },
 
@@ -432,7 +473,7 @@ const electronAPI = {
 
     const cols = typeof input.cols === 'number' ? input.cols : 80
     const rows = typeof input.rows === 'number' ? input.rows : 24
-    const state = getReadyState(sessionId)
+    const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
     queuePtyMessage({
@@ -444,7 +485,16 @@ const electronAPI = {
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
     })
     const size = state.size ?? (await state.promise)
-    return { sessionId, seq: state.seq, cols: size.cols, rows: size.rows, archived: state.archived }
+    return {
+      sessionId,
+      seq: state.seq,
+      cols: size.cols,
+      rows: size.rows,
+      archived: state.archived,
+      attachMode: state.attachMode,
+      agentProvider: state.agentProvider,
+      nativeSessionId: state.nativeSessionId,
+    }
   },
 
   detachSession(sessionId: string): Promise<void> {
@@ -455,15 +505,24 @@ const electronAPI = {
 
   writeSessionInput(sessionId: string, data: Uint8Array): void {
     if (!(data instanceof Uint8Array) || data.length === 0) return
-    this.sendPtyInput(sessionId, new TextDecoder().decode(data))
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    queuePtyMessage({ type: 'write', sessionId, data: new TextDecoder().decode(data) })
   },
 
   resizeSession(sessionId: string, cols: number, rows: number): void {
-    this.resizePty(sessionId, cols, rows)
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    if (typeof cols !== 'number' || typeof rows !== 'number') return
+    queuePtyMessage({ type: 'resize', sessionId, cols, rows })
   },
 
   killSession(sessionId: string): Promise<void> {
-    this.killPty(sessionId)
+    if (typeof sessionId === 'string' && sessionId.length > 0) {
+      rejectAndClearSessionState(
+        sessionId,
+        new Error(`Session ${sessionId} was killed before ready`),
+      )
+      queuePtyMessage({ type: 'kill', sessionId })
+    }
     return Promise.resolve()
   },
 
@@ -523,6 +582,23 @@ const electronAPI = {
     return () => removeCallback(sessionExitCallbacks, sessionId, callback)
   },
 
+  onSessionError(sessionId: string, callback: (error: string) => void): () => void {
+    const callbacks = callbacksFor(sessionErrorCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => removeCallback(sessionErrorCallbacks, sessionId, callback)
+  },
+
+  onAgentStatus(sessionId: string, callback: (status: AgentStatus) => void): () => void {
+    const callbacks = callbacksFor(agentStatusCallbacks, sessionId)
+    callbacks.push(callback)
+    const pendingStatus = pendingAgentStatuses.get(sessionId)
+    if (pendingStatus) {
+      pendingAgentStatuses.delete(sessionId)
+      callback(pendingStatus)
+    }
+    return () => removeCallback(agentStatusCallbacks, sessionId, callback)
+  },
+
   spawnPty(sessionId: string, cols: number, rows: number, cwd?: string): Promise<PtySize> {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       return Promise.reject(new Error('PTY sessionId is required'))
@@ -531,7 +607,7 @@ const electronAPI = {
       return Promise.reject(new Error('PTY size must be numeric'))
     }
 
-    const state = getReadyState(sessionId)
+    const state = beginReadyState(sessionId)
     const trimmedCwd = typeof cwd === 'string' ? cwd.trim() : ''
     queuePtyMessage({
       type: 'spawn',

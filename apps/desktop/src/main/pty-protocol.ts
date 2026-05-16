@@ -1,4 +1,5 @@
 import { Schema } from 'effect'
+import { AgentStatusSchema, AttachSessionModeSchema } from '@tao/shared/taod-protocol'
 
 export const PtySizeSchema = Schema.Struct({
   cols: Schema.Number,
@@ -22,6 +23,7 @@ export const PtyClientMessageSchema = Schema.Union([
     cols: Schema.Number,
     rows: Schema.Number,
     cwd: Schema.optional(CwdSchema),
+    argv: Schema.optional(Schema.Array(Schema.String)),
   }),
   Schema.Struct({
     type: Schema.Literal('attach'),
@@ -53,6 +55,9 @@ export const PtyServiceMessageSchema = Schema.Union([
     size: PtySizeSchema,
     seq: Schema.optional(Schema.Number),
     archived: Schema.optional(Schema.Boolean),
+    attachMode: Schema.optional(AttachSessionModeSchema),
+    agentProvider: Schema.optional(Schema.String),
+    nativeSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   }),
   Schema.Struct({
     type: Schema.Literal('data'),
@@ -85,6 +90,11 @@ export const PtyServiceMessageSchema = Schema.Union([
     type: Schema.Literal('exit'),
     sessionId: SessionIdSchema,
     info: PtyExitInfoSchema,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('agent'),
+    sessionId: SessionIdSchema,
+    status: AgentStatusSchema,
   }),
 ])
 
