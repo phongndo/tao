@@ -2,6 +2,7 @@ const std = @import("std");
 const event_log = @import("event_log.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
+const vt = @import("vt.zig");
 
 pub const max_pending_output_bytes = 1024 * 1024;
 
@@ -48,12 +49,14 @@ pub const TerminalSession = struct {
     pty_child: ?pty.Child,
     cols: u16,
     rows: u16,
+    vt_terminal: ?vt.Terminal,
     status: Status,
     last_seq: u64,
     reader_started: bool,
 
     pub fn deinit(self: *TerminalSession, allocator: std.mem.Allocator) void {
         if (self.pty_child) |*child| child.close();
+        if (self.vt_terminal) |*terminal| terminal.deinit(allocator);
         allocator.free(self.id);
         allocator.free(self.terminal_id);
         if (self.cwd) |cwd| allocator.free(cwd);
@@ -97,8 +100,7 @@ pub const TerminalSession = struct {
             self.cwd = next_cwd;
         }
 
-        self.cols = cols;
-        self.rows = rows;
+        try self.resizeVt(allocator, cols, rows);
     }
 
     pub fn bufferPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator, seq: u64, payload: []const u8) !void {
@@ -120,6 +122,21 @@ pub const TerminalSession = struct {
         for (self.pending_output.items) |*frame| frame.deinit(allocator);
         self.pending_output.clearRetainingCapacity();
         self.pending_output_bytes = 0;
+    }
+
+    pub fn writeVt(self: *TerminalSession, payload: []const u8) !void {
+        if (self.vt_terminal) |*terminal| try terminal.write(payload);
+    }
+
+    pub fn resizeVt(self: *TerminalSession, allocator: std.mem.Allocator, cols: u16, rows: u16) !void {
+        self.cols = cols;
+        self.rows = rows;
+        if (self.vt_terminal) |*terminal| try terminal.resize(allocator, cols, rows);
+    }
+
+    pub fn currentScreenTextAlloc(self: *const TerminalSession, allocator: std.mem.Allocator) !?[]u8 {
+        const terminal = self.vt_terminal orelse return null;
+        return try terminal.plainTextAlloc(allocator);
     }
 
     pub fn pidU32(self: *const TerminalSession) ?u32 {
@@ -150,6 +167,8 @@ pub const Manager = struct {
         errdefer self.allocator.free(terminal_id);
         const cwd = if (input.cwd) |value| try self.allocator.dupe(u8, value) else null;
         errdefer if (cwd) |value| self.allocator.free(value);
+        var vt_terminal = try vt.Terminal.init(self.allocator, input.cols, input.rows);
+        errdefer vt_terminal.deinit(self.allocator);
 
         try self.sessions.append(self.allocator, .{
             .id = id,
@@ -164,6 +183,7 @@ pub const Manager = struct {
             .pty_child = null,
             .cols = input.cols,
             .rows = input.rows,
+            .vt_terminal = vt_terminal,
             .status = .live,
             .last_seq = 0,
             .reader_started = false,
@@ -215,8 +235,7 @@ pub const Manager = struct {
 
     pub fn resize(self: *Manager, session_id: []const u8, cols: u16, rows: u16) bool {
         const item = self.find(session_id) orelse return false;
-        item.cols = cols;
-        item.rows = rows;
+        item.resizeVt(self.allocator, cols, rows) catch return false;
         return true;
     }
 
@@ -300,4 +319,29 @@ test "terminal session keeps bounded pending output for first live attach" {
     created.clearPendingOutput(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 0), created.pending_output.items.len);
     try std.testing.expectEqual(@as(usize, 0), created.pending_output_bytes);
+}
+
+test "terminal session owns VT state for output and resize" {
+    var manager = Manager.init(std.testing.allocator);
+    defer manager.deinit();
+
+    const created = try manager.create(.{
+        .session_id = "session-vt",
+        .terminal_id = "term-vt",
+        .cols = 10,
+        .rows = 3,
+        .cwd = null,
+        .argv = &.{},
+    });
+
+    try created.writeVt("abc\r\n\x1b[2;4Hvt");
+    try std.testing.expect(manager.resize("session-vt", 12, 4));
+
+    const text = (try created.currentScreenTextAlloc(std.testing.allocator)).?;
+    defer std.testing.allocator.free(text);
+
+    try std.testing.expect(std.mem.indexOf(u8, text, "abc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "   vt") != null);
+    try std.testing.expectEqual(@as(u16, 12), created.cols);
+    try std.testing.expectEqual(@as(u16, 4), created.rows);
 }

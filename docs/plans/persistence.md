@@ -107,6 +107,11 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 - **Daemon-owned event-log writes**: sessions created with an argv now get `events.taoev` files under
   `~/.tao/sessions/<session-id>/`, and daemon PTY output, resize, and exit frames are appended from
   the Zig side for diagnostics/metadata extraction, not terminal replay.
+- **Initial VT integration boundary**: `apps/daemon/src/vt.zig` now isolates the daemon VT parser
+  boundary, session objects own a VT instance, and daemon PTY output/resize events are fed into that
+  state before live stream broadcast. The default CI-safe backend is a small Zig fallback; a native
+  `-Dvt-backend=libghostty_c` build option links a system-installed `libghostty-vt` C ABI while the
+  upstream Zig package catches up to Tao's Zig 0.16 toolchain.
 - **Daemon-owned retention and clear-history controls**: `taod` now accepts control RPCs for
   `clear-history` and `cleanup`. Live/in-memory sessions keep their PTYs while their event logs and
   excerpts are reset, inactive session directories can be deleted by explicit clear-history, and
@@ -145,9 +150,10 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
   alive when the fallback path is used. The daemon path keeps PTYs outside the renderer/window and now
   drains detached PTY output in daemon-owned reader threads, but production lifecycle supervision and
   slow-client backpressure policies still need hardening.
-- There are **no libghostty-vt snapshots yet**. This is no longer a blocker for the core persistence
-  goal because old shell scrollback is not considered true restore. A future snapshot should only
-  improve live/current-screen reattach, not resurrect dead process state.
+- There are **no libghostty-vt snapshots yet**. The daemon now has a VT state boundary, but current
+  screen serialization/checkpointing remains future work. This is no longer a blocker for the core
+  persistence goal because old shell scrollback is not considered true restore. A future snapshot
+  should only improve live/current-screen reattach, not resurrect dead process state.
 - There is **no cold terminal scrollback restore by design**. Dead sessions start fresh or resume via
   native CLI/agent mechanisms; event-log excerpts are for diagnostics/search/adapter detection.
 - There is an **expanded SQLite metadata layer**. `terminal_sessions`, basic `agent_sessions`, and
@@ -159,15 +165,18 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 
 ### Next recommended work
 
-1. **Harden/package the `taod` desktop path**: bundle the daemon in production builds and add
+1. **Switch the VT backend to upstream libghostty-vt once toolchains align**: replace the CI-safe
+   fallback/default C-ABI gate with the Zig-native upstream module when libghostty-vt supports Tao's
+   Zig 0.16 build tooling, then build current-screen snapshot APIs on that stable wrapper.
+2. **Harden/package the `taod` desktop path**: bundle the daemon in production builds and add
    lifecycle supervision, health checks, and explicit slow-client backpressure/drop policies.
-2. **Expose SQLite/search metadata in the UI**: add visible search, session diagnostics, and
+3. **Expose SQLite/search metadata in the UI**: add visible search, session diagnostics, and
    user-facing command/agent resume status surfaces on top of the daemon metadata APIs.
-3. **Harden daemon maintenance** with more cleanup tests, transcript re-index scheduling, and visible UX for
+4. **Harden daemon maintenance** with more cleanup tests, transcript re-index scheduling, and visible UX for
    daemon-side retention/clear-history results.
-4. **Replace built-in agent heuristics with external adapters** so `pi`, `codex`, `claude`, and future
+5. **Replace built-in agent heuristics with external adapters** so `pi`, `codex`, `claude`, and future
    agents can discover native ids and resume commands without recompiling `taod`.
-5. **Add a persistence privacy toggle in the daemon path** so settings can disable or narrow terminal
+6. **Add a persistence privacy toggle in the daemon path** so settings can disable or narrow terminal
    output/excerpt persistence before data is written.
 
 ---
@@ -287,6 +296,12 @@ logs, SQLite metadata, retention, and AI-agent resume orchestration.
 
 Note: `libghostty-vt` is still API-in-flux upstream. Tao should wrap it behind `apps/daemon/src/vt.zig`
 so upstream API churn is isolated to one file.
+
+Current implementation note: Tao's wrapper is now present and fed by the daemon hot path. The default
+backend is a small Zig fallback for CI, and `-Dvt-backend=libghostty_c` can link a system
+`libghostty-vt` C ABI. The target remains a Zig-native upstream module once the libghostty-vt package
+supports Tao's Zig 0.16 build toolchain without pulling incompatible package metadata into every CI
+build.
 
 ---
 
@@ -952,7 +967,8 @@ Configurable maintenance runs in taod:
 
 ### Zig (apps/daemon)
 
-- `libghostty-vt` Zig package or C API from Ghostty (git submodule or Zig dependency).
+- `libghostty-vt` Zig package or C API from Ghostty (git submodule, Zig dependency, or system
+  library during the transition).
 - `zig-sqlite` or direct `sqlite3.h` C ABI.
 - `zstd` via Zig package or system library.
 - No Node/npm dependencies in the daemon itself.
@@ -980,10 +996,10 @@ pnpm zig:check
 | ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | **A**  | **Done**                        | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair                                                                                                                                                                                                                | Done      |
 | **B**  | **Done**                        | Harden current event-log implementation with tests, corruption handling, retention controls, explicit session IPC wrappers, first-paint/render stability fixes, and current-file-store clear-history controls. Cold scrollback replay/archive restore has since been removed from the app path.                                                                                       | Done      |
-| **0**  | Partial                         | Set up `apps/daemon` Zig project with `build.zig`, pnpm workspace scripts, Nix/ZLS/CI tooling, and module skeletons. Dependency on `libghostty-vt` is still pending.                                                                                                                                                                                                                  | Partial   |
+| **0**  | Partial                         | Set up `apps/daemon` Zig project with `build.zig`, pnpm workspace scripts, Nix/ZLS/CI tooling, and module skeletons. The direct upstream Zig dependency on `libghostty-vt` is still pending toolchain alignment; the daemon has a gated system-library C-ABI path meanwhile.                                                                                                             | Partial   |
 | **1**  | Substantial daemon slice done   | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager. The socket server, JSON control RPC, in-memory session registry, binary stream frame codec, socket-level attach loop, live PTY streaming, daemon-owned PTY reader threads, and bounded live pending-output buffers are implemented. Electron can now use it through the transitional bridge. | 2 weeks   |
 | **2**  | Done for POSIX prototype        | Write PTY driver. `pty.zig` now uses `forkpty`/`execvp`, resize, input writes, output reads, termination, and exit polling.                                                                                                                                                                                                                                                           | Done      |
-| **3**  | Not started                     | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests                                                                                                                                                                                                                                                                                                                          | 1-2 weeks |
+| **3**  | Initial integration done        | `vt.zig` now isolates the VT backend, session objects own VT state, daemon output/resize paths feed that state, and smoke tests cover the wrapper/current-screen boundary. The default backend remains a CI-safe Zig fallback; `-Dvt-backend=libghostty_c` links a system `libghostty-vt` C ABI until the upstream Zig module supports Tao's Zig 0.16 toolchain.                  | Initial   |
 | **4**  | Re-scoped                       | Optional current-screen snapshot extension for nicer live reattach first paint. Do not use snapshots/event-log tails as cold shell scrollback restore.                                                                                                                                                                                                                                | TBD       |
 | **5**  | Partial daemon ownership        | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests. The daemon now creates session logs and appends output/resize/exit frames; the Electron utility logging path remains as a migration fallback until the daemon path is fully hardened.                                                                                                | 1 week    |
 | **6**  | Substantial metadata slice done | Write SQLite layer (zig-sqlite or direct C ABI, migrations, query functions). `taod` now opens SQLite through the C ABI, runs migrations, mirrors terminal session lifecycle metadata, records initial agent-session resume rows, indexes bounded search excerpts, and uses restart lookup queries for cold command/agent relaunch. Richer query UI and re-index scheduling remain.   | 1 week    |

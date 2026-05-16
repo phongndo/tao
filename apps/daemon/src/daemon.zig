@@ -642,6 +642,9 @@ pub const Daemon = struct {
         defer self.unlock();
 
         const item = self.sessions.find(session_id) orelse return;
+        item.writeVt(payload) catch |err| {
+            std.log.warn("failed to feed VT state for {s}: {t}", .{ item.id, err });
+        };
         const seq = seq: {
             if (item.event_log_path) |path| {
                 break :seq try event_log.appendOutput(self.allocator, path, item.excerpt_path, &item.last_seq, payload);
@@ -666,8 +669,11 @@ pub const Daemon = struct {
             .resize => {
                 const resize = try rpc.decodeResizePayload(frame.payload);
                 try self.pty_driver.resize(child, resize.cols, resize.rows);
-                item.cols = resize.cols;
-                item.rows = resize.rows;
+                item.resizeVt(self.allocator, resize.cols, resize.rows) catch |err| {
+                    std.log.warn("failed to resize VT state for {s}: {t}", .{ item.id, err });
+                    item.cols = resize.cols;
+                    item.rows = resize.rows;
+                };
                 if (item.event_log_path) |path| {
                     _ = try event_log.appendResize(self.allocator, path, &item.last_seq, resize.cols, resize.rows);
                 }
