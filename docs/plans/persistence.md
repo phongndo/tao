@@ -88,7 +88,14 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
   tests for the scaffolded pieces. The skeleton is buildable but not yet used by the Electron app.
 - **Daemon control RPC/session registry prototype**: `taod` now binds `~/.tao/run/taod.sock`, accepts
   newline-delimited JSON control requests, handles create/attach/resize/detach/kill against an
-  in-memory session registry, and returns typed JSON responses. PTY streaming is still scaffolded.
+  in-memory session registry, and returns typed JSON responses. Requests now accept the documented
+  `type`/camelCase fields while preserving the scaffold's older `method`/snake_case shape. PTY
+  streaming is still scaffolded.
+- **Daemon binary stream frame codec**: `apps/daemon/src/rpc.zig` now has a tested binary frame
+  encoder/parser for output, input, resize, snapshot, exit, and agent frames, including session IDs,
+  sequence numbers, payload lengths, CRC checks, partial-tail handling, and packed resize/exit
+  payload helpers. `@tao/shared/taod-protocol` exports matching stream constants for the future
+  Electron client. The codec is not yet wired to live PTY sockets.
 - **Zig tooling and CI support**: Nix now provides Zig 0.16, ZLS, and `nixpkgs-fmt`; root pnpm
   `zig:*` scripts wrap build/test/lint/format/LSP checks; CI installs Zig, runs `pnpm check`, verifies
   the Nix dev-shell/ZLS path, and builds `taod` before desktop production builds.
@@ -96,9 +103,9 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
 ### Important limitations of the current slice
 
 - There is **no production-usable Zig `taod` daemon yet**. A buildable `apps/daemon` prototype exists
-  with a JSON control socket and in-memory session registry, but it has no live PTY driver, no binary
-  stream framing, no Electron client bridge, and no daemon-owned PTY runtime. PTYs are still owned by
-  the Electron utility process.
+  with a JSON control socket, in-memory session registry, and tested binary stream frame codec, but it
+  has no live PTY driver, no socket-level stream loop, no Electron client bridge, and no daemon-owned
+  PTY runtime. PTYs are still owned by the Electron utility process.
 - Live reattach currently works only while the utility process remains alive. It is not yet the
   durable app-independent daemon guarantee described below.
 - There are **no libghostty-vt snapshots yet**. Visual restore into a new live shell is intentionally
@@ -113,8 +120,8 @@ plus an initial Zig daemon skeleton/tooling setup while the larger `taod` runtim
 
 ### Next recommended work
 
-1. **Implement binary stream framing in `apps/daemon`** for PTY output, resize, exit, snapshot, and
-   agent frames; keep the current Electron utility service as a fallback until the daemon is usable.
+1. **Wire the daemon binary stream codec into the socket attach path** so attached clients can send
+   input/resize frames and receive output/exit/snapshot/agent frames once a PTY driver is present.
 2. **Implement the POSIX PTY driver in `apps/daemon/src/pty.zig`** using `posix_openpt`/fork/exec,
    resize, input writes, output reads, and exit handling.
 3. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
@@ -940,7 +947,7 @@ pnpm zig:check
 | **A**  | **Done**                    | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair                                                                                                                                         | Done      |
 | **B**  | **Done**                    | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, explicit session IPC wrappers, first-paint/render stability fixes, current-file-store clear-history controls, and a read-only archived-session fallback for dead utility-process sessions. | Done      |
 | **0**  | Partial                     | Set up `apps/daemon` Zig project with `build.zig`, pnpm workspace scripts, Nix/ZLS/CI tooling, and module skeletons. Dependency on `libghostty-vt` is still pending.                                                                                                                                           | Partial   |
-| **1**  | Partial scaffold            | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager. Session/RPC type boundaries exist; socket server and usable daemon runtime are not implemented yet.                                                                                                                   | 2 weeks   |
+| **1**  | Partial scaffold            | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager. The socket server, JSON control RPC, in-memory session registry, and binary stream frame codec exist; socket-level stream attach and live PTY streaming are not implemented yet.                                      | 2 weeks   |
 | **2**  | Placeholder                 | Write PTY driver (posix_openpt, fork/exec, raw byte read/write). `pty.zig` currently contains validation/placeholders only.                                                                                                                                                                                    | 1 week    |
 | **3**  | Not started                 | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests                                                                                                                                                                                                                                                   | 1-2 weeks |
 | **4**  | Not started                 | Add `libghostty-vt` snapshot extension (native + WASM exports)                                                                                                                                                                                                                                                 | 2-3 weeks |

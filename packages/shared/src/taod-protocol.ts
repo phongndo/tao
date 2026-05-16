@@ -2,6 +2,32 @@ import { Schema } from 'effect'
 
 const NonEmptyString = Schema.Trim.check(Schema.isNonEmpty())
 
+export const TAOD_STREAM_MAGIC = 0x54415346 // TASF
+export const TAOD_STREAM_VERSION = 1
+export const TAOD_STREAM_SESSION_ID_SIZE = 36
+export const TAOD_STREAM_HEADER_SIZE = 60
+export const TAOD_STREAM_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
+
+export const TaodStreamFrameKind = {
+  Output: 1,
+  Input: 2,
+  Resize: 3,
+  Snapshot: 4,
+  Exit: 5,
+  Agent: 6,
+} as const
+
+export type TaodStreamFrameKind = (typeof TaodStreamFrameKind)[keyof typeof TaodStreamFrameKind]
+
+export const TaodStreamFrameKindSchema = Schema.Union([
+  Schema.Literal(TaodStreamFrameKind.Output),
+  Schema.Literal(TaodStreamFrameKind.Input),
+  Schema.Literal(TaodStreamFrameKind.Resize),
+  Schema.Literal(TaodStreamFrameKind.Snapshot),
+  Schema.Literal(TaodStreamFrameKind.Exit),
+  Schema.Literal(TaodStreamFrameKind.Agent),
+])
+
 export const CreateSessionInputSchema = Schema.Struct({
   terminalId: NonEmptyString,
   cols: Schema.Number,

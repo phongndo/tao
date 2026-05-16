@@ -136,8 +136,8 @@ pub const Daemon = struct {
     }
 
     fn handleCreate(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-        const session_id = request.session_id orelse return missingField(allocator, request, "session_id");
-        const terminal_id = request.terminal_id orelse return missingField(allocator, request, "terminal_id");
+        const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
+        const terminal_id = request.requestTerminalId() orelse return missingField(allocator, request, "terminal_id");
         const cols = request.cols orelse return missingField(allocator, request, "cols");
         const rows = request.rows orelse return missingField(allocator, request, "rows");
 
@@ -159,13 +159,13 @@ pub const Daemon = struct {
     }
 
     fn handleAttach(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-        const session_id = request.session_id orelse return missingField(allocator, request, "session_id");
+        const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         const attached = self.sessions.attach(session_id) orelse return notFound(allocator, request);
         return sessionResponse(allocator, request, attached);
     }
 
     fn handleResize(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-        const session_id = request.session_id orelse return missingField(allocator, request, "session_id");
+        const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         const cols = request.cols orelse return missingField(allocator, request, "cols");
         const rows = request.rows orelse return missingField(allocator, request, "rows");
         if (!self.sessions.resize(session_id, cols, rows)) return notFound(allocator, request);
@@ -174,14 +174,14 @@ pub const Daemon = struct {
     }
 
     fn handleDetach(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-        const session_id = request.session_id orelse return missingField(allocator, request, "session_id");
+        const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         if (!self.sessions.detach(session_id)) return notFound(allocator, request);
 
         return sessionResponse(allocator, request, self.sessions.find(session_id).?);
     }
 
     fn handleKill(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-        const session_id = request.session_id orelse return missingField(allocator, request, "session_id");
+        const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         if (!self.sessions.kill(session_id)) return notFound(allocator, request);
 
         return sessionResponse(allocator, request, self.sessions.find(session_id).?);
@@ -271,6 +271,13 @@ test "daemon control RPC creates and updates sessions" {
 
     try std.testing.expectEqual(@as(u16, 120), daemon.sessions.find("s1").?.cols);
     try std.testing.expect(std.mem.indexOf(u8, resized, "\"cols\":120") != null);
+
+    const protocol_created = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"3","type":"create","sessionId":"s2","terminalId":"t2","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(protocol_created);
+
+    try std.testing.expect(daemon.sessions.find("s2") != null);
 }
 
 test "daemon control RPC reports missing sessions" {
