@@ -229,7 +229,7 @@ test "current-screen snapshot envelope round-trips" {
         .seq = 9,
         .cols = 80,
         .rows = 24,
-        .backend_name = "fallback",
+        .backend_name = "ghostty_native",
         .payload = "screen-state",
     });
     defer std.testing.allocator.free(encoded);
@@ -240,7 +240,7 @@ test "current-screen snapshot envelope round-trips" {
     try std.testing.expectEqual(@as(u64, 9), decoded.seq);
     try std.testing.expectEqual(@as(u16, 80), decoded.cols);
     try std.testing.expectEqual(@as(u16, 24), decoded.rows);
-    try std.testing.expectEqualStrings("fallback", decoded.backend_name);
+    try std.testing.expectEqualStrings("ghostty_native", decoded.backend_name);
     try std.testing.expectEqualStrings("screen-state", decoded.payload);
 }
 
@@ -249,7 +249,7 @@ test "current-screen snapshot rejects corrupt payload CRC" {
         .seq = 1,
         .cols = 10,
         .rows = 4,
-        .backend_name = "fallback",
+        .backend_name = "ghostty_native",
         .payload = "state",
     });
     defer std.testing.allocator.free(encoded);
@@ -269,7 +269,7 @@ test "current-screen snapshot file store reads and deletes state" {
         .seq = 3,
         .cols = 12,
         .rows = 5,
-        .backend_name = "fallback",
+        .backend_name = "ghostty_native",
         .payload = "visible",
     });
     try std.testing.expectEqual(@as(u64, 3), meta.seq);

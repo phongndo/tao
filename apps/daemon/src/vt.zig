@@ -1,10 +1,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const backend = if (build_options.libghostty_vt_c)
-    @import("vt_libghostty_c.zig")
-else
-    @import("vt_fallback.zig");
+const backend = @import("vt_ghostty_native.zig");
 
 pub const Options = backend.Options;
 pub const Terminal = backend.Terminal;
@@ -12,7 +9,7 @@ pub const backend_name = backend.backend_name;
 pub const supports_current_screen_snapshots = backend.supports_current_screen_snapshots;
 
 pub fn isLibghosttyBacked() bool {
-    return build_options.libghostty_vt_c;
+    return true;
 }
 
 test "vt wrapper validates dimensions and exposes backend" {

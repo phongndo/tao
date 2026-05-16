@@ -4,11 +4,15 @@ import {
   currentScreenCrc32,
   decodeCurrentScreenSnapshot,
   decodeFallbackCurrentScreenSnapshotPayload,
+  decodeGhosttyNativeCurrentScreenSnapshotPayload,
   encodeCurrentScreenSnapshot,
   encodeFallbackCurrentScreenSnapshot,
+  encodeGhosttyNativeCurrentScreenSnapshot,
   fallbackCurrentScreenSnapshotToAnsi,
   fallbackScreenFromText,
+  ghosttyNativeCurrentScreenSnapshotToAnsi,
   isFallbackCurrentScreenSnapshot,
+  isGhosttyNativeCurrentScreenSnapshot,
 } from '@tao/shared/current-screen-snapshot'
 import { TaodStreamFrameKind } from '@tao/shared/taod-protocol'
 import {
@@ -140,18 +144,46 @@ test('current-screen snapshot decoder rejects corrupt payload CRCs', () => {
 })
 
 test('current-screen snapshot envelope is backend-compatible and gates fallback decoding', () => {
-  const nativeEnvelope = encodeCurrentScreenSnapshot({
+  const unsupportedEnvelope = encodeCurrentScreenSnapshot({
     seq: 7,
     cols: 80,
     rows: 24,
-    backendName: 'libghostty_c',
+    backendName: 'some_future_backend',
     payload: Buffer.from('native-backend-state'),
   })
 
-  const decoded = decodeCurrentScreenSnapshot(nativeEnvelope)
-  assert.equal(decoded.backendName, 'libghostty_c')
+  const decoded = decodeCurrentScreenSnapshot(unsupportedEnvelope)
+  assert.equal(decoded.backendName, 'some_future_backend')
   assert.equal(isFallbackCurrentScreenSnapshot(decoded), false)
+  assert.equal(isGhosttyNativeCurrentScreenSnapshot(decoded), false)
   assert.throws(() => decodeFallbackCurrentScreenSnapshotPayload(decoded.payload), /fallback/u)
+})
+
+test('ghostty native current-screen snapshots carry VT restore bytes', () => {
+  const vt = Buffer.from('\x1b[2J\x1b[1;1Hhello\x1b[2;3H')
+  const native = encodeGhosttyNativeCurrentScreenSnapshot({
+    cols: 12,
+    rows: 4,
+    maxScrollback: 100,
+    vt,
+  })
+  const envelope = encodeCurrentScreenSnapshot({
+    seq: 8,
+    cols: 12,
+    rows: 4,
+    backendName: 'ghostty_native',
+    payload: native,
+  })
+
+  const decoded = decodeCurrentScreenSnapshot(envelope)
+  assert.equal(isGhosttyNativeCurrentScreenSnapshot(decoded), true)
+  assert.equal(decoded.payloadCrc32, currentScreenCrc32(native))
+
+  const decodedNative = decodeGhosttyNativeCurrentScreenSnapshotPayload(decoded.payload)
+  assert.equal(decodedNative.cols, 12)
+  assert.equal(decodedNative.rows, 4)
+  assert.equal(decodedNative.maxScrollback, 100)
+  assert.equal(ghosttyNativeCurrentScreenSnapshotToAnsi(decodedNative), vt.toString('utf8'))
 })
 
 test('taod stream parser accepts snapshot frames with current-screen envelopes', () => {
@@ -159,11 +191,11 @@ test('taod stream parser accepts snapshot frames with current-screen envelopes',
     seq: 3,
     cols: 2,
     rows: 1,
-    backendName: 'fallback',
-    payload: encodeFallbackCurrentScreenSnapshot({
+    backendName: 'ghostty_native',
+    payload: encodeGhosttyNativeCurrentScreenSnapshot({
       cols: 2,
       rows: 1,
-      screen: fallbackScreenFromText(2, 1, ['ok']),
+      vt: Buffer.from('\x1b[2J\x1b[1;1Hok'),
     }),
   })
   const encoded = encodeTaodStreamFrame({

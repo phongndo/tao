@@ -13,6 +13,13 @@ export const FALLBACK_CURRENT_SCREEN_VERSION = 1
 export const FALLBACK_CURRENT_SCREEN_HEADER_SIZE = 30
 export const FALLBACK_CURRENT_SCREEN_MAX_BYTES = 16 * 1024 * 1024
 
+export const GHOSTTY_NATIVE_CURRENT_SCREEN_MAGIC = Uint8Array.from([
+  0x54, 0x41, 0x4f, 0x47, 0x56, 0x54, 0x01, 0x00,
+]) // TAOGVT\1\0
+export const GHOSTTY_NATIVE_CURRENT_SCREEN_VERSION = 1
+export const GHOSTTY_NATIVE_CURRENT_SCREEN_HEADER_SIZE = 26
+export const GHOSTTY_NATIVE_CURRENT_SCREEN_MAX_BYTES = 16 * 1024 * 1024
+
 const textDecoder = new TextDecoder()
 const textEncoder = new TextEncoder()
 
@@ -35,6 +42,14 @@ export type FallbackCurrentScreenSnapshot = {
   readonly maxScrollback: number
   readonly screen: Uint8Array
   readonly screenCrc32: number
+}
+
+export type GhosttyNativeCurrentScreenSnapshot = {
+  readonly cols: number
+  readonly rows: number
+  readonly maxScrollback: number
+  readonly vt: Uint8Array
+  readonly vtCrc32: number
 }
 
 function getCrcTable(): Uint32Array {
@@ -278,8 +293,85 @@ export function decodeFallbackCurrentScreenSnapshotPayload(
   }
 }
 
+export function encodeGhosttyNativeCurrentScreenSnapshot(input: {
+  readonly cols: number
+  readonly rows: number
+  readonly maxScrollback?: number
+  readonly vt: Uint8Array
+}): Uint8Array {
+  if (input.cols <= 0 || input.rows <= 0) throw new Error('Invalid ghostty native snapshot size')
+  if (input.vt.byteLength > GHOSTTY_NATIVE_CURRENT_SCREEN_MAX_BYTES) {
+    throw new Error('Ghostty native snapshot too large')
+  }
+
+  const encoded = new Uint8Array(GHOSTTY_NATIVE_CURRENT_SCREEN_HEADER_SIZE + input.vt.byteLength)
+  const view = readView(encoded)
+  encoded.set(GHOSTTY_NATIVE_CURRENT_SCREEN_MAGIC, 0)
+  view.setUint16(8, GHOSTTY_NATIVE_CURRENT_SCREEN_VERSION, false)
+  view.setUint16(10, input.cols, false)
+  view.setUint16(12, input.rows, false)
+  view.setUint32(14, input.maxScrollback ?? 0, false)
+  view.setUint32(18, input.vt.byteLength, false)
+  view.setUint32(22, currentScreenCrc32(input.vt), false)
+  encoded.set(input.vt, GHOSTTY_NATIVE_CURRENT_SCREEN_HEADER_SIZE)
+  return encoded
+}
+
+export function decodeGhosttyNativeCurrentScreenSnapshotPayload(
+  payload: Uint8Array,
+): GhosttyNativeCurrentScreenSnapshot {
+  if (payload.byteLength < GHOSTTY_NATIVE_CURRENT_SCREEN_HEADER_SIZE) {
+    throw new Error('Invalid ghostty native current-screen snapshot')
+  }
+  if (
+    !bytesEqual(
+      payload.subarray(0, GHOSTTY_NATIVE_CURRENT_SCREEN_MAGIC.byteLength),
+      GHOSTTY_NATIVE_CURRENT_SCREEN_MAGIC,
+    )
+  ) {
+    throw new Error('Invalid ghostty native current-screen snapshot magic')
+  }
+
+  const view = readView(payload)
+  const version = view.getUint16(8, false)
+  if (version !== GHOSTTY_NATIVE_CURRENT_SCREEN_VERSION) {
+    throw new Error(`Unsupported ghostty native current-screen snapshot version: ${version}`)
+  }
+
+  const cols = view.getUint16(10, false)
+  const rows = view.getUint16(12, false)
+  const maxScrollback = view.getUint32(14, false)
+  const vtLength = view.getUint32(18, false)
+  const vtCrc32 = view.getUint32(22, false)
+
+  if (cols <= 0 || rows <= 0) throw new Error('Invalid ghostty native current-screen size')
+  if (vtLength > GHOSTTY_NATIVE_CURRENT_SCREEN_MAX_BYTES) {
+    throw new Error('Ghostty native current-screen snapshot too large')
+  }
+  if (payload.byteLength !== GHOSTTY_NATIVE_CURRENT_SCREEN_HEADER_SIZE + vtLength) {
+    throw new Error('Invalid ghostty native current-screen snapshot length')
+  }
+
+  const vt = payload.subarray(GHOSTTY_NATIVE_CURRENT_SCREEN_HEADER_SIZE)
+  if (currentScreenCrc32(vt) !== vtCrc32) {
+    throw new Error('Invalid ghostty native current-screen snapshot CRC')
+  }
+
+  return {
+    cols,
+    rows,
+    maxScrollback,
+    vt: copyBytes(vt),
+    vtCrc32,
+  }
+}
+
 export function isFallbackCurrentScreenSnapshot(snapshot: CurrentScreenSnapshot): boolean {
   return snapshot.backendName === 'fallback'
+}
+
+export function isGhosttyNativeCurrentScreenSnapshot(snapshot: CurrentScreenSnapshot): boolean {
+  return snapshot.backendName === 'ghostty_native'
 }
 
 function visibleCell(byte: number): string {
@@ -311,6 +403,12 @@ export function fallbackCurrentScreenSnapshotToAnsi(
 
   output += `\x1b[${snapshot.cursorY + 1};${snapshot.cursorX + 1}H`
   return output
+}
+
+export function ghosttyNativeCurrentScreenSnapshotToAnsi(
+  snapshot: GhosttyNativeCurrentScreenSnapshot,
+): string {
+  return textDecoder.decode(snapshot.vt)
 }
 
 export function fallbackScreenFromText(

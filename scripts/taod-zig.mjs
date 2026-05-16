@@ -25,6 +25,16 @@ function run(command, args, options = {}) {
   return result
 }
 
+function capture(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd ?? daemonRoot,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  })
+  if (result.error) fail(result.error.message)
+  if (result.status !== 0) process.exit(result.status ?? 1)
+  return result.stdout
+}
+
 function output(command, args, cwd = daemonRoot) {
   return run(command, args, { cwd, stdio: 'pipe', encoding: 'utf8' }).stdout.trim()
 }
@@ -60,6 +70,12 @@ function ensurePackage(dep) {
   return packagePath
 }
 
+function writeFileIfChanged(path, contents) {
+  if (existsSync(path) && readFileSync(path, 'utf8') === contents) return
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, contents)
+}
+
 function tryParseJson(value) {
   try {
     return JSON.parse(value)
@@ -77,8 +93,206 @@ function darwinBuildOptionsPath() {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
   const path = resolve(cacheDir, 'taod-build-options.zig')
-  writeFileSync(path, 'pub const vt_backend = "fallback";\npub const libghostty_vt_c = false;\n')
+  writeFileIfChanged(path, 'pub const vt_backend = "ghostty_native";\n')
   return path
+}
+
+function ghosttyBuildOptionsPath(dir) {
+  const path = resolve(dir, 'ghostty-build-options.zig')
+  writeFileIfChanged(path, 'pub const simd = false;\n')
+  return path
+}
+
+function ghosttyTerminalOptionsPath(dir) {
+  const path = resolve(dir, 'ghostty-terminal-options.zig')
+  writeFileIfChanged(
+    path,
+    `pub const Artifact = enum { ghostty, lib };
+pub const artifact: Artifact = .lib;
+pub const c_abi = false;
+pub const oniguruma = false;
+pub const simd = false;
+pub const slow_runtime_safety = true;
+pub const kitty_graphics = false;
+pub const tmux_control_mode = false;
+`,
+  )
+  return path
+}
+
+function uucodeBuildTablesArgs({ ghosttyPath, outputPath }) {
+  return [
+    'run',
+    '-target',
+    darwinTarget(),
+    '-lc',
+    '--dep',
+    'config.zig',
+    '--dep',
+    'types.zig',
+    '--dep',
+    'build_config',
+    '-Mroot=src/build/tables.zig',
+    '--dep',
+    'types.zig',
+    '-Mconfig.zig=src/config.zig',
+    '--dep',
+    'config.zig',
+    '-Mtypes.zig=src/types.zig',
+    '--dep',
+    'types.x.zig',
+    '--dep',
+    'types.zig',
+    '--dep',
+    'config.zig',
+    '-Mconfig.x.zig=src/x/config.x.zig',
+    '--dep',
+    'config.x.zig',
+    '-Mtypes.x.zig=src/x/types.x.zig',
+    '--dep',
+    'config.zig',
+    '--dep',
+    'config.x.zig',
+    '--dep',
+    'types.zig',
+    '--dep',
+    'types.x.zig',
+    `-Mbuild_config=${resolve(ghosttyPath, 'src/build/uucode_config.zig')}`,
+    '--',
+    outputPath,
+  ]
+}
+
+function uucodeModuleArgs({ uucodePath, ghosttyPath, tablesPath }) {
+  const ghosttyUucodeConfig = resolve(ghosttyPath, 'src/build/uucode_config.zig')
+  return [
+    '--dep',
+    'types.zig',
+    '--dep',
+    'config.zig',
+    '--dep',
+    'types.x.zig',
+    '--dep',
+    'tables',
+    '--dep',
+    'get.zig',
+    `-Muucode=${resolve(uucodePath, 'src/root.zig')}`,
+    '--dep',
+    'types.zig',
+    `-Mconfig.zig=${resolve(uucodePath, 'src/config.zig')}`,
+    '--dep',
+    'config.zig',
+    '--dep',
+    'get.zig',
+    `-Mtypes.zig=${resolve(uucodePath, 'src/types.zig')}`,
+    '--dep',
+    'types.x.zig',
+    '--dep',
+    'types.zig',
+    '--dep',
+    'config.zig',
+    `-Mconfig.x.zig=${resolve(uucodePath, 'src/x/config.x.zig')}`,
+    '--dep',
+    'config.x.zig',
+    `-Mtypes.x.zig=${resolve(uucodePath, 'src/x/types.x.zig')}`,
+    '--dep',
+    'types.zig',
+    '--dep',
+    'types.x.zig',
+    '--dep',
+    'config.zig',
+    '--dep',
+    'build_config',
+    `-Mtables=${tablesPath}`,
+    '--dep',
+    'types.zig',
+    '--dep',
+    'tables',
+    `-Mget.zig=${resolve(uucodePath, 'src/get.zig')}`,
+    '--dep',
+    'config.zig',
+    '--dep',
+    'config.x.zig',
+    '--dep',
+    'types.zig',
+    '--dep',
+    'types.x.zig',
+    `-Mbuild_config=${ghosttyUucodeConfig}`,
+  ]
+}
+
+function ghosttyUnicodeGeneratorArgs(kind, native) {
+  return [
+    'run',
+    '-target',
+    darwinTarget(),
+    '-lc',
+    '--dep',
+    'uucode',
+    `-Mroot=src/unicode/${kind}_uucode.zig`,
+    ...uucodeModuleArgs(native),
+  ]
+}
+
+function ensureGhosttyNativeDarwin() {
+  const ghosttyDep = zonDependency(resolve(daemonRoot, 'build.zig.zon'), 'ghostty')
+  const ghosttyPath = ensurePackage(ghosttyDep)
+  const uucodeDep = zonDependency(resolve(ghosttyPath, 'build.zig.zon'), 'uucode')
+  const uucodePath = ensurePackage(uucodeDep)
+
+  const generatedDir = resolve(daemonRoot, '.zig-cache', `ghostty-vt-${ghosttyDep.hash}`)
+  mkdirSync(generatedDir, { recursive: true })
+
+  const native = {
+    ghosttyPath,
+    uucodePath,
+    tablesPath: resolve(generatedDir, 'uucode-tables.zig'),
+    propsPath: resolve(generatedDir, 'props.zig'),
+    symbolsPath: resolve(generatedDir, 'symbols.zig'),
+    ghosttyBuildOptionsPath: ghosttyBuildOptionsPath(generatedDir),
+    ghosttyTerminalOptionsPath: ghosttyTerminalOptionsPath(generatedDir),
+  }
+
+  if (!existsSync(native.tablesPath)) {
+    run('zig', uucodeBuildTablesArgs({ ghosttyPath, outputPath: native.tablesPath }), {
+      cwd: uucodePath,
+    })
+  }
+  if (!existsSync(native.propsPath)) {
+    writeFileSync(
+      native.propsPath,
+      capture('zig', ghosttyUnicodeGeneratorArgs('props', native), { cwd: ghosttyPath }),
+    )
+  }
+  if (!existsSync(native.symbolsPath)) {
+    writeFileSync(
+      native.symbolsPath,
+      capture('zig', ghosttyUnicodeGeneratorArgs('symbols', native), { cwd: ghosttyPath }),
+    )
+  }
+
+  return native
+}
+
+function ghosttyModuleArgs(native) {
+  return [
+    '--dep',
+    'uucode',
+    '--dep',
+    'unicode_tables',
+    '--dep',
+    'symbols_tables',
+    '--dep',
+    'terminal_options',
+    '--dep',
+    'build_options=ghostty_build_options',
+    `-Mghostty-vt=${resolve(native.ghosttyPath, 'src/lib_vt.zig')}`,
+    ...uucodeModuleArgs(native),
+    `-Municode_tables=${native.propsPath}`,
+    `-Msymbols_tables=${native.symbolsPath}`,
+    `-Mterminal_options=${native.ghosttyTerminalOptionsPath}`,
+    `-Mghostty_build_options=${native.ghosttyBuildOptionsPath}`,
+  ]
 }
 
 function darwinCompileArgs({ root, binPath }) {
@@ -87,6 +301,7 @@ function darwinCompileArgs({ root, binPath }) {
   const sqliteAmalgamation = zonDependency(resolve(zigSqlitePath, 'build.zig.zon'), 'sqlite')
   const sqliteAmalgamationPath = ensurePackage(sqliteAmalgamation)
   const buildOptionsPath = darwinBuildOptionsPath()
+  const ghosttyNative = ensureGhosttyNativeDarwin()
 
   const args = [
     root === 'main' ? 'build-exe' : 'test',
@@ -114,11 +329,21 @@ function darwinCompileArgs({ root, binPath }) {
       '--dep',
       'sqlite',
       '--dep',
-      'build_options',
+      'build_options=taod_build_options',
+      '--dep',
+      'ghostty-vt',
       '-Mtaod=src/root.zig',
     )
   } else {
-    args.push('--dep', 'sqlite', '--dep', 'build_options', '-Mroot=src/root.zig')
+    args.push(
+      '--dep',
+      'sqlite',
+      '--dep',
+      'build_options=taod_build_options',
+      '--dep',
+      'ghostty-vt',
+      '-Mroot=src/root.zig',
+    )
   }
 
   args.push(
@@ -127,7 +352,8 @@ function darwinCompileArgs({ root, binPath }) {
     '-I',
     sqliteAmalgamationPath,
     `-Msqlite=${resolve(zigSqlitePath, 'sqlite.zig')}`,
-    `-Mbuild_options=${buildOptionsPath}`,
+    `-Mtaod_build_options=${buildOptionsPath}`,
+    ...ghosttyModuleArgs(ghosttyNative),
     '-lc',
   )
 

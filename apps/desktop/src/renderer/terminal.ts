@@ -2,7 +2,10 @@ import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
 import {
   decodeCurrentScreenSnapshot,
   decodeFallbackCurrentScreenSnapshotPayload,
+  decodeGhosttyNativeCurrentScreenSnapshotPayload,
   fallbackCurrentScreenSnapshotToAnsi,
+  ghosttyNativeCurrentScreenSnapshotToAnsi,
+  isGhosttyNativeCurrentScreenSnapshot,
   isFallbackCurrentScreenSnapshot,
 } from '@tao/shared/current-screen-snapshot'
 import type { CurrentScreenSnapshotFrame, OutputFrame } from '@tao/shared/taod-protocol'
@@ -141,6 +144,19 @@ function tryApplyCurrentScreenSnapshot(term: Terminal, frame: CurrentScreenSnaps
 
   try {
     const envelope = decodeCurrentScreenSnapshot(base64ToBytes(frame.dataBase64))
+    if (isGhosttyNativeCurrentScreenSnapshot(envelope)) {
+      const snapshot = decodeGhosttyNativeCurrentScreenSnapshotPayload(envelope.payload)
+      if (snapshot.cols !== envelope.cols || snapshot.rows !== envelope.rows) return 0
+
+      if (term.cols !== snapshot.cols || term.rows !== snapshot.rows) {
+        term.resize(snapshot.cols, snapshot.rows)
+      }
+
+      term.write(ghosttyNativeCurrentScreenSnapshotToAnsi(snapshot))
+      forceTerminalRender(term)
+      return Math.max(frame.seq, envelope.seq)
+    }
+
     if (!isFallbackCurrentScreenSnapshot(envelope)) {
       warnUnsupportedSnapshotBackend(envelope.backendName)
       return 0

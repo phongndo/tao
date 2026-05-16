@@ -1,28 +1,11 @@
 const std = @import("std");
 
-const VtBackend = enum {
-    /// Build with Tao's small fallback VT state. This keeps CI/builds
-    /// self-contained while the native libghostty-vt package integration is
-    /// wired behind this boundary.
-    fallback,
-
-    /// Link against a system-installed libghostty-vt C ABI. Use with:
-    /// `zig build -Dvt-backend=libghostty_c`.
-    libghostty_c,
-};
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const vt_backend = b.option(
-        VtBackend,
-        "vt-backend",
-        "VT backend to compile into taod: fallback or libghostty_c",
-    ) orelse .fallback;
 
     const options = b.addOptions();
-    options.addOption([]const u8, "vt_backend", @tagName(vt_backend));
-    options.addOption(bool, "libghostty_vt_c", vt_backend == .libghostty_c);
+    options.addOption([]const u8, "vt_backend", "ghostty_native");
 
     const zig_sqlite = b.dependency("sqlite", .{
         .target = target,
@@ -30,6 +13,17 @@ pub fn build(b: *std.Build) void {
         .fts5 = true,
     });
     const sqlite_module = zig_sqlite.module("sqlite");
+
+    const ghostty = b.dependency("ghostty", .{
+        .target = target,
+        .optimize = optimize,
+
+        // Keep the daemon build self-contained and avoid linking Ghostty's
+        // vendored SIMD C++ objects into taod. This still uses the upstream
+        // libghostty-vt parser/state machine; only the SIMD fast paths are off.
+        .simd = false,
+    });
+    const ghostty_vt_module = ghostty.module("ghostty-vt");
 
     const mod = b.addModule("taod", .{
         .root_source_file = b.path("src/root.zig"),
@@ -39,6 +33,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.addOptions("build_options", options);
     mod.addImport("sqlite", sqlite_module);
+    mod.addImport("ghostty-vt", ghostty_vt_module);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -49,7 +44,6 @@ pub fn build(b: *std.Build) void {
     });
     exe_mod.addOptions("build_options", options);
     if (target.result.os.tag == .linux) exe_mod.linkSystemLibrary("util", .{});
-    if (vt_backend == .libghostty_c) exe_mod.linkSystemLibrary("ghostty-vt", .{});
 
     const exe = b.addExecutable(.{
         .name = "taod",
@@ -65,7 +59,6 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     if (target.result.os.tag == .linux) mod.linkSystemLibrary("util", .{});
-    if (vt_backend == .libghostty_c) mod.linkSystemLibrary("ghostty-vt", .{});
     const mod_tests = b.addTest(.{ .root_module = mod });
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
