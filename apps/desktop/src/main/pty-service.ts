@@ -9,8 +9,6 @@ import {
   clearSessionPersistence,
   cleanupSessionPersistence,
   openPersistentSession,
-  readReplayEvents,
-  readSessionPersistenceSummary,
   resetPersistentSession,
   type PersistentSession,
 } from './session-persistence'
@@ -222,38 +220,10 @@ function attachPty(sessionId: string, cols: number, rows: number, cwd?: string) 
     return
   }
 
-  const summary = readSessionPersistenceSummary(sessionId)
-  if (!summary) {
-    spawnPty(sessionId, cols, rows, cwd)
-    return
-  }
-
-  const size = summary.size ?? { cols, rows }
-  for (const event of readReplayEvents(sessionId)) {
-    switch (event.type) {
-      case 'output':
-        sendPtyData(sessionId, event.data, event.seq, true)
-        break
-      case 'resize':
-        postToClient({
-          type: 'resize',
-          sessionId,
-          cols: event.cols,
-          rows: event.rows,
-          seq: bigintToSafeNumber(event.seq),
-          replay: true,
-        })
-        break
-    }
-  }
-
-  postToClient({
-    type: 'ready',
-    sessionId,
-    size,
-    seq: bigintToSafeNumber(summary.lastSeq),
-    archived: true,
-  })
+  // If the utility-process PTY is gone, do not replay old shell scrollback into
+  // a fake terminal. Start a fresh shell and let shells/agents use their own
+  // native history/resume mechanisms.
+  spawnPty(sessionId, cols, rows, cwd)
 }
 
 function detachPty(sessionId: string) {

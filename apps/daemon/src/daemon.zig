@@ -217,7 +217,7 @@ pub const Daemon = struct {
 
     fn handleAttachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
-        const attached = self.sessions.attach(session_id) orelse try self.restoreArchivedSessionLocked(request) orelse return notFound(allocator, request);
+        const attached = self.sessions.attach(session_id) orelse return notFound(allocator, request);
         return sessionResponse(allocator, request, attached);
     }
 
@@ -279,34 +279,10 @@ pub const Daemon = struct {
         item.status = .live;
     }
 
-    fn restoreArchivedSessionLocked(self: *Daemon, request: rpc.ControlRequestJson) !?*session.TerminalSession {
-        const session_id = request.requestSessionId() orelse return null;
-        const files = try event_log.openExistingSession(self.allocator, self.config.sessions_dir, session_id) orelse return null;
-        errdefer {
-            var cleanup_files = files;
-            cleanup_files.deinit(self.allocator);
-        }
-
-        const terminal_id = request.requestTerminalId() orelse session_id;
-        const item = try self.sessions.create(.{
-            .session_id = session_id,
-            .terminal_id = terminal_id,
-            .cols = request.cols orelse 80,
-            .rows = request.rows orelse 24,
-            .cwd = request.cwd,
-            .argv = &.{},
-        });
-        item.status = .archived;
-        item.installPersistence(self.allocator, files);
-        return item;
-    }
-
     fn streamAttachedSession(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
         var pending: std.ArrayList(u8) = .empty;
         defer pending.deinit(self.allocator);
         try pending.appendSlice(self.allocator, initial_tail);
-
-        try self.sendReplayFrames(socket_fd, session_id);
 
         while (true) {
             const child_fd = self.liveChildFd(session_id) orelse return;
@@ -345,21 +321,6 @@ pub const Daemon = struct {
         const child = item.pty_child orelse return null;
         if (child.master_fd < 0) return null;
         return child.master_fd;
-    }
-
-    fn sendReplayFrames(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8) !void {
-        const path = blk: {
-            self.lock();
-            defer self.unlock();
-            const item = self.sessions.find(session_id) orelse return;
-            break :blk if (item.event_log_path) |path| try self.allocator.dupe(u8, path) else return;
-        };
-        defer self.allocator.free(path);
-
-        const frames = try event_log.readReplayOutputFrames(self.allocator, path, event_log.max_replay_bytes);
-        defer event_log.deinitOwnedFrames(self.allocator, frames);
-
-        for (frames) |frame| try self.sendStreamFrame(socket_fd, .output, session_id, frame.seq, frame.payload);
     }
 
     fn readPtyAndBroadcast(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8) !void {

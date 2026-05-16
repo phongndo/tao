@@ -31,6 +31,7 @@ import ptyServicePath from './pty-service?modulePath'
 import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { defaultSettings, readSettings, writeSettings } from './settings-store'
+import { TaodPtyBridge } from './taod-pty-bridge'
 import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
 import {
@@ -99,6 +100,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 let mainWindow: BrowserWindow | null = null
 let ptyService: Electron.UtilityProcess | null = null
+let taodBridge: TaodPtyBridge | null = null
 
 // ─── Window Creation ───
 
@@ -241,7 +243,33 @@ function sendAppCommand(command: AppCommand) {
 
 // ─── PTY Service Lifecycle ───
 
-function sendPtyPortToRenderer() {
+async function sendPtyPortToRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  const backend = process.env.TAO_PTY_BACKEND?.trim().toLowerCase()
+  if (backend !== 'utility') {
+    try {
+      const bridge = ensureTaodBridge()
+      await bridge.ensureReady()
+
+      const { port1, port2 } = new MessageChannelMain()
+      bridge.connectPort(port1)
+      mainWindow.webContents.postMessage('pty:port', null, [port2])
+      return
+    } catch (err) {
+      const message = `Tao daemon unavailable: ${errorMessageFromUnknown(err)}`
+      if (backend === 'taod') {
+        notifyPtyServiceError(message)
+        return
+      }
+      console.warn(`[main] ${message}; falling back to utility PTY service`)
+    }
+  }
+
+  sendUtilityPtyPortToRenderer()
+}
+
+function sendUtilityPtyPortToRenderer() {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const service = ensurePtyService()
   if (!service) return
@@ -249,6 +277,33 @@ function sendPtyPortToRenderer() {
   const { port1, port2 } = new MessageChannelMain()
   service.postMessage({ type: 'connect' }, [port1])
   mainWindow.webContents.postMessage('pty:port', null, [port2])
+}
+
+function ensureTaodBridge(): TaodPtyBridge {
+  taodBridge ??= new TaodPtyBridge()
+  return taodBridge
+}
+
+function shouldWarmUtilityService(): boolean {
+  return process.env.TAO_PTY_BACKEND?.trim().toLowerCase() === 'utility'
+}
+
+function warmSessionBackend() {
+  if (shouldWarmUtilityService()) {
+    ensurePtyService()
+    return
+  }
+
+  const backend = process.env.TAO_PTY_BACKEND?.trim().toLowerCase()
+  void ensureTaodBridge()
+    .ensureReady()
+    .catch((err) => {
+      if (backend === 'taod') {
+        console.warn(`[main] Failed to warm taod backend: ${errorMessageFromUnknown(err)}`)
+        return
+      }
+      ensurePtyService()
+    })
 }
 
 function ensurePtyService(): Electron.UtilityProcess | null {
@@ -289,6 +344,12 @@ function disposePtyService() {
   if (!ptyService) return
   ptyService.kill()
   ptyService = null
+}
+
+function disposeSessionBackends() {
+  taodBridge?.dispose()
+  taodBridge = null
+  disposePtyService()
 }
 
 function notifyPtyServiceError(error: string) {
@@ -390,7 +451,7 @@ ipcMain.on('renderer:ready', (event) => {
 
 ipcMain.on('pty:requestPort', (event) => {
   if (event.sender !== mainWindow?.webContents) return
-  sendPtyPortToRenderer()
+  void sendPtyPortToRenderer()
 })
 
 ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
@@ -447,12 +508,12 @@ ipcMain.handle('workspace:getPullRequestInfo', async (event, workspacePath: unkn
 
 app.whenReady().then(() => {
   createWindow()
-  ensurePtyService()
+  warmSessionBackend()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
-      ensurePtyService()
+      warmSessionBackend()
     }
   })
 })
@@ -464,6 +525,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  disposePtyService()
+  disposeSessionBackends()
   void disposeMainRuntime()
 })

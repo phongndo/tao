@@ -634,7 +634,7 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
       ...pane,
       terminalId: isNonEmptyString(pane.terminalId ?? '') ? pane.terminalId! : createId('term'),
       name: sanitizeTerminalTitle(pane.name) ?? 'Terminal',
-      status: pane.status ?? 'idle',
+      status: pane.status === 'archived' ? 'idle' : (pane.status ?? 'idle'),
       lastSessionId: isNonEmptyString(pane.lastSessionId ?? '')
         ? pane.lastSessionId
         : createId('session'),

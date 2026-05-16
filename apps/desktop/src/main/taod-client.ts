@@ -1,0 +1,444 @@
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import net from 'node:net'
+import { app } from 'electron'
+import { resolveTaoStoragePaths } from '@tao/shared/storage-path'
+import {
+  TaodStreamFrameKind,
+  type TaodStreamFrameKind as TaodStreamFrameKindValue,
+} from '@tao/shared/taod-protocol'
+import {
+  encodeTaodResizePayload,
+  encodeTaodStreamFrame,
+  TaodStreamFrameParser,
+  type TaodParsedStreamFrame,
+} from './taod-stream'
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 500
+const DEFAULT_START_TIMEOUT_MS = 3000
+const CONTROL_RESPONSE_MAX_BYTES = 1024 * 1024
+
+type TaodRequest = Record<string, unknown>
+
+export type TaodControlResponse = {
+  readonly id?: string
+  readonly ok: boolean
+  readonly session_id?: string
+  readonly stream_id?: string
+  readonly pid?: number
+  readonly status?: string
+  readonly cwd?: string
+  readonly cols?: number
+  readonly rows?: number
+  readonly last_seq?: number
+  readonly error_message?: string
+}
+
+export type TaodCreateSessionInput = {
+  readonly sessionId: string
+  readonly terminalId: string
+  readonly cols: number
+  readonly rows: number
+  readonly cwd?: string
+  readonly argv?: readonly string[]
+}
+
+export type TaodAttachSessionInput = {
+  readonly sessionId: string
+  readonly terminalId?: string
+  readonly cols?: number
+  readonly rows?: number
+  readonly cwd?: string
+}
+
+export type TaodSessionStreamEvents = {
+  frame: [TaodParsedStreamFrame]
+  error: [Error]
+  close: []
+}
+
+let nextRequestNumber = 0
+
+function nextRequestId(prefix: string): string {
+  nextRequestNumber += 1
+  return `${prefix}-${Date.now().toString(36)}-${nextRequestNumber.toString(36)}`
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function responseError(response: TaodControlResponse): Error {
+  return new Error(response.error_message ?? 'taod request failed')
+}
+
+function parseControlResponse(line: Buffer): TaodControlResponse {
+  const parsed = JSON.parse(line.toString('utf8')) as TaodControlResponse
+  if (!parsed || typeof parsed.ok !== 'boolean') throw new Error('Invalid taod control response')
+  return parsed
+}
+
+function isUsableSocketError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'EACCES' || code === 'ENOTSOCK'
+}
+
+function candidateTaodPaths(): string[] {
+  const envPath = process.env.TAOD_PATH?.trim()
+  const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
+  const appPath = safeAppPath()
+  const cwd = process.cwd()
+
+  return Array.from(
+    new Set(
+      [
+        envPath,
+        join(cwd, 'apps/daemon/zig-out/bin', exeName),
+        join(cwd, '../daemon/zig-out/bin', exeName),
+        join(cwd, '../../apps/daemon/zig-out/bin', exeName),
+        appPath ? join(appPath, '../daemon/zig-out/bin', exeName) : null,
+        appPath ? join(appPath, '../../daemon/zig-out/bin', exeName) : null,
+        typeof __dirname === 'string'
+          ? join(__dirname, '../../../daemon/zig-out/bin', exeName)
+          : null,
+        typeof __dirname === 'string'
+          ? join(__dirname, '../../../../apps/daemon/zig-out/bin', exeName)
+          : null,
+        process.resourcesPath ? join(process.resourcesPath, exeName) : null,
+        process.resourcesPath ? join(process.resourcesPath, 'bin', exeName) : null,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .map((value) => resolve(value)),
+    ),
+  )
+}
+
+function safeAppPath(): string | null {
+  try {
+    return app.getAppPath()
+  } catch {
+    return null
+  }
+}
+
+function findTaodBinary(): string | null {
+  for (const candidate of candidateTaodPaths()) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+function defaultSocketPath(): string {
+  return resolveTaoStoragePaths(homedir()).socket
+}
+
+function connectUnixSocket(socketPath: string, timeoutMs: number): Promise<net.Socket> {
+  return new Promise((resolveSocket, rejectSocket) => {
+    const socket = net.createConnection(socketPath)
+    let settled = false
+    const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      rejectSocket(new Error(`Timed out connecting to taod at ${socketPath}`))
+    }, timeoutMs)
+
+    socket.once('connect', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolveSocket(socket)
+    })
+
+    socket.once('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      socket.destroy()
+      rejectSocket(error)
+    })
+  })
+}
+
+function readNdjsonResponse(
+  socket: net.Socket,
+  timeoutMs: number,
+): Promise<{ response: TaodControlResponse; tail: Buffer }> {
+  return new Promise((resolveResponse, rejectResponse) => {
+    let buffered = Buffer.alloc(0)
+    let settled = false
+    const timeout = setTimeout(() => {
+      reject(new Error('Timed out waiting for taod control response'))
+    }, timeoutMs)
+
+    function cleanup() {
+      clearTimeout(timeout)
+      socket.off('data', onData)
+      socket.off('error', onError)
+      socket.off('close', onClose)
+    }
+
+    function reject(error: Error) {
+      if (settled) return
+      settled = true
+      cleanup()
+      rejectResponse(error)
+    }
+
+    function onData(chunk: Buffer) {
+      buffered = buffered.length === 0 ? Buffer.from(chunk) : Buffer.concat([buffered, chunk])
+      if (buffered.length > CONTROL_RESPONSE_MAX_BYTES) {
+        reject(new Error('taod control response too large'))
+        return
+      }
+
+      const newlineIndex = buffered.indexOf(0x0a)
+      if (newlineIndex === -1) return
+
+      try {
+        const line = buffered.subarray(0, newlineIndex)
+        const tail = Buffer.from(buffered.subarray(newlineIndex + 1))
+        const response = parseControlResponse(line)
+        if (settled) return
+        settled = true
+        socket.pause()
+        cleanup()
+        resolveResponse({ response, tail })
+      } catch (error) {
+        reject(normalizeError(error))
+      }
+    }
+
+    function onError(error: Error) {
+      reject(error)
+    }
+
+    function onClose() {
+      reject(new Error('taod closed the control socket before responding'))
+    }
+
+    socket.on('data', onData)
+    socket.once('error', onError)
+    socket.once('close', onClose)
+  })
+}
+
+export class TaodSessionStream extends EventEmitter<TaodSessionStreamEvents> {
+  private readonly parser = new TaodStreamFrameParser()
+  private clientSeq = 0n
+  private started = false
+
+  constructor(
+    private readonly socket: net.Socket,
+    private readonly sessionId: string,
+    private readonly initialTail: Buffer,
+  ) {
+    super()
+    socket.on('data', (chunk) => this.handleChunk(Buffer.from(chunk)))
+    socket.once('error', (error) => this.emit('error', normalizeError(error)))
+    socket.once('close', () => this.emit('close'))
+  }
+
+  start(): void {
+    if (this.started) return
+    this.started = true
+    if (this.initialTail.length > 0) this.handleChunk(this.initialTail)
+    this.socket.resume()
+  }
+
+  writeInput(data: string | Buffer | Uint8Array): void {
+    const payload = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data)
+    if (payload.length === 0 || this.socket.destroyed) return
+    this.writeFrame(TaodStreamFrameKind.Input, payload)
+  }
+
+  resize(cols: number, rows: number): void {
+    if (this.socket.destroyed) return
+    this.writeFrame(TaodStreamFrameKind.Resize, encodeTaodResizePayload(cols, rows))
+  }
+
+  close(): void {
+    this.socket.end()
+    this.socket.destroy()
+  }
+
+  private writeFrame(kind: TaodStreamFrameKindValue, payload: Buffer): void {
+    this.clientSeq += 1n
+    const frame = encodeTaodStreamFrame({
+      kind,
+      sessionId: this.sessionId,
+      seq: this.clientSeq,
+      payload,
+    })
+    this.socket.write(frame)
+  }
+
+  private handleChunk(chunk: Buffer): void {
+    try {
+      for (const frame of this.parser.push(chunk)) {
+        this.emit('frame', frame)
+      }
+    } catch (error) {
+      this.emit('error', normalizeError(error))
+      this.close()
+    }
+  }
+}
+
+export class TaodClient {
+  private readonly socketPath: string
+  private readonly connectTimeoutMs: number
+  private readonly startTimeoutMs: number
+  private startPromise: Promise<void> | null = null
+  private spawnedProcess: ChildProcess | null = null
+
+  constructor(
+    options: { socketPath?: string; connectTimeoutMs?: number; startTimeoutMs?: number } = {},
+  ) {
+    this.socketPath = options.socketPath ?? defaultSocketPath()
+    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
+    this.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS
+  }
+
+  async ensureRunning(): Promise<void> {
+    if (await this.canConnect()) return
+
+    this.startPromise ??= this.startDaemon().finally(() => {
+      this.startPromise = null
+    })
+    return this.startPromise
+  }
+
+  async createSession(input: TaodCreateSessionInput): Promise<TaodControlResponse> {
+    const response = await this.request({
+      type: 'create',
+      id: nextRequestId('create'),
+      sessionId: input.sessionId,
+      terminalId: input.terminalId,
+      cols: input.cols,
+      rows: input.rows,
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(input.argv ? { argv: [...input.argv] } : {}),
+    })
+    if (!response.ok) throw responseError(response)
+    return response
+  }
+
+  async attachSession(input: TaodAttachSessionInput): Promise<{
+    response: TaodControlResponse
+    stream: TaodSessionStream
+  }> {
+    await this.ensureRunning()
+    const socket = await connectUnixSocket(this.socketPath, this.connectTimeoutMs)
+
+    const request = {
+      type: 'attach',
+      id: nextRequestId('attach'),
+      sessionId: input.sessionId,
+      ...(input.terminalId ? { terminalId: input.terminalId } : {}),
+      ...(input.cols ? { cols: input.cols } : {}),
+      ...(input.rows ? { rows: input.rows } : {}),
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+    }
+
+    socket.write(`${JSON.stringify(request)}\n`)
+    const { response, tail } = await readNdjsonResponse(socket, this.connectTimeoutMs)
+    if (!response.ok) {
+      socket.destroy()
+      throw responseError(response)
+    }
+
+    return {
+      response,
+      stream: new TaodSessionStream(socket, input.sessionId, tail),
+    }
+  }
+
+  async resizeSession(sessionId: string, cols: number, rows: number): Promise<TaodControlResponse> {
+    const response = await this.request({
+      type: 'resize',
+      id: nextRequestId('resize'),
+      sessionId,
+      cols,
+      rows,
+    })
+    if (!response.ok) throw responseError(response)
+    return response
+  }
+
+  async detachSession(sessionId: string): Promise<void> {
+    const response = await this.request({ type: 'detach', id: nextRequestId('detach'), sessionId })
+    if (!response.ok) throw responseError(response)
+  }
+
+  async killSession(sessionId: string): Promise<void> {
+    const response = await this.request({ type: 'kill', id: nextRequestId('kill'), sessionId })
+    if (!response.ok) throw responseError(response)
+  }
+
+  private async canConnect(): Promise<boolean> {
+    try {
+      await this.request({ type: 'ping', id: nextRequestId('ping') }, { ensure: false })
+      return true
+    } catch (error) {
+      if (isUsableSocketError(error)) return false
+      return false
+    }
+  }
+
+  private async startDaemon(): Promise<void> {
+    if (await this.canConnect()) return
+
+    const binaryPath = findTaodBinary()
+    if (!binaryPath) {
+      throw new Error(
+        `taod binary not found. Checked: ${candidateTaodPaths().join(', ') || '(none)'}`,
+      )
+    }
+
+    this.spawnedProcess = spawn(binaryPath, [], {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+      cwd: dirname(binaryPath),
+    })
+    this.spawnedProcess.unref()
+
+    const deadline = Date.now() + this.startTimeoutMs
+    let lastError: unknown = null
+    while (Date.now() < deadline) {
+      try {
+        if (await this.canConnect()) return
+      } catch (error) {
+        lastError = error
+      }
+      await delay(75)
+    }
+
+    throw new Error(`Timed out waiting for taod to start: ${String(lastError ?? 'no response')}`)
+  }
+
+  private async request(
+    request: TaodRequest,
+    options: { ensure?: boolean } = {},
+  ): Promise<TaodControlResponse> {
+    if (options.ensure !== false) await this.ensureRunning()
+
+    const socket = await connectUnixSocket(this.socketPath, this.connectTimeoutMs)
+    try {
+      socket.write(`${JSON.stringify(request)}\n`)
+      const { response } = await readNdjsonResponse(socket, this.connectTimeoutMs)
+      return response
+    } finally {
+      socket.end()
+      socket.destroy()
+    }
+  }
+}

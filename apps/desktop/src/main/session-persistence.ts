@@ -46,26 +46,6 @@ export type ReplayFrame = {
   readonly data: string
 }
 
-export type ReplayEvent =
-  | {
-      readonly type: 'output'
-      readonly seq: bigint
-      readonly data: string
-    }
-  | {
-      readonly type: 'resize'
-      readonly seq: bigint
-      readonly cols: number
-      readonly rows: number
-    }
-
-export type SessionPersistenceSummary = {
-  readonly lastSeq: bigint
-  readonly size: { readonly cols: number; readonly rows: number } | null
-  readonly hasOutput: boolean
-  readonly hasExit: boolean
-}
-
 export type CleanupSessionPersistenceOptions = {
   readonly retainDays: number
   readonly maxSessionBytes: number
@@ -342,93 +322,6 @@ export function readReplayFrames(sessionId: string, maxBytes = MAX_REPLAY_BYTES)
       data: replay.subarray(-maxBytes).toString('utf8'),
     },
   ]
-}
-
-function decodeResizePayload(payload: Buffer): { cols: number; rows: number } | null {
-  if (payload.length !== 4) return null
-  return { cols: payload.readUInt16BE(0), rows: payload.readUInt16BE(2) }
-}
-
-export function readReplayEvents(sessionId: string, maxBytes = MAX_REPLAY_BYTES): ReplayEvent[] {
-  if (maxBytes <= 0) return []
-
-  const eventLogPath = join(sessionDir(sessionId), 'events.taoev')
-  const frames = readValidFrames(eventLogPath)
-  let firstOutputSeq: bigint | null = null
-  let totalBytes = 0
-
-  for (let i = frames.length - 1; i >= 0; i--) {
-    const frame = frames[i]
-    if (!frame || frame.kind !== EventFrameKind.Output || frame.payload.length === 0) continue
-    if (frame.payload.length > maxBytes && firstOutputSeq === null) return []
-    if (totalBytes + frame.payload.length > maxBytes && firstOutputSeq !== null) break
-
-    totalBytes += frame.payload.length
-    firstOutputSeq = frame.seq
-  }
-
-  if (firstOutputSeq === null) return []
-
-  const events: ReplayEvent[] = []
-  let initialResize: ParsedFrame | undefined
-  for (let i = frames.length - 1; i >= 0; i--) {
-    const frame = frames[i]
-    if (!frame) continue
-    if (frame.seq < firstOutputSeq && frame.kind === EventFrameKind.Resize) {
-      initialResize = frame
-      break
-    }
-  }
-  if (initialResize) {
-    const resize = decodeResizePayload(initialResize.payload)
-    if (resize) events.push({ type: 'resize', seq: initialResize.seq, ...resize })
-  }
-
-  for (const frame of frames) {
-    if (frame.seq < firstOutputSeq) continue
-
-    if (frame.kind === EventFrameKind.Output && frame.payload.length > 0) {
-      events.push({ type: 'output', seq: frame.seq, data: frame.payload.toString('utf8') })
-      continue
-    }
-
-    if (frame.kind === EventFrameKind.Resize) {
-      const resize = decodeResizePayload(frame.payload)
-      if (resize) events.push({ type: 'resize', seq: frame.seq, ...resize })
-    }
-  }
-
-  return events
-}
-
-export function readSessionPersistenceSummary(sessionId: string): SessionPersistenceSummary | null {
-  const eventLogPath = join(sessionDir(sessionId), 'events.taoev')
-  const parsed = parseEventLog(eventLogPath)
-  if (!parsed.validHeader || parsed.frames.length === 0) return null
-
-  let size: { cols: number; rows: number } | null = null
-  let hasOutput = false
-  let hasExit = false
-  let lastSeq = 0n
-
-  for (const frame of parsed.frames) {
-    lastSeq = frame.seq
-    if (frame.kind === EventFrameKind.Output && frame.payload.length > 0) {
-      hasOutput = true
-      continue
-    }
-
-    if (frame.kind === EventFrameKind.Resize) {
-      size = decodeResizePayload(frame.payload) ?? size
-      continue
-    }
-
-    if (frame.kind === EventFrameKind.Exit) {
-      hasExit = true
-    }
-  }
-
-  return { lastSeq, size, hasOutput, hasExit }
 }
 
 function directorySize(path: string): number {

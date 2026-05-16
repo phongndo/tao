@@ -61,35 +61,6 @@ test('handles large logs while preserving only the requested replay tail', () =>
   assert.ok(replay.endsWith('299\n'))
 })
 
-test('render replay events preserve resize frames and avoid mid-frame output truncation', () => {
-  const session = persistence.openPersistentSession('resize-replay-session')
-  persistence.appendResize(session, 120, 40)
-  persistence.appendOutput(session, 'first prompt')
-  persistence.appendResize(session, 60, 20)
-  persistence.appendOutput(session, 'second prompt')
-
-  assert.deepEqual(persistence.readReplayEvents('resize-replay-session', 13), [
-    { type: 'resize', seq: 3n, cols: 60, rows: 20 },
-    { type: 'output', seq: 4n, data: 'second prompt' },
-  ])
-  assert.deepEqual(persistence.readReplayEvents('resize-replay-session', 8), [])
-})
-
-test('summarizes persisted sessions for archived restore detection', () => {
-  const session = persistence.openPersistentSession('summary-session')
-  persistence.appendResize(session, 100, 30)
-  persistence.appendOutput(session, 'archived')
-  persistence.appendExit(session, 0)
-
-  assert.deepEqual(persistence.readSessionPersistenceSummary('summary-session'), {
-    lastSeq: 3n,
-    size: { cols: 100, rows: 30 },
-    hasOutput: true,
-    hasExit: true,
-  })
-  assert.equal(persistence.readSessionPersistenceSummary('missing-summary-session'), null)
-})
-
 test('cleanup honors retention, total-size cap, and active sessions', () => {
   const keep = persistence.openPersistentSession('active-session')
   persistence.appendOutput(keep, 'keep')
