@@ -886,30 +886,32 @@ zig version  # 0.15.2+
 
 ## Implementation Order
 
-| Phase | What | Est. time |
-|---|---|---|
-| **0** | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt` | 1 week |
-| **1** | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager | 2 weeks |
-| **2** | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
-| **3** | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests | 1-2 weeks |
-| **4** | Add `libghostty-vt` snapshot extension (native + WASM exports) | 2-3 weeks |
-| **5** | Write event log (framed binary, append/read/seek/crc) | 1 week |
-| **6** | Write SQLite layer (zig-sqlite, migrations, query functions) | 1 week |
-| **7** | Integrate daemon with Electron main (launch, socket client, IPC bridge) | 1 week |
-| **8** | Renderer attach from snapshot + live stream; remove old pty-service path | 1 week |
-| **9** | Add agent adapter spawning + pi/codex/claude adapter scripts | 1-2 weeks |
-| **10** | Add pane-layouts.json / settings.json services; migrate localStorage | 3-4 days |
-| **11** | Search excerpts / FTS, cleanup/retention, clear-history UX | 1 week |
-| **12** | Stress testing: crash, restart, daemon fail, large logs, agent resume | 1-2 weeks |
+| Phase | Status | What | Est. time |
+|---|---|---|---|
+| **A** | **Done** | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, bounded replay, Electron install repair | Done |
+| **B** | **Next** | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, and explicit session IPC wrappers | 3-5 days |
+| **0** | Not started | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt` | 1 week |
+| **1** | Not started | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager | 2 weeks |
+| **2** | Not started | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
+| **3** | Not started | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests | 1-2 weeks |
+| **4** | Not started | Add `libghostty-vt` snapshot extension (native + WASM exports) | 2-3 weeks |
+| **5** | Partial prototype | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests | 1 week |
+| **6** | Not started | Write SQLite layer (zig-sqlite, migrations, query functions) | 1 week |
+| **7** | Not started | Integrate daemon with Electron main (launch, socket client, IPC bridge) | 1 week |
+| **8** | Not started | Renderer attach from snapshot + live stream; remove old pty-service path | 1 week |
+| **9** | Not started | Add agent adapter spawning + pi/codex/claude adapter scripts | 1-2 weeks |
+| **10** | **Done for Electron slice** | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists. | Done |
+| **11** | Not started | Search excerpts / FTS, cleanup/retention, clear-history UX | 1 week |
+| **12** | Not started | Stress testing: crash, restart, daemon fail, large logs, agent resume | 1-2 weeks |
 
 **Total**: roughly 10-14 weeks, dominated by the libghostty-vt snapshot extension and robust daemon
 lifecycle.
 
 ---
 
-## Revised Summary
+## Target Summary
 
-The persistence architecture is now:
+The target persistence architecture remains:
 
 ```
 ┌──────────────────────────────┐
