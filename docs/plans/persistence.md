@@ -1,6 +1,6 @@
 # Persistence Plan
 
-**Status**: Planning  
+**Status**: Incremental implementation started  
 **Last updated**: 2026-05-16
 
 ## Overview
@@ -30,6 +30,61 @@ The architecture is a hybrid:
 - **JSON files** remain the source of truth for human-editable settings and UI layout.
 
 This replaces the current Zustand `persist` + browser `localStorage` model.
+
+---
+
+## Current Implementation Status
+
+The full daemon/snapshot architecture below is still the target design. The current codebase now has
+a first Electron-side persistence slice that reduces data loss and removes renderer-only layout
+storage while the larger `taod` work is pending.
+
+### Implemented now
+
+- **File-backed UI layout**: pane/workspace/tab layout is persisted to `~/.tao/pane-layouts.json`
+  through Electron main IPC instead of Zustand `persist` + browser `localStorage`.
+- **One-time localStorage migration**: existing `localStorage['tao-workspaces']` data is read once
+  and then removed after a successful migration path is available.
+- **File-backed settings service**: `~/.tao/settings.json` read/write IPC exists with default
+  persistence settings.
+- **Stable pane/session identifiers**: panes now carry `terminalId` and `lastSessionId` so layout
+  identity is separate from terminal session identity.
+- **Framed PTY event log prototype**: PTY output, resize, and exit frames are appended under
+  `~/.tao/sessions/<session-id>/events.taoev` with sequence numbers and CRC checks.
+- **Bounded cold visual replay**: when a session ID is reopened and no live PTY is available, Tao
+  replays the bounded event-log tail into the new terminal before continuing with a fresh shell.
+- **Utility PTY process survives renderer/window reloads better**: closing a BrowserWindow no longer
+  immediately kills the utility PTY service; new renderer ports can reconnect to the same service.
+- **Electron install repair**: `scripts/fix-electron-install.mjs` repairs incomplete Electron binary
+  installs before `dev` / `start`.
+
+### Important limitations of the current slice
+
+- There is **no Zig `taod` daemon yet**. PTYs are still owned by the Electron utility process.
+- Live reattach currently works only while the utility process remains alive. It is not yet the
+  durable app-independent daemon guarantee described below.
+- There are **no libghostty-vt snapshots yet**. Visual restore is bounded log replay, not instant
+  binary snapshot deserialization.
+- There is **no SQLite metadata layer yet**. Session metadata is implicit in files and layout JSON.
+- There are **no agent adapters or native AI CLI resume hooks yet**.
+- There is **no search/FTS, retention cleanup, clear-history UX, or persistence privacy toggle yet**.
+
+### Next recommended work
+
+1. **Harden the TypeScript event-log bridge**: add tests for frame CRC validation, partial/corrupt
+   tails, large logs, and replay truncation; avoid duplicate replay when reattaching to a live PTY.
+2. **Add explicit session IPC names**: introduce `createSession` / `attachSession` wrappers over the
+   current PTY API so the renderer stops thinking in raw `spawnPty` terms.
+3. **Add retention and clear-history controls for the current file store** before persistence is on by
+   default for long-running users.
+4. **Create the `apps/taod` skeleton** with socket accept loop, control RPC types, and a minimal PTY
+   driver; keep the current Electron utility service as a fallback until the daemon is usable.
+5. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
+   PTYs.
+6. **Add SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
+   session files already being written.
+7. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
+   the largest unknown and should be isolated behind `apps/taod/src/vt.zig`.
 
 ---
 
