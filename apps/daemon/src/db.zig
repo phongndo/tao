@@ -1,29 +1,5 @@
 const std = @import("std");
-
-const sqlite3 = opaque {};
-const sqlite3_stmt = opaque {};
-
-extern "c" fn sqlite3_open_v2(filename: [*:0]const u8, ppDb: *?*sqlite3, flags: c_int, zVfs: ?[*:0]const u8) c_int;
-extern "c" fn sqlite3_close(db: *sqlite3) c_int;
-extern "c" fn sqlite3_exec(db: *sqlite3, sql: [*:0]const u8, callback: ?*const anyopaque, arg: ?*anyopaque, errmsg: *?[*:0]u8) c_int;
-extern "c" fn sqlite3_free(value: ?*anyopaque) void;
-extern "c" fn sqlite3_prepare_v2(db: *sqlite3, sql: [*:0]const u8, nByte: c_int, ppStmt: *?*sqlite3_stmt, pzTail: ?*[*:0]const u8) c_int;
-extern "c" fn sqlite3_finalize(stmt: *sqlite3_stmt) c_int;
-extern "c" fn sqlite3_step(stmt: *sqlite3_stmt) c_int;
-extern "c" fn sqlite3_bind_int(stmt: *sqlite3_stmt, index: c_int, value: c_int) c_int;
-extern "c" fn sqlite3_bind_int64(stmt: *sqlite3_stmt, index: c_int, value: i64) c_int;
-extern "c" fn sqlite3_bind_null(stmt: *sqlite3_stmt, index: c_int) c_int;
-extern "c" fn sqlite3_bind_text(stmt: *sqlite3_stmt, index: c_int, value: [*]const u8, value_len: c_int, destructor: ?*const anyopaque) c_int;
-extern "c" fn sqlite3_column_text(stmt: *sqlite3_stmt, index: c_int) ?[*]const u8;
-extern "c" fn sqlite3_column_bytes(stmt: *sqlite3_stmt, index: c_int) c_int;
-extern "c" fn sqlite3_column_int64(stmt: *sqlite3_stmt, index: c_int) i64;
-
-const sqlite_ok = 0;
-const sqlite_row = 100;
-const sqlite_done = 101;
-const sqlite_open_readwrite = 0x0000_0002;
-const sqlite_open_create = 0x0000_0004;
-const sqlite_open_nomutex = 0x0000_8000;
+const sqlite = @import("sqlite");
 
 pub const migration_001_terminal_sessions =
     \\CREATE TABLE terminal_sessions (
@@ -351,43 +327,68 @@ pub const TerminalSearchResult = struct {
 
 pub const Database = struct {
     allocator: std.mem.Allocator,
-    handle: *sqlite3,
+    handle: sqlite.Db,
+
+    const open_flags = sqlite.Db.OpenFlags{ .write = true, .create = true };
+    const threading_mode = sqlite.ThreadingMode.MultiThread;
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !Database {
         const path_z = try allocator.dupeZ(u8, path);
         defer allocator.free(path_z);
 
-        var maybe_handle: ?*sqlite3 = null;
-        const flags = sqlite_open_readwrite | sqlite_open_create | sqlite_open_nomutex;
-        if (sqlite3_open_v2(path_z.ptr, &maybe_handle, flags, null) != sqlite_ok) {
-            if (maybe_handle) |handle| _ = sqlite3_close(handle);
-            return error.SqliteOpenFailed;
-        }
+        var diags = sqlite.Diagnostics{};
+        const handle = sqlite.Db.init(.{
+            .mode = .{ .File = path_z },
+            .open_flags = open_flags,
+            .threading_mode = threading_mode,
+            .diags = &diags,
+        }) catch |err| {
+            std.log.err("failed to open sqlite database {s}: {f}", .{ path, diags });
+            return err;
+        };
 
-        var database = Database{ .allocator = allocator, .handle = maybe_handle.? };
-        errdefer database.deinit();
-
-        try database.exec("PRAGMA journal_mode = WAL;");
-        try database.exec("PRAGMA foreign_keys = ON;");
-        try database.exec("PRAGMA busy_timeout = 5000;");
-        try database.migrate();
-
-        return database;
+        return initOpened(allocator, handle);
     }
 
     pub fn openInMemory(allocator: std.mem.Allocator) !Database {
-        return open(allocator, ":memory:");
+        var diags = sqlite.Diagnostics{};
+        const handle = sqlite.Db.init(.{
+            .mode = .Memory,
+            .open_flags = open_flags,
+            .threading_mode = threading_mode,
+            .diags = &diags,
+        }) catch |err| {
+            std.log.err("failed to open in-memory sqlite database: {f}", .{diags});
+            return err;
+        };
+
+        return initOpened(allocator, handle);
+    }
+
+    fn initOpened(allocator: std.mem.Allocator, handle: sqlite.Db) !Database {
+        var database = Database{ .allocator = allocator, .handle = handle };
+        errdefer database.deinit();
+
+        try database.configure();
+        return database;
     }
 
     pub fn deinit(self: *Database) void {
-        _ = sqlite3_close(self.handle);
+        self.handle.deinit();
         self.* = undefined;
+    }
+
+    fn configure(self: *Database) !void {
+        _ = try self.handle.one([32:0]u8, "PRAGMA journal_mode = WAL;", .{}, .{});
+        try self.handle.exec("PRAGMA foreign_keys = ON;", .{}, .{});
+        _ = try self.handle.one(u32, "PRAGMA busy_timeout = 5000;", .{}, .{});
+        try self.migrate();
     }
 
     pub fn migrate(self: *Database) !void {
         try self.exec(create_migrations_table_sql);
         for (migrations, 0..) |migration, index| {
-            const version: c_int = @intCast(index + 1);
+            const version: i64 = @intCast(index + 1);
             if (try self.hasMigration(version)) continue;
 
             try self.exec("BEGIN IMMEDIATE;");
@@ -404,62 +405,67 @@ pub const Database = struct {
     }
 
     pub fn recordTerminalSession(self: *Database, record: TerminalSessionRecord) !void {
-        var stmt = try self.prepare(upsert_terminal_session_sql);
+        var stmt = try self.handle.prepareDynamic(upsert_terminal_session_sql);
         defer stmt.deinit();
 
-        try stmt.bindText(1, record.id);
-        try stmt.bindText(2, record.terminal_id);
-        try stmt.bindNullableText(3, record.workspace_id);
-        try stmt.bindNullableText(4, record.cwd);
-        try stmt.bindNullableText(5, record.argv_json);
-        try stmt.bindText(6, record.status);
-        try stmt.bindNullableText(7, record.daemon_id);
-        try stmt.bindNullableInt64(8, record.pid);
-        try stmt.bindInt64(9, record.cols);
-        try stmt.bindInt64(10, record.rows);
-        try stmt.bindNullableText(11, record.title);
-        try stmt.bindText(12, record.event_log_path);
-        try stmt.bindInt64(13, record.last_seq);
-        try stmt.bindNullableText(14, record.snapshot_path);
-        try stmt.bindInt64(15, record.snapshot_seq);
+        const last_seq: i64 = @intCast(record.last_seq);
+        const snapshot_seq: i64 = @intCast(record.snapshot_seq);
         const snapshot_crc32: ?i64 = if (record.snapshot_crc32) |value| @intCast(value) else null;
         const snapshot_size: ?i64 = if (record.snapshot_size) |value| @intCast(value) else null;
-        try stmt.bindNullableInt64(16, snapshot_crc32);
-        try stmt.bindNullableInt64(17, snapshot_size);
-        try stmt.stepDone();
+
+        try stmt.exec(.{}, .{
+            record.id,
+            record.terminal_id,
+            record.workspace_id,
+            record.cwd,
+            record.argv_json,
+            record.status,
+            record.daemon_id,
+            record.pid,
+            record.cols,
+            record.rows,
+            record.title,
+            record.event_log_path,
+            last_seq,
+            record.snapshot_path,
+            snapshot_seq,
+            snapshot_crc32,
+            snapshot_size,
+        });
     }
 
     pub fn recordTerminalEnded(self: *Database, record: TerminalEndedRecord) !void {
-        var stmt = try self.prepare(update_terminal_ended_sql);
+        var stmt = try self.handle.prepareDynamic(update_terminal_ended_sql);
         defer stmt.deinit();
 
-        try stmt.bindText(1, record.status);
-        try stmt.bindInt64(2, record.cols);
-        try stmt.bindInt64(3, record.rows);
-        try stmt.bindInt64(4, record.last_seq);
-        try stmt.bindInt64(5, record.exit_code);
-        try stmt.bindInt64(6, record.signal);
-        try stmt.bindText(7, record.id);
-        try stmt.stepDone();
+        const last_seq: i64 = @intCast(record.last_seq);
+        try stmt.exec(.{}, .{
+            record.status,
+            record.cols,
+            record.rows,
+            last_seq,
+            record.exit_code,
+            record.signal,
+            record.id,
+        });
     }
 
     pub fn findTerminalSessionById(self: *Database, allocator: std.mem.Allocator, id: []const u8) !?TerminalSessionLookup {
-        var stmt = try self.prepare(find_terminal_by_id_sql);
+        var stmt = try self.handle.prepareDynamic(find_terminal_by_id_sql);
         defer stmt.deinit();
-        try stmt.bindText(1, id);
-        return try readTerminalLookup(allocator, &stmt);
+        return try stmt.oneAlloc(TerminalSessionLookup, allocator, .{}, .{id});
     }
 
     pub fn findTerminalSessionByTerminalId(self: *Database, allocator: std.mem.Allocator, terminal_id: []const u8) !?TerminalSessionLookup {
-        var stmt = try self.prepare(find_terminal_by_terminal_id_sql);
+        var stmt = try self.handle.prepareDynamic(find_terminal_by_terminal_id_sql);
         defer stmt.deinit();
-        try stmt.bindText(1, terminal_id);
-        return try readTerminalLookup(allocator, &stmt);
+        return try stmt.oneAlloc(TerminalSessionLookup, allocator, .{}, .{terminal_id});
     }
 
     pub fn listTerminalEventLogs(self: *Database, allocator: std.mem.Allocator) ![]TerminalEventLogRef {
-        var stmt = try self.prepare(list_terminal_event_logs_sql);
+        var stmt = try self.handle.prepareDynamic(list_terminal_event_logs_sql);
         defer stmt.deinit();
+        var iter = try stmt.iteratorAlloc(TerminalEventLogRef, allocator, .{});
 
         var refs: std.ArrayList(TerminalEventLogRef) = .empty;
         errdefer {
@@ -467,12 +473,8 @@ pub const Database = struct {
             refs.deinit(allocator);
         }
 
-        while (try stmt.stepRow()) {
-            const id = try stmt.columnTextAlloc(allocator, 0);
-            errdefer allocator.free(id);
-            const path = try stmt.columnTextAlloc(allocator, 1);
-            errdefer allocator.free(path);
-            try refs.append(allocator, .{ .id = id, .event_log_path = path });
+        while (try iter.nextAlloc(allocator, .{})) |row| {
+            try refs.append(allocator, row);
         }
 
         return refs.toOwnedSlice(allocator);
@@ -480,101 +482,77 @@ pub const Database = struct {
 
     pub fn clearTerminalHistoryMetadata(self: *Database, session_id: []const u8) !void {
         {
-            var stmt = try self.prepare(delete_terminal_search_sql);
+            var stmt = try self.handle.prepareDynamic(delete_terminal_search_sql);
             defer stmt.deinit();
-            try stmt.bindText(1, session_id);
-            try stmt.stepDone();
+            try stmt.exec(.{}, .{session_id});
         }
         {
-            var stmt = try self.prepare(clear_terminal_history_metadata_sql);
+            var stmt = try self.handle.prepareDynamic(clear_terminal_history_metadata_sql);
             defer stmt.deinit();
-            try stmt.bindText(1, session_id);
-            try stmt.stepDone();
+            try stmt.exec(.{}, .{session_id});
         }
     }
 
     pub fn deleteTerminalSessionMetadata(self: *Database, session_id: []const u8) !void {
         {
-            var stmt = try self.prepare(delete_terminal_search_sql);
+            var stmt = try self.handle.prepareDynamic(delete_terminal_search_sql);
             defer stmt.deinit();
-            try stmt.bindText(1, session_id);
-            try stmt.stepDone();
+            try stmt.exec(.{}, .{session_id});
         }
         {
-            var stmt = try self.prepare(delete_terminal_session_sql);
+            var stmt = try self.handle.prepareDynamic(delete_terminal_session_sql);
             defer stmt.deinit();
-            try stmt.bindText(1, session_id);
-            try stmt.stepDone();
+            try stmt.exec(.{}, .{session_id});
         }
     }
 
     pub fn recordAgentSession(self: *Database, record: AgentSessionRecord) !void {
-        var stmt = try self.prepare(upsert_agent_session_sql);
+        var stmt = try self.handle.prepareDynamic(upsert_agent_session_sql);
         defer stmt.deinit();
 
-        try stmt.bindText(1, record.id);
-        try stmt.bindText(2, record.terminal_session_id);
-        try stmt.bindText(3, record.provider);
-        try stmt.bindNullableText(4, record.native_session_id);
-        try stmt.bindNullableText(5, record.original_argv_json);
-        try stmt.bindNullableText(6, record.resume_argv_json);
-        try stmt.bindNullableText(7, record.cwd);
-        try stmt.bindNullableText(8, record.transcript_path);
-        try stmt.bindNullableText(9, record.model);
-        try stmt.bindNullableText(10, record.title);
-        try stmt.bindText(11, record.status);
-        try stmt.stepDone();
+        try stmt.exec(.{}, .{
+            record.id,
+            record.terminal_session_id,
+            record.provider,
+            record.native_session_id,
+            record.original_argv_json,
+            record.resume_argv_json,
+            record.cwd,
+            record.transcript_path,
+            record.model,
+            record.title,
+            record.status,
+        });
     }
 
     pub fn findAgentResumeForTerminal(self: *Database, allocator: std.mem.Allocator, terminal_session_id: []const u8) !?AgentResumeLookup {
-        var stmt = try self.prepare(find_agent_resume_by_terminal_sql);
+        var stmt = try self.handle.prepareDynamic(find_agent_resume_by_terminal_sql);
         defer stmt.deinit();
-        try stmt.bindText(1, terminal_session_id);
-
-        if (!try stmt.stepRow()) return null;
-        const id = try stmt.columnTextAlloc(allocator, 0);
-        errdefer allocator.free(id);
-        const provider = try stmt.columnTextAlloc(allocator, 1);
-        errdefer allocator.free(provider);
-        const native_session_id = try stmt.columnTextAlloc(allocator, 2);
-        errdefer allocator.free(native_session_id);
-        const resume_argv_json = try stmt.columnTextAlloc(allocator, 3);
-        errdefer allocator.free(resume_argv_json);
-        const status = try stmt.columnTextAlloc(allocator, 4);
-        errdefer allocator.free(status);
-
-        return .{
-            .id = id,
-            .provider = provider,
-            .native_session_id = native_session_id,
-            .resume_argv_json = resume_argv_json,
-            .status = status,
-        };
+        return try stmt.oneAlloc(AgentResumeLookup, allocator, .{}, .{terminal_session_id});
     }
 
     pub fn recordTerminalSearch(self: *Database, record: TerminalSearchRecord) !void {
         {
-            var stmt = try self.prepare(delete_terminal_search_sql);
+            var stmt = try self.handle.prepareDynamic(delete_terminal_search_sql);
             defer stmt.deinit();
-            try stmt.bindText(1, record.terminal_session_id);
-            try stmt.stepDone();
+            try stmt.exec(.{}, .{record.terminal_session_id});
         }
         {
-            var stmt = try self.prepare(insert_terminal_search_sql);
+            var stmt = try self.handle.prepareDynamic(insert_terminal_search_sql);
             defer stmt.deinit();
-            try stmt.bindText(1, record.terminal_session_id);
-            try stmt.bindNullableText(2, record.workspace_id);
-            try stmt.bindNullableText(3, record.title);
-            try stmt.bindText(4, record.excerpt);
-            try stmt.stepDone();
+            try stmt.exec(.{}, .{
+                record.terminal_session_id,
+                record.workspace_id,
+                record.title,
+                record.excerpt,
+            });
         }
     }
 
     pub fn searchTerminalExcerpts(self: *Database, allocator: std.mem.Allocator, query: []const u8, limit: u32) ![]TerminalSearchResult {
-        var stmt = try self.prepare(search_terminal_excerpts_sql);
+        var stmt = try self.handle.prepareDynamic(search_terminal_excerpts_sql);
         defer stmt.deinit();
-        try stmt.bindText(1, query);
-        try stmt.bindInt64(2, limit);
+        var iter = try stmt.iteratorAlloc(TerminalSearchResult, allocator, .{ query, limit });
 
         var results: std.ArrayList(TerminalSearchResult) = .empty;
         errdefer {
@@ -582,193 +560,47 @@ pub const Database = struct {
             results.deinit(allocator);
         }
 
-        while (try stmt.stepRow()) {
-            const terminal_session_id = try stmt.columnTextAlloc(allocator, 0);
-            errdefer allocator.free(terminal_session_id);
-            const title = try stmt.columnNullableTextAlloc(allocator, 1);
-            errdefer if (title) |value| allocator.free(value);
-            const excerpt = try stmt.columnTextAlloc(allocator, 2);
-            errdefer allocator.free(excerpt);
-
-            try results.append(allocator, .{
-                .terminal_session_id = terminal_session_id,
-                .title = title,
-                .excerpt = excerpt,
-            });
+        while (try iter.nextAlloc(allocator, .{})) |row| {
+            try results.append(allocator, row);
         }
 
         return results.toOwnedSlice(allocator);
     }
 
     pub fn countTerminalSessions(self: *Database) !u64 {
-        var stmt = try self.prepare("SELECT COUNT(*) FROM terminal_sessions;");
-        defer stmt.deinit();
-        return stmt.stepCount();
+        return (try self.handle.one(u64, "SELECT COUNT(*) FROM terminal_sessions;", .{}, .{})) orelse error.SqliteUnexpectedNull;
     }
 
     pub fn countTerminalSessionsByStatus(self: *Database, status: []const u8) !u64 {
-        var stmt = try self.prepare("SELECT COUNT(*) FROM terminal_sessions WHERE status = ?;");
+        var stmt = try self.handle.prepare("SELECT COUNT(*) FROM terminal_sessions WHERE status = ?;");
         defer stmt.deinit();
-        try stmt.bindText(1, status);
-        return stmt.stepCount();
+        return (try stmt.one(u64, .{}, .{status})) orelse error.SqliteUnexpectedNull;
     }
 
     pub fn countAgentSessions(self: *Database) !u64 {
-        var stmt = try self.prepare("SELECT COUNT(*) FROM agent_sessions;");
-        defer stmt.deinit();
-        return stmt.stepCount();
+        return (try self.handle.one(u64, "SELECT COUNT(*) FROM agent_sessions;", .{}, .{})) orelse error.SqliteUnexpectedNull;
     }
 
     pub fn countSearchRows(self: *Database) !u64 {
-        var stmt = try self.prepare("SELECT COUNT(*) FROM terminal_search;");
-        defer stmt.deinit();
-        return stmt.stepCount();
+        return (try self.handle.one(u64, "SELECT COUNT(*) FROM terminal_search;", .{}, .{})) orelse error.SqliteUnexpectedNull;
     }
 
     fn exec(self: *Database, sql: []const u8) !void {
-        const sql_z = try self.allocator.dupeZ(u8, sql);
-        defer self.allocator.free(sql_z);
-
-        var error_message: ?[*:0]u8 = null;
-        const rc = sqlite3_exec(self.handle, sql_z.ptr, null, null, &error_message);
-        if (error_message) |message| sqlite3_free(message);
-        if (rc != sqlite_ok) return error.SqliteExecFailed;
+        try self.handle.execMulti(sql, .{});
     }
 
-    fn prepare(self: *Database, sql: []const u8) !Statement {
-        const sql_z = try self.allocator.dupeZ(u8, sql);
-        defer self.allocator.free(sql_z);
-
-        var maybe_stmt: ?*sqlite3_stmt = null;
-        if (sqlite3_prepare_v2(self.handle, sql_z.ptr, -1, &maybe_stmt, null) != sqlite_ok) return error.SqlitePrepareFailed;
-        return .{ .handle = maybe_stmt.? };
-    }
-
-    fn hasMigration(self: *Database, version: c_int) !bool {
-        var stmt = try self.prepare("SELECT 1 FROM schema_migrations WHERE version = ? LIMIT 1;");
+    fn hasMigration(self: *Database, version: i64) !bool {
+        var stmt = try self.handle.prepare("SELECT 1 FROM schema_migrations WHERE version = ? LIMIT 1;");
         defer stmt.deinit();
-        try stmt.bindInt(1, version);
-        return try stmt.stepRowExists();
+        return (try stmt.one(u8, .{}, .{version})) != null;
     }
 
-    fn markMigration(self: *Database, version: c_int) !void {
-        var stmt = try self.prepare("INSERT INTO schema_migrations(version) VALUES (?);");
+    fn markMigration(self: *Database, version: i64) !void {
+        var stmt = try self.handle.prepare("INSERT INTO schema_migrations(version) VALUES (?);");
         defer stmt.deinit();
-        try stmt.bindInt(1, version);
-        try stmt.stepDone();
+        try stmt.exec(.{}, .{version});
     }
 };
-
-const Statement = struct {
-    handle: *sqlite3_stmt,
-
-    fn deinit(self: *Statement) void {
-        _ = sqlite3_finalize(self.handle);
-        self.* = undefined;
-    }
-
-    fn bindInt(self: *Statement, index: c_int, value: c_int) !void {
-        if (sqlite3_bind_int(self.handle, index, value) != sqlite_ok) return error.SqliteBindFailed;
-    }
-
-    fn bindInt64(self: *Statement, index: c_int, value: anytype) !void {
-        if (sqlite3_bind_int64(self.handle, index, @intCast(value)) != sqlite_ok) return error.SqliteBindFailed;
-    }
-
-    fn bindNullableInt64(self: *Statement, index: c_int, value: ?i64) !void {
-        if (value) |some| return self.bindInt64(index, some);
-        if (sqlite3_bind_null(self.handle, index) != sqlite_ok) return error.SqliteBindFailed;
-    }
-
-    fn bindText(self: *Statement, index: c_int, value: []const u8) !void {
-        if (value.len > std.math.maxInt(c_int)) return error.SqliteValueTooLarge;
-        if (sqlite3_bind_text(self.handle, index, value.ptr, @intCast(value.len), null) != sqlite_ok) return error.SqliteBindFailed;
-    }
-
-    fn bindNullableText(self: *Statement, index: c_int, value: ?[]const u8) !void {
-        if (value) |some| return self.bindText(index, some);
-        if (sqlite3_bind_null(self.handle, index) != sqlite_ok) return error.SqliteBindFailed;
-    }
-
-    fn stepDone(self: *Statement) !void {
-        const rc = sqlite3_step(self.handle);
-        if (rc != sqlite_done) return error.SqliteStepFailed;
-    }
-
-    fn stepRowExists(self: *Statement) !bool {
-        const rc = sqlite3_step(self.handle);
-        return switch (rc) {
-            sqlite_row => true,
-            sqlite_done => false,
-            else => error.SqliteStepFailed,
-        };
-    }
-
-    fn stepRow(self: *Statement) !bool {
-        const rc = sqlite3_step(self.handle);
-        return switch (rc) {
-            sqlite_row => true,
-            sqlite_done => false,
-            else => error.SqliteStepFailed,
-        };
-    }
-
-    fn stepCount(self: *Statement) !u64 {
-        const rc = sqlite3_step(self.handle);
-        if (rc != sqlite_row) return error.SqliteStepFailed;
-        return @intCast(sqlite3_column_int64(self.handle, 0));
-    }
-
-    fn columnInt64(self: *Statement, index: c_int) i64 {
-        return sqlite3_column_int64(self.handle, index);
-    }
-
-    fn columnTextAlloc(self: *Statement, allocator: std.mem.Allocator, index: c_int) ![]u8 {
-        const ptr = sqlite3_column_text(self.handle, index) orelse return error.SqliteUnexpectedNull;
-        const len = sqlite3_column_bytes(self.handle, index);
-        if (len < 0) return error.SqliteValueTooLarge;
-        return allocator.dupe(u8, ptr[0..@intCast(len)]);
-    }
-
-    fn columnNullableTextAlloc(self: *Statement, allocator: std.mem.Allocator, index: c_int) !?[]u8 {
-        const ptr = sqlite3_column_text(self.handle, index) orelse return null;
-        const len = sqlite3_column_bytes(self.handle, index);
-        if (len < 0) return error.SqliteValueTooLarge;
-        return try allocator.dupe(u8, ptr[0..@intCast(len)]);
-    }
-};
-
-fn readTerminalLookup(allocator: std.mem.Allocator, stmt: *Statement) !?TerminalSessionLookup {
-    if (!try stmt.stepRow()) return null;
-
-    const id = try stmt.columnTextAlloc(allocator, 0);
-    errdefer allocator.free(id);
-    const terminal_id = try stmt.columnTextAlloc(allocator, 1);
-    errdefer allocator.free(terminal_id);
-    const cwd = try stmt.columnNullableTextAlloc(allocator, 2);
-    errdefer if (cwd) |value| allocator.free(value);
-    const argv_json = try stmt.columnNullableTextAlloc(allocator, 3);
-    errdefer if (argv_json) |value| allocator.free(value);
-    const status = try stmt.columnTextAlloc(allocator, 4);
-    errdefer allocator.free(status);
-    const cols = @as(u16, @intCast(stmt.columnInt64(5)));
-    const rows = @as(u16, @intCast(stmt.columnInt64(6)));
-    const event_log_path = try stmt.columnTextAlloc(allocator, 7);
-    errdefer allocator.free(event_log_path);
-    const last_seq = @as(u64, @intCast(stmt.columnInt64(8)));
-
-    return .{
-        .id = id,
-        .terminal_id = terminal_id,
-        .cwd = cwd,
-        .argv_json = argv_json,
-        .status = status,
-        .cols = cols,
-        .rows = rows,
-        .event_log_path = event_log_path,
-        .last_seq = last_seq,
-    };
-}
 
 test "sqlite migrations are registered in order" {
     try std.testing.expectEqual(@as(usize, 3), migrations.len);

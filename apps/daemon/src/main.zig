@@ -1,11 +1,15 @@
 const std = @import("std");
 const taod = @import("taod");
 
-pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
-    const home = init.environ_map.get("HOME") orelse return error.HomeNotSet;
+pub fn main() !void {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
-    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    const home = try std.process.getEnvVarOwned(allocator, "HOME");
+    defer allocator.free(home);
+
+    var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.skip();
 
@@ -27,9 +31,9 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    try daemon.prepareStorage(init.io);
+    try daemon.prepareStorage();
 
     if (check) return;
 
-    try daemon.runForever(init.io);
+    try daemon.runForever();
 }

@@ -89,11 +89,10 @@ extern fn ghostty_formatter_format_alloc(
 extern fn ghostty_formatter_free(formatter: GhosttyFormatter) void;
 extern fn ghostty_free(allocator: ?*const anyopaque, ptr: ?[*]u8, len: usize) void;
 
-/// Thin C-ABI wrapper for a system-installed native libghostty-vt. The default
-/// build does not use this path because Tao's CI currently uses Zig 0.16 while
-/// upstream's Zig package is still tied to a different Zig build API. This path
-/// keeps the daemon boundary ready for native libghostty-vt without introducing
-/// a WASM runtime.
+/// Thin C-ABI wrapper for a system-installed native libghostty-vt. Tao's daemon
+/// toolchain is pinned to Zig 0.15.x so the Zig-native package can be integrated
+/// behind `vt.zig`; this C ABI path remains useful for local/system library
+/// smoke tests during that transition.
 pub const Terminal = struct {
     cols: u16,
     rows: u16,

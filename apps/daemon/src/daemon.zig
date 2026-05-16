@@ -59,8 +59,7 @@ pub const Daemon = struct {
     sessions: session.Manager,
     pty_driver: pty.Driver,
     database: ?db.Database,
-    io: ?std.Io,
-    mutex: std.atomic.Mutex = .unlocked,
+    mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator, config: Config) Daemon {
         return .{
@@ -69,7 +68,6 @@ pub const Daemon = struct {
             .sessions = session.Manager.init(allocator),
             .pty_driver = pty.Driver.init(allocator),
             .database = null,
-            .io = null,
         };
     }
 
@@ -78,12 +76,11 @@ pub const Daemon = struct {
         self.sessions.deinit();
     }
 
-    pub fn prepareStorage(self: *Daemon, io: std.Io) !void {
-        self.io = io;
-        try std.Io.Dir.cwd().createDirPath(io, self.config.run_dir);
-        try std.Io.Dir.cwd().createDirPath(io, self.config.sessions_dir);
+    pub fn prepareStorage(self: *Daemon) !void {
+        try std.fs.cwd().makePath(self.config.run_dir);
+        try std.fs.cwd().makePath(self.config.sessions_dir);
         if (self.database == null) self.database = try db.Database.open(self.allocator, self.config.database_path);
-        try self.writePidFile(io);
+        try self.writePidFile();
     }
 
     pub fn printConfig(self: *Daemon) void {
@@ -100,23 +97,24 @@ pub const Daemon = struct {
         );
     }
 
-    pub fn runForever(self: *Daemon, io: std.Io) !void {
-        std.Io.Dir.cwd().deleteFile(io, self.config.socket_path) catch |err| switch (err) {
+    pub fn runForever(self: *Daemon) !void {
+        std.fs.cwd().deleteFile(self.config.socket_path) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
         };
 
-        var address = try std.Io.net.UnixAddress.init(self.config.socket_path);
-        var server = try address.listen(io, .{});
-        defer server.deinit(io);
+        const address = try std.net.Address.initUnix(self.config.socket_path);
+        var server = try address.listen(.{});
+        defer server.deinit();
 
         std.log.info("taod listening on {s}", .{self.config.socket_path});
         std.log.info("control RPC, PTY driver, event log, and binary attach stream enabled", .{});
 
         while (true) {
-            var stream = try server.accept(io);
+            const connection = try server.accept();
+            const stream = connection.stream;
             const context = self.allocator.create(ConnectionContext) catch |err| {
-                stream.close(io);
+                stream.close();
                 return err;
             };
             context.* = .{ .daemon = self, .stream = stream };
@@ -172,10 +170,10 @@ pub const Daemon = struct {
         };
     }
 
-    fn handleStream(self: *Daemon, stream: std.Io.net.Stream) !void {
-        defer _ = std.c.close(stream.socket.handle);
+    fn handleStream(self: *Daemon, stream: std.net.Stream) !void {
+        defer stream.close();
 
-        var control = try readControlPayload(self.allocator, stream.socket.handle);
+        var control = try readControlPayload(self.allocator, stream.handle);
         defer control.deinit(self.allocator);
 
         var parsed = std.json.parseFromSlice(rpc.ControlRequestJson, self.allocator, control.payload, .{
@@ -186,7 +184,7 @@ pub const Daemon = struct {
                 .error_message = @errorName(err),
             });
             defer self.allocator.free(response);
-            try writeAllFd(stream.socket.handle, response);
+            try writeAllFd(stream.handle, response);
             return;
         };
         defer parsed.deinit();
@@ -194,11 +192,11 @@ pub const Daemon = struct {
         const request = parsed.value;
         const response = try self.handleControlRequest(self.allocator, request);
         defer self.allocator.free(response);
-        try writeAllFd(stream.socket.handle, response);
+        try writeAllFd(stream.handle, response);
 
         if (request.requestType() == .attach) {
             if (request.requestSessionId()) |session_id| {
-                try self.streamAttachedSession(stream.socket.handle, session_id, control.tail);
+                try self.streamAttachedSession(stream.handle, session_id, control.tail);
             }
         }
     }
@@ -318,17 +316,15 @@ pub const Daemon = struct {
                     continue;
                 }
 
-                if (self.io) |io| {
-                    const removed = cleanup.deleteSessionDir(self.allocator, io, self.config.sessions_dir, session_id) catch |err| {
-                        std.log.warn("failed to clear persisted session {s}: {t}", .{ session_id, err });
-                        continue;
+                const removed = cleanup.deleteSessionDir(self.allocator, self.config.sessions_dir, session_id) catch |err| {
+                    std.log.warn("failed to clear persisted session {s}: {t}", .{ session_id, err });
+                    continue;
+                };
+                result.add(removed);
+                if (removed.removed_sessions > 0) {
+                    if (self.database) |*database| database.deleteTerminalSessionMetadata(session_id) catch |err| {
+                        std.log.warn("failed to delete cleared session metadata {s}: {t}", .{ session_id, err });
                     };
-                    result.add(removed);
-                    if (removed.removed_sessions > 0) {
-                        if (self.database) |*database| database.deleteTerminalSessionMetadata(session_id) catch |err| {
-                            std.log.warn("failed to delete cleared session metadata {s}: {t}", .{ session_id, err });
-                        };
-                    }
                 }
             }
         } else {
@@ -341,18 +337,15 @@ pub const Daemon = struct {
                 result.removed_sessions += 1;
             }
 
-            if (self.io) |io| {
-                const removed = cleanup.deleteInactiveSessionDirs(
-                    self.allocator,
-                    io,
-                    self.config.sessions_dir,
-                    active_ids.items,
-                ) catch |err| blk: {
-                    std.log.warn("failed to clear inactive session history: {t}", .{err});
-                    break :blk cleanup.MaintenanceResult{};
-                };
-                result.add(removed);
-            }
+            const removed = cleanup.deleteInactiveSessionDirs(
+                self.allocator,
+                self.config.sessions_dir,
+                active_ids.items,
+            ) catch |err| blk: {
+                std.log.warn("failed to clear inactive session history: {t}", .{err});
+                break :blk cleanup.MaintenanceResult{};
+            };
+            result.add(removed);
             self.pruneMissingEventLogMetadataLocked();
         }
 
@@ -365,12 +358,6 @@ pub const Daemon = struct {
     }
 
     fn handleCleanupLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-        const io = self.io orelse return rpc.responseJsonAlloc(allocator, .{
-            .id = request.requestId(),
-            .ok = false,
-            .error_message = "storage is not prepared",
-        });
-
         var active_ids: std.ArrayList([]const u8) = .empty;
         defer active_ids.deinit(self.allocator);
 
@@ -384,7 +371,7 @@ pub const Daemon = struct {
             }
         }
 
-        const result = cleanup.runSessionRetention(self.allocator, io, self.config.sessions_dir, .{
+        const result = cleanup.runSessionRetention(self.allocator, self.config.sessions_dir, .{
             .retain_days = request.requestRetainDays() orelse 30,
             .max_session_bytes = request.requestMaxSessionBytes() orelse 2 * 1024 * 1024 * 1024,
             .active_session_ids = active_ids.items,
@@ -981,25 +968,23 @@ pub const Daemon = struct {
     }
 
     fn lock(self: *Daemon) void {
-        while (!self.mutex.tryLock()) {
-            std.Thread.yield() catch {};
-        }
+        self.mutex.lock();
     }
 
     fn unlock(self: *Daemon) void {
         self.mutex.unlock();
     }
 
-    fn writePidFile(self: *Daemon, io: std.Io) !void {
+    fn writePidFile(self: *Daemon) !void {
         var buffer: [64]u8 = undefined;
         const pid_text = try std.fmt.bufPrint(&buffer, "{d}\n", .{std.c.getpid()});
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.config.pid_path, .data = pid_text });
+        try std.fs.cwd().writeFile(.{ .sub_path = self.config.pid_path, .data = pid_text });
     }
 };
 
 const ConnectionContext = struct {
     daemon: *Daemon,
-    stream: std.Io.net.Stream,
+    stream: std.net.Stream,
 };
 
 const ControlPayload = struct {
@@ -1309,7 +1294,7 @@ test "daemon detach checkpoints current-screen snapshot" {
 
     var daemon = Daemon.init(std.testing.allocator, config);
     defer daemon.deinit();
-    try daemon.prepareStorage(std.testing.io);
+    try daemon.prepareStorage();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
         \\{"id":"1","method":"create","session_id":"snapshot-session","terminal_id":"snapshot-terminal","cols":24,"rows":4}

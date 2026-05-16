@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const VtBackend = enum {
-    /// Build with Tao's small fallback VT state. This keeps CI/builds working
-    /// while upstream libghostty-vt's Zig package catches up to Tao's Zig
-    /// toolchain.
+    /// Build with Tao's small fallback VT state. This keeps CI/builds
+    /// self-contained while the native libghostty-vt package integration is
+    /// wired behind this boundary.
     fallback,
 
     /// Link against a system-installed libghostty-vt C ABI. Use with:
@@ -24,6 +24,13 @@ pub fn build(b: *std.Build) void {
     options.addOption([]const u8, "vt_backend", @tagName(vt_backend));
     options.addOption(bool, "libghostty_vt_c", vt_backend == .libghostty_c);
 
+    const zig_sqlite = b.dependency("sqlite", .{
+        .target = target,
+        .optimize = optimize,
+        .fts5 = true,
+    });
+    const sqlite_module = zig_sqlite.module("sqlite");
+
     const mod = b.addModule("taod", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -31,6 +38,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
+    mod.addImport("sqlite", sqlite_module);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -41,7 +49,6 @@ pub fn build(b: *std.Build) void {
     });
     exe_mod.addOptions("build_options", options);
     if (target.result.os.tag == .linux) exe_mod.linkSystemLibrary("util", .{});
-    exe_mod.linkSystemLibrary("sqlite3", .{});
     if (vt_backend == .libghostty_c) exe_mod.linkSystemLibrary("ghostty-vt", .{});
 
     const exe = b.addExecutable(.{
@@ -58,7 +65,6 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     if (target.result.os.tag == .linux) mod.linkSystemLibrary("util", .{});
-    mod.linkSystemLibrary("sqlite3", .{});
     if (vt_backend == .libghostty_c) mod.linkSystemLibrary("ghostty-vt", .{});
     const mod_tests = b.addTest(.{ .root_module = mod });
 

@@ -43,7 +43,6 @@ pub fn shouldDeleteArchived(now_ms: i64, last_activity_ms: i64, policy: Retentio
 
 pub fn deleteSessionDir(
     allocator: std.mem.Allocator,
-    io: std.Io,
     sessions_dir: []const u8,
     session_id: []const u8,
 ) !MaintenanceResult {
@@ -53,25 +52,24 @@ pub fn deleteSessionDir(
     const path = try std.fs.path.join(allocator, &.{ sessions_dir, sanitized_id });
     defer allocator.free(path);
 
-    const size = directorySize(allocator, io, path) catch 0;
-    try deleteTree(io, path);
+    const size = directorySize(allocator, path) catch 0;
+    try deleteTree(path);
 
     return .{ .removed_sessions = 1, .removed_bytes = size };
 }
 
 pub fn deleteInactiveSessionDirs(
     allocator: std.mem.Allocator,
-    io: std.Io,
     sessions_dir: []const u8,
     active_session_ids: []const []const u8,
 ) !MaintenanceResult {
-    const dirs = try listSessionDirs(allocator, io, sessions_dir);
+    const dirs = try listSessionDirs(allocator, sessions_dir);
     defer deinitSessionDirs(allocator, dirs);
 
     var result: MaintenanceResult = .{};
     for (dirs) |dir| {
         if (isActiveSession(dir.session_id, active_session_ids)) continue;
-        const removed = try deletePath(io, dir.path, dir.size);
+        const removed = try deletePath(dir.path, dir.size);
         result.add(removed);
     }
     return result;
@@ -79,7 +77,6 @@ pub fn deleteInactiveSessionDirs(
 
 pub fn runSessionRetention(
     allocator: std.mem.Allocator,
-    io: std.Io,
     sessions_dir: []const u8,
     options: MaintenanceOptions,
 ) !MaintenanceResult {
@@ -89,19 +86,19 @@ pub fn runSessionRetention(
 
     var result: MaintenanceResult = .{};
     {
-        const dirs = try listSessionDirs(allocator, io, sessions_dir);
+        const dirs = try listSessionDirs(allocator, sessions_dir);
         defer deinitSessionDirs(allocator, dirs);
         std.mem.sort(SessionDirInfo, dirs, {}, sessionDirOlderThan);
 
         for (dirs) |dir| {
             if (isActiveSession(dir.session_id, options.active_session_ids)) continue;
             if (options.retain_days != 0 and dir.mtime_ms >= cutoff_ms) continue;
-            const removed = try deletePath(io, dir.path, dir.size);
+            const removed = try deletePath(dir.path, dir.size);
             result.add(removed);
         }
     }
 
-    const dirs = try listSessionDirs(allocator, io, sessions_dir);
+    const dirs = try listSessionDirs(allocator, sessions_dir);
     defer deinitSessionDirs(allocator, dirs);
     std.mem.sort(SessionDirInfo, dirs, {}, sessionDirOlderThan);
 
@@ -112,7 +109,7 @@ pub fn runSessionRetention(
         if (total_bytes <= options.max_session_bytes) break;
         if (isActiveSession(dir.session_id, options.active_session_ids)) continue;
 
-        const removed = try deletePath(io, dir.path, dir.size);
+        const removed = try deletePath(dir.path, dir.size);
         result.add(removed);
         total_bytes -|= dir.size;
     }
@@ -127,12 +124,12 @@ pub fn isActiveSession(session_id: []const u8, active_session_ids: []const []con
     return false;
 }
 
-fn listSessionDirs(allocator: std.mem.Allocator, io: std.Io, sessions_dir: []const u8) ![]SessionDirInfo {
-    var dir = std.Io.Dir.cwd().openDir(io, sessions_dir, .{ .iterate = true }) catch |err| switch (err) {
+fn listSessionDirs(allocator: std.mem.Allocator, sessions_dir: []const u8) ![]SessionDirInfo {
+    var dir = std.fs.cwd().openDir(sessions_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return allocator.alloc(SessionDirInfo, 0),
         else => return err,
     };
-    defer dir.close(io);
+    defer dir.close();
 
     var dirs: std.ArrayList(SessionDirInfo) = .empty;
     errdefer {
@@ -141,21 +138,21 @@ fn listSessionDirs(allocator: std.mem.Allocator, io: std.Io, sessions_dir: []con
     }
 
     var iterator = dir.iterate();
-    while (try iterator.next(io)) |entry| {
+    while (try iterator.next()) |entry| {
         if (entry.kind != .directory) continue;
 
-        const stat = dir.statFile(io, entry.name, .{}) catch continue;
+        const stat = dir.statFile(entry.name) catch continue;
 
         const session_id = try allocator.dupe(u8, entry.name);
         errdefer allocator.free(session_id);
         const path = try std.fs.path.join(allocator, &.{ sessions_dir, entry.name });
         errdefer allocator.free(path);
 
-        const size = directorySize(allocator, io, path) catch 0;
+        const size = directorySize(allocator, path) catch 0;
         try dirs.append(allocator, .{
             .session_id = session_id,
             .path = path,
-            .mtime_ms = stat.mtime.toMilliseconds(),
+            .mtime_ms = @intCast(@divTrunc(stat.mtime, std.time.ns_per_ms)),
             .size = size,
         });
     }
@@ -168,24 +165,24 @@ fn deinitSessionDirs(allocator: std.mem.Allocator, dirs: []SessionDirInfo) void 
     allocator.free(dirs);
 }
 
-fn directorySize(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !u64 {
-    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |err| switch (err) {
+fn directorySize(allocator: std.mem.Allocator, path: []const u8) !u64 {
+    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return 0,
         else => return err,
     };
-    defer dir.close(io);
+    defer dir.close();
 
     var total: u64 = 0;
     var iterator = dir.iterate();
-    while (try iterator.next(io)) |entry| {
+    while (try iterator.next()) |entry| {
         switch (entry.kind) {
             .directory => {
                 const child_path = try std.fs.path.join(allocator, &.{ path, entry.name });
                 defer allocator.free(child_path);
-                total += directorySize(allocator, io, child_path) catch 0;
+                total += directorySize(allocator, child_path) catch 0;
             },
             .file => {
-                const stat = dir.statFile(io, entry.name, .{}) catch continue;
+                const stat = dir.statFile(entry.name) catch continue;
                 total += stat.size;
             },
             else => {},
@@ -195,13 +192,13 @@ fn directorySize(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !u6
     return total;
 }
 
-fn deletePath(io: std.Io, path: []const u8, size: u64) !MaintenanceResult {
-    try deleteTree(io, path);
+fn deletePath(path: []const u8, size: u64) !MaintenanceResult {
+    try deleteTree(path);
     return .{ .removed_sessions = 1, .removed_bytes = size };
 }
 
-fn deleteTree(io: std.Io, path: []const u8) !void {
-    return std.Io.Dir.cwd().deleteTree(io, path);
+fn deleteTree(path: []const u8) !void {
+    return std.fs.cwd().deleteTree(path);
 }
 
 fn sessionDirOlderThan(_: void, lhs: SessionDirInfo, rhs: SessionDirInfo) bool {
@@ -243,7 +240,7 @@ test "retention cleanup removes inactive session dirs and preserves active ones"
     try event_log.appendFramePath(allocator, inactive.event_log_path, .output, 1, "delete-me");
 
     const active_ids = [_][]const u8{"active-session"};
-    const result = try runSessionRetention(allocator, std.testing.io, sessions_dir, .{
+    const result = try runSessionRetention(allocator, sessions_dir, .{
         .retain_days = 30,
         .max_session_bytes = 1,
         .active_session_ids = &active_ids,

@@ -89,7 +89,7 @@ pnpm zig:check        # Zig-only lint + format check + tests
 pnpm fmt:nix:check    # Check flake.nix formatting
 ```
 
-`nix develop` provides `zig 0.16`, `zls` for Zig LSP, Node 22, pnpm 10, and `nixpkgs-fmt`.
+`nix develop` provides Zig 0.15.x, matching ZLS, Node 22, pnpm 10, and `nixpkgs-fmt`.
 
 ## License
 

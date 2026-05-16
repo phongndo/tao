@@ -22,8 +22,8 @@
           nativeBuildInputs = with pkgs; [
             nodejs_22 # LTS (matches CI)
             pnpm_10 # Package manager
-            zig_0_16 # taod daemon + Ghostty/Zig tooling
-            zls # Zig language server
+            zig_0_15 # taod daemon + Ghostty/Zig tooling
+            zls_0_15 # Zig language server matching Zig 0.15.x
             nixpkgs-fmt # nix fmt / CI format check
           ];
 

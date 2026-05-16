@@ -151,7 +151,7 @@ pub const Driver = struct {
     }
 
     pub fn terminate(_: *Driver, child: *Child) PtyError!void {
-        if (child.pid > 0 and std.c.kill(child.pid, .TERM) != 0) return error.KillFailed;
+        if (child.pid > 0 and std.c.kill(child.pid, std.c.SIG.TERM) != 0) return error.KillFailed;
         child.close();
     }
 
@@ -166,10 +166,10 @@ pub const Driver = struct {
         const raw_status: u32 = @bitCast(status);
         child.pid = 0;
         if (std.c.W.IFEXITED(raw_status)) {
-            return .{ .exit_code = std.c.W.EXITSTATUS(raw_status), .signal = 0 };
+            return .{ .exit_code = @intCast(std.c.W.EXITSTATUS(raw_status)), .signal = 0 };
         }
         if (std.c.W.IFSIGNALED(raw_status)) {
-            return .{ .exit_code = -1, .signal = @intCast(@intFromEnum(std.c.W.TERMSIG(raw_status))) };
+            return .{ .exit_code = -1, .signal = @intCast(std.c.W.TERMSIG(raw_status)) };
         }
 
         return .{ .exit_code = -1, .signal = 0 };

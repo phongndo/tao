@@ -7,7 +7,14 @@ import { spawnSync } from 'node:child_process'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const [command = 'help', ...targets] = process.argv.slice(2)
 const targetRoots = targets.length > 0 ? targets : ['apps/daemon']
-const ignoredDirectories = new Set(['.git', '.zig-cache', 'zig-cache', 'zig-out', 'node_modules'])
+const ignoredDirectories = new Set([
+  '.git',
+  '.zig-cache',
+  'zig-cache',
+  'zig-out',
+  'zig-pkg',
+  'node_modules',
+])
 
 function usage() {
   console.error(`Usage: node scripts/zig-tools.mjs <fmt|fmt:check|lint> [paths...]`)
