@@ -96,12 +96,95 @@ async function loadTerminalFonts(): Promise<void> {
 }
 
 function renderTerminalError(container: HTMLElement, err: unknown) {
+  container.classList.remove('terminal-surface-restoring')
   const errorNode = document.createElement('div')
   errorNode.style.color = '#f7768e'
   errorNode.style.padding = '2rem'
   errorNode.style.fontFamily = 'monospace'
   errorNode.textContent = `Error opening terminal: ${String(err)}`
   container.replaceChildren(errorNode)
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+}
+
+function forceTerminalRender(term: Terminal): void {
+  if (term.renderer && term.wasmTerm) {
+    term.renderer.render(term.wasmTerm, true, term.viewportY, term)
+  }
+}
+
+async function revealTerminalAfterStableRender(
+  container: HTMLElement,
+  term: Terminal,
+): Promise<void> {
+  forceTerminalRender(term)
+  // Wait for Chromium to present the final post-replay resize/render. Without this gate, cold replay
+  // can briefly show historical replay dimensions before the current pane fit is applied.
+  await nextAnimationFrame()
+  await nextAnimationFrame()
+  container.classList.remove('terminal-surface-restoring')
+}
+
+function observeTerminalResize(
+  container: HTMLElement,
+  term: Terminal,
+  fitAddon: FitAddon,
+): () => void {
+  let resizeFrame: number | null = null
+  let resizeEpoch = 0
+  let disposed = false
+  let lastWidth = container.clientWidth
+  let lastHeight = container.clientHeight
+
+  async function revealAfterResize(epoch: number) {
+    await nextAnimationFrame()
+    await nextAnimationFrame()
+    if (!disposed && epoch === resizeEpoch) {
+      container.classList.remove('terminal-surface-layout-pending')
+    }
+  }
+
+  function scheduleFit() {
+    const epoch = ++resizeEpoch
+    container.classList.add('terminal-surface-layout-pending')
+
+    if (resizeFrame !== null) {
+      window.cancelAnimationFrame(resizeFrame)
+    }
+
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = null
+      if (disposed) return
+
+      fitAddon.fit()
+      forceTerminalRender(term)
+      void revealAfterResize(epoch)
+    })
+  }
+
+  const observer = new ResizeObserver((entries) => {
+    const rect = entries[0]?.contentRect
+    const width = rect?.width ?? container.clientWidth
+    const height = rect?.height ?? container.clientHeight
+    if (width === lastWidth && height === lastHeight) return
+
+    lastWidth = width
+    lastHeight = height
+    scheduleFit()
+  })
+  observer.observe(container)
+
+  return () => {
+    disposed = true
+    observer.disconnect()
+    if (resizeFrame !== null) {
+      window.cancelAnimationFrame(resizeFrame)
+      resizeFrame = null
+    }
+    container.classList.remove('terminal-surface-layout-pending')
+  }
 }
 
 export function setTerminalCursorVisible(term: Terminal, visible: boolean) {
@@ -159,6 +242,7 @@ export async function createTerminal(
       container.removeChild(container.firstChild)
     }
 
+    container.classList.add('terminal-surface-restoring')
     term.open(container)
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
@@ -178,9 +262,10 @@ export async function createTerminal(
 
   const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
   const fitAddon = new FitAddon()
+  let stopResizeObserver: (() => void) | null = null
 
   term.loadAddon(fitAddon)
-  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  await nextAnimationFrame()
   fitAddon.fit()
 
   const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
@@ -194,6 +279,19 @@ export async function createTerminal(
     term.write(data)
   })
 
+  let applyingReplayResize = false
+  const unsubSessionResize = window.electronAPI.onSessionResize(sessionId, (cols, rows) => {
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return
+    if (cols === term.cols && rows === term.rows) return
+
+    applyingReplayResize = true
+    try {
+      term.resize(Math.floor(cols), Math.floor(rows))
+    } finally {
+      applyingReplayResize = false
+    }
+  })
+
   // Terminal input → PTY (no debug overhead)
   term.onData((data: string) => {
     window.electronAPI.sendPtyInput(sessionId, data)
@@ -203,6 +301,8 @@ export async function createTerminal(
   let resizeFrame: number | null = null
 
   term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
+    if (applyingReplayResize) return
+
     pendingResize = { cols, rows }
     if (resizeFrame !== null) return
 
@@ -233,27 +333,32 @@ export async function createTerminal(
   )
 
   try {
-    const initialPtySize = await window.electronAPI.spawnPty(
+    const attachedSession = await window.electronAPI.attachSession({
       sessionId,
-      term.cols,
-      term.rows,
-      options.cwd,
-    )
+      cols: term.cols,
+      rows: term.rows,
+      cwd: options.cwd,
+    })
+    const initialPtySize = { cols: attachedSession.cols, rows: attachedSession.rows }
     if (initialPtySize.cols !== term.cols || initialPtySize.rows !== term.rows) {
       term.resize(initialPtySize.cols, initialPtySize.rows)
     }
+    fitAddon.fit()
+    await revealTerminalAfterStableRender(container, term)
   } catch (err) {
     unsubPtyData()
+    unsubSessionResize()
     unsubPtyError()
     unsubPtyExit()
     fitAddon.dispose()
     term.dispose()
     window.electronAPI.killPty(sessionId)
+    container.classList.remove('terminal-surface-restoring')
     renderTerminalError(container, err)
     throw err
   }
 
-  fitAddon.observeResize()
+  stopResizeObserver = observeTerminalResize(container, term, fitAddon)
 
   // Cleanup
   const originalDispose = term.dispose.bind(term)
@@ -264,8 +369,13 @@ export async function createTerminal(
     }
     pendingResize = null
     unsubPtyData()
+    unsubSessionResize()
     unsubPtyError()
     unsubPtyExit()
+    void window.electronAPI.detachSession(sessionId)
+    stopResizeObserver?.()
+    stopResizeObserver = null
+    container.classList.remove('terminal-surface-restoring')
     fitAddon.dispose()
     originalDispose()
   }

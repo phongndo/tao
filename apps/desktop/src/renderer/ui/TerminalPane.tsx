@@ -25,6 +25,7 @@ export function TerminalPane({
   const terminalRef = useRef<Terminal | null>(null)
   const onTitleChangeRef = useRef(onTitleChange)
   const cwdRef = useRef(cwd)
+  const terminalReadyRef = useRef(false)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
 
   useEffect(() => {
@@ -62,13 +63,14 @@ export function TerminalPane({
         }
 
         terminalRef.current = terminal
+        terminalReadyRef.current = true
         setTerminalCursorVisible(terminal, isActive)
         if (isActive) {
           terminal.focus()
+          window.electronAPI.signalReady()
         } else {
           terminal.blur()
         }
-        window.electronAPI.signalReady()
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error('[renderer] Failed:', err)
@@ -77,7 +79,7 @@ export function TerminalPane({
           message,
         })
         // Do not leave the BrowserWindow hidden if terminal initialization failed.
-        window.electronAPI.signalReady()
+        if (isActive) window.electronAPI.signalReady()
       }
     }
 
@@ -85,6 +87,7 @@ export function TerminalPane({
 
     return () => {
       disposed = true
+      terminalReadyRef.current = false
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
@@ -97,6 +100,7 @@ export function TerminalPane({
     setTerminalCursorVisible(terminal, isActive)
     if (isActive) {
       terminal.focus()
+      if (terminalReadyRef.current) window.electronAPI.signalReady()
     } else {
       terminal.blur()
     }

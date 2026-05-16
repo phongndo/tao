@@ -745,6 +745,11 @@ body {
   position: relative;
 }
 
+.terminal-surface-restoring,
+.terminal-surface-layout-pending {
+  opacity: 0;
+}
+
 /* ── Canvas: crisp text, GPU layer ── */
 .terminal-surface canvas {
   display: block;

@@ -726,6 +726,16 @@ export function App() {
   }, [activeWorkspaceKey, ensureWorkspaceTab, layoutLoaded])
 
   useEffect(() => {
+    if (!layoutLoaded) return
+
+    const activePane = activePaneId ? panes.find((pane) => pane.id === activePaneId) : null
+    if (!activePane || activePane.type !== 'terminal') {
+      const frame = window.requestAnimationFrame(() => window.electronAPI.signalReady())
+      return () => window.cancelAnimationFrame(frame)
+    }
+  }, [activePaneId, layoutLoaded, panes])
+
+  useEffect(() => {
     document.title = activeTab ? `${activeTab.name} — Tao` : 'Tao'
   }, [activeTab])
 

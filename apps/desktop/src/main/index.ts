@@ -100,8 +100,6 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 let mainWindow: BrowserWindow | null = null
 let ptyService: Electron.UtilityProcess | null = null
 
-const WINDOW_SHOW_FALLBACK_MS = 5000
-
 // ─── Window Creation ───
 
 function createWindow() {
@@ -144,13 +142,6 @@ function createWindow() {
       v8CacheOptions: 'bypassHeatCheck',
     },
   })
-
-  const showFallbackTimer = setTimeout(() => {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      mainWindow.show()
-      mainWindow.focus()
-    }
-  }, WINDOW_SHOW_FALLBACK_MS)
 
   // Remove menu bar (cleaner look, fewer resources)
   mainWindow.setMenuBarVisibility(false)
@@ -235,17 +226,11 @@ function createWindow() {
   // Load the renderer
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  mainWindow.once('show', () => {
-    clearTimeout(showFallbackTimer)
-  })
-
   mainWindow.on('closed', () => {
-    clearTimeout(showFallbackTimer)
     mainWindow = null
   })
 }
