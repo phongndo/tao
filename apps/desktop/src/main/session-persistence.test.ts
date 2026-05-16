@@ -97,3 +97,36 @@ test('cleanup honors retention, total-size cap, and active sessions', () => {
   assert.throws(() => readFileSync(old.eventLogPath))
   assert.throws(() => readFileSync(cap.eventLogPath))
 })
+
+test('resetPersistentSession clears logs while keeping the session writable', () => {
+  const session = persistence.openPersistentSession('reset-session')
+  persistence.appendOutput(session, 'secret')
+
+  persistence.resetPersistentSession(session)
+
+  assert.equal(session.seq, 0n)
+  assert.equal(persistence.readReplayOutput('reset-session'), '')
+  persistence.appendOutput(session, 'after')
+  assert.equal(persistence.readReplayOutput('reset-session'), 'after')
+})
+
+test('clearSessionPersistence removes a session directory', () => {
+  const session = persistence.openPersistentSession('clear-one-session')
+  persistence.appendOutput(session, 'remove me')
+
+  persistence.clearSessionPersistence('clear-one-session')
+
+  assert.throws(() => readFileSync(session.eventLogPath))
+})
+
+test('clearAllSessionPersistence preserves active sessions', () => {
+  const active = persistence.openPersistentSession('clear-active-session')
+  persistence.appendOutput(active, 'keep')
+  const inactive = persistence.openPersistentSession('clear-inactive-session')
+  persistence.appendOutput(inactive, 'drop')
+
+  persistence.clearAllSessionPersistence({ activeSessionIds: new Set(['clear-active-session']) })
+
+  assert.equal(persistence.readReplayOutput('clear-active-session'), 'keep')
+  assert.throws(() => readFileSync(inactive.eventLogPath))
+})

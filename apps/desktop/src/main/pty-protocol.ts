@@ -38,6 +38,10 @@ export const PtyClientMessageSchema = Schema.Union([
     rows: Schema.Number,
   }),
   Schema.Struct({ type: Schema.Literal('kill'), sessionId: SessionIdSchema }),
+  Schema.Struct({
+    type: Schema.Literal('clear-history'),
+    sessionIds: Schema.optional(Schema.Array(SessionIdSchema)),
+  }),
 ])
 
 export const PtyServiceMessageSchema = Schema.Union([

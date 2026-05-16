@@ -58,6 +58,9 @@ storage while the larger `taod` work is pending.
 - **Current file-store retention maintenance**: the utility PTY service periodically applies the
   persistence retention settings to inactive session directories while preserving known live
   sessions.
+- **Clear-history controls for the current file store**: users can clear persisted history for the
+  active pane, for a workspace's known sessions, or for all session directories; live shells keep
+  running and their event logs are reset instead of killing the PTY.
 - **Explicit transitional session APIs**: preload now exposes `createSession`, `attachSession`,
   `detachSession`, `writeSessionInput`, `resizeSession`, `killSession`, and `onSessionOutput`
   wrappers over the existing utility PTY bridge.
@@ -84,21 +87,19 @@ storage while the larger `taod` work is pending.
   view exists.
 - There is **no SQLite metadata layer yet**. Session metadata is implicit in files and layout JSON.
 - There are **no agent adapters or native AI CLI resume hooks yet**.
-- There is **no search/FTS, clear-history UX, or persistence privacy toggle yet**.
+- There is **no search/FTS or persistence privacy toggle yet**.
 
 ### Next recommended work
 
-1. **Add clear-history controls for the current file store** before persistence is on by default for
-   long-running users.
-2. **Add an explicit archived-session view** if visual history is needed before libghostty-vt
+1. **Add an explicit archived-session view** if visual history is needed before libghostty-vt
    snapshots; do not replay raw PTY tails into a new live shell.
-3. **Create the `apps/taod` skeleton** with socket accept loop, control RPC types, and a minimal PTY
+2. **Create the `apps/taod` skeleton** with socket accept loop, control RPC types, and a minimal PTY
    driver; keep the current Electron utility service as a fallback until the daemon is usable.
-4. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
+3. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
    PTYs.
-5. **Add SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
+4. **Add SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
    session files already being written.
-6. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
+5. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
    the largest unknown and should be isolated behind `apps/taod/src/vt.zig`.
 
 ---
@@ -107,11 +108,11 @@ storage while the larger `taod` work is pending.
 
 Tao should make explicit, honest guarantees:
 
-| Level | Scenario | Restore behavior |
-|---|---|---|
-| **1. Live reattach** | `taod` and the PTY process are still alive | Reattach to the same PTY and same AI CLI process. This is true full restore. |
-| **2. Agent resume** | PTY/process died, but Tao captured a supported AI CLI native session ID | Restore terminal snapshot immediately, spawn the adapter-specific resume command, attach to the new PTY. |
-| **3. Visual archive** | No live process and no known resume path | Restore terminal snapshot/transcript as an archived terminal view; user can start a fresh shell. |
+| Level                 | Scenario                                                                | Restore behavior                                                                                         |
+| --------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **1. Live reattach**  | `taod` and the PTY process are still alive                              | Reattach to the same PTY and same AI CLI process. This is true full restore.                             |
+| **2. Agent resume**   | PTY/process died, but Tao captured a supported AI CLI native session ID | Restore terminal snapshot immediately, spawn the adapter-specific resume command, attach to the new PTY. |
+| **3. Visual archive** | No live process and no known resume path                                | Restore terminal snapshot/transcript as an archived terminal view; user can start a fresh shell.         |
 
 Tao cannot generally resurrect arbitrary dead Unix process memory. Full live-process restore requires
 keeping the process alive in `taod`.
@@ -120,17 +121,17 @@ keeping the process alive in `taod`.
 
 ## Goals
 
-| Goal | Why |
-|---|---|
-| **Live AI CLI reattach** | Closing/restarting Tao UI must not kill long-running AI agent chats. |
-| **Instant visual restore** | Deserialize a libghostty-vt checkpoint, then replay only the small event-log tail. |
-| **Crash resilience** | Event logs allow recovery if the latest snapshot is missing/corrupted. |
-| **Agent-aware cold resume** | Capture native AI session IDs and relaunch supported agents after daemon/process death. |
-| **Pane/session correctness** | Sessions attach to logical terminal/pane IDs, not just workspaces. |
-| **Efficient hot path** | PTY output is bytes → log append → libghostty-vt parser → stream; no SQLite writes per chunk. |
-| **Searchable history** | Store bounded plaintext excerpts/FTS rows for search without indexing huge binary logs. |
-| **Effect-TS services** | DB/file/daemon services use Effect layers and typed errors across desktop/taod bridge. |
-| **Security/privacy** | Terminal logs can contain secrets; use restrictive permissions, retention controls, and clear-history UX. |
+| Goal                         | Why                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Live AI CLI reattach**     | Closing/restarting Tao UI must not kill long-running AI agent chats.                                      |
+| **Instant visual restore**   | Deserialize a libghostty-vt checkpoint, then replay only the small event-log tail.                        |
+| **Crash resilience**         | Event logs allow recovery if the latest snapshot is missing/corrupted.                                    |
+| **Agent-aware cold resume**  | Capture native AI session IDs and relaunch supported agents after daemon/process death.                   |
+| **Pane/session correctness** | Sessions attach to logical terminal/pane IDs, not just workspaces.                                        |
+| **Efficient hot path**       | PTY output is bytes → log append → libghostty-vt parser → stream; no SQLite writes per chunk.             |
+| **Searchable history**       | Store bounded plaintext excerpts/FTS rows for search without indexing huge binary logs.                   |
+| **Effect-TS services**       | DB/file/daemon services use Effect layers and typed errors across desktop/taod bridge.                    |
+| **Security/privacy**         | Terminal logs can contain secrets; use restrictive permissions, retention controls, and clear-history UX. |
 
 ---
 
@@ -178,12 +179,12 @@ Killing is explicit: `Kill Session`, `Stop Agent`, or retention cleanup after co
 
 ## Why Zig for `taod`
 
-| Factor | Reason |
-|---|---|
-| **libghostty-vt link** | `libghostty-vt` is Ghostty's embeddable VT core for parsing terminal sequences and maintaining terminal state. `taod` links it directly as a Zig library — no WASM, no JS ABI boundary. |
-| **Self-contained** | Single static binary. No Node runtime, no npm dependencies, no version conflicts with the Electron app. |
-| **Performance** | PTY hot path is memory-safe zero-copy: PTY read → libghostty-vt parser → event log append → socket broadcast. All in one process, no GC pauses. |
-| **Same snapshot format, two runtimes** | The serialization extension lives at the `libghostty-vt` layer and emits a stable snapshot format consumed by both native `taod` and the renderer's Ghostty WASM build. |
+| Factor                                 | Reason                                                                                                                                                                                  |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **libghostty-vt link**                 | `libghostty-vt` is Ghostty's embeddable VT core for parsing terminal sequences and maintaining terminal state. `taod` links it directly as a Zig library — no WASM, no JS ABI boundary. |
+| **Self-contained**                     | Single static binary. No Node runtime, no npm dependencies, no version conflicts with the Electron app.                                                                                 |
+| **Performance**                        | PTY hot path is memory-safe zero-copy: PTY read → libghostty-vt parser → event log append → socket broadcast. All in one process, no GC pauses.                                         |
+| **Same snapshot format, two runtimes** | The serialization extension lives at the `libghostty-vt` layer and emits a stable snapshot format consumed by both native `taod` and the renderer's Ghostty WASM build.                 |
 
 Trade-off acknowledged:
 
@@ -487,16 +488,16 @@ Repeated frames:
 
 Frame kinds:
 
-| Kind | Payload |
-|---|---|
-| `OUTPUT` | raw PTY bytes (use encoding:null) |
-| `INPUT` | optional user input bytes (default off, privacy setting) |
-| `RESIZE` | `{ cols: u16, rows: u16 }` |
-| `TITLE` | UTF-8 title string |
-| `CWD` | UTF-8 cwd string |
-| `AGENT_EVENT` | adapter-specific JSON |
-| `SNAPSHOT_MARK` | `{ snapshot_seq: u64, snapshot_path: str }` |
-| `EXIT` | `{ exit_code: i32, signal: i32 }` |
+| Kind            | Payload                                                  |
+| --------------- | -------------------------------------------------------- |
+| `OUTPUT`        | raw PTY bytes (use encoding:null)                        |
+| `INPUT`         | optional user input bytes (default off, privacy setting) |
+| `RESIZE`        | `{ cols: u16, rows: u16 }`                               |
+| `TITLE`         | UTF-8 title string                                       |
+| `CWD`           | UTF-8 cwd string                                         |
+| `AGENT_EVENT`   | adapter-specific JSON                                    |
+| `SNAPSHOT_MARK` | `{ snapshot_seq: u64, snapshot_path: str }`              |
+| `EXIT`          | `{ exit_code: i32, signal: i32 }`                        |
 
 Important rules:
 
@@ -602,16 +603,21 @@ switch (msg.command) {
     // Scan terminal output / env / files for native session id
     const sessionDir = msg.sessionDir
     const match = readFileSync(`${sessionDir}/events.taoev`)
-      .toString().match(/pi-session-([a-f0-9]+)/)
-    process.stdout.write(JSON.stringify({
-      nativeSessionId: match?.[1] ?? null
-    }) + '\n')
+      .toString()
+      .match(/pi-session-([a-f0-9]+)/)
+    process.stdout.write(
+      JSON.stringify({
+        nativeSessionId: match?.[1] ?? null,
+      }) + '\n',
+    )
     break
   }
   case 'resume-command': {
-    process.stdout.write(JSON.stringify({
-      argv: ['pi', '--session', msg.nativeSessionId]
-    }) + '\n')
+    process.stdout.write(
+      JSON.stringify({
+        argv: ['pi', '--session', msg.nativeSessionId],
+      }) + '\n',
+    )
     break
   }
 }
@@ -634,15 +640,15 @@ Tao opens previous terminal
 
 ## Source of Truth Decisions
 
-| Data | Source of truth | Notes |
-|---|---|---|
-| Terminal session metadata | SQLite | Written by taod. |
-| Agent resume metadata | SQLite | Written by taod via adapter scripts. |
-| Search excerpts | SQLite FTS | Bounded text only. |
-| UI layout/workspaces/tabs/panes | `pane-layouts.json` | Loaded before rendering app shell. |
-| User settings | `settings.json` | Human-editable. |
-| PTY output | `events.taoev` files | Append-only binary logs. |
-| Terminal state | `snapshot.state.zst` files | Compressed libghostty-vt snapshots. |
+| Data                            | Source of truth            | Notes                                |
+| ------------------------------- | -------------------------- | ------------------------------------ |
+| Terminal session metadata       | SQLite                     | Written by taod.                     |
+| Agent resume metadata           | SQLite                     | Written by taod via adapter scripts. |
+| Search excerpts                 | SQLite FTS                 | Bounded text only.                   |
+| UI layout/workspaces/tabs/panes | `pane-layouts.json`        | Loaded before rendering app shell.   |
+| User settings                   | `settings.json`            | Human-editable.                      |
+| PTY output                      | `events.taoev` files       | Append-only binary logs.             |
+| Terminal state                  | `snapshot.state.zst` files | Compressed libghostty-vt snapshots.  |
 
 ---
 
@@ -718,12 +724,16 @@ async function ensureTaodRunning() {
 ```json
 {
   "version": 2,
-  "workspaces": [
-    { "id": "tao:local", "name": "Local", "projectPath": null, "order": 0 }
-  ],
+  "workspaces": [{ "id": "tao:local", "name": "Local", "projectPath": null, "order": 0 }],
   "activeWorkspaceId": "tao:local",
   "tabs": [
-    { "id": "tab-xxx", "workspaceId": "tao:local", "name": "Terminal", "layout": "pane-yyy", "order": 0 }
+    {
+      "id": "tab-xxx",
+      "workspaceId": "tao:local",
+      "name": "Terminal",
+      "layout": "pane-yyy",
+      "order": 0
+    }
   ],
   "panes": [
     {
@@ -861,17 +871,17 @@ Configurable maintenance runs in taod:
 
 ## Edge Cases
 
-| Scenario | Handling |
-|---|---|
-| **Renderer crash/reload** | Reconnect to taod; live PTY never dies. |
-| **Electron app quit** | Default detach; taod keeps sessions alive. |
-| **Daemon crash** | Load latest snapshot + event tail. If agent resumable, spawn resume command via adapter. |
-| **Machine reboot** | No live PTY process. Use agent resume if available, else archive restore. |
-| **Snapshot corrupted** | CRC/version failure → load prior snapshot if available, else replay event log from start. |
-| **Event log tail huge** | Periodic snapshots bound replay. If renderer lags, taod sends fresh snapshot. |
-| **Resize during replay** | Event log includes RESIZE frames with seq; replay at correct dimensions. |
-| **Multiple panes per workspace** | Sessions keyed by terminal_id/lastSessionId, not workspace. |
-| **Secrets in terminal output** | User can disable persistence, reduce retention, clear history, or chmod session files. |
+| Scenario                         | Handling                                                                                  |
+| -------------------------------- | ----------------------------------------------------------------------------------------- |
+| **Renderer crash/reload**        | Reconnect to taod; live PTY never dies.                                                   |
+| **Electron app quit**            | Default detach; taod keeps sessions alive.                                                |
+| **Daemon crash**                 | Load latest snapshot + event tail. If agent resumable, spawn resume command via adapter.  |
+| **Machine reboot**               | No live PTY process. Use agent resume if available, else archive restore.                 |
+| **Snapshot corrupted**           | CRC/version failure → load prior snapshot if available, else replay event log from start. |
+| **Event log tail huge**          | Periodic snapshots bound replay. If renderer lags, taod sends fresh snapshot.             |
+| **Resize during replay**         | Event log includes RESIZE frames with seq; replay at correct dimensions.                  |
+| **Multiple panes per workspace** | Sessions keyed by terminal_id/lastSessionId, not workspace.                               |
+| **Secrets in terminal output**   | User can disable persistence, reduce retention, clear history, or chmod session files.    |
 
 ---
 
@@ -901,23 +911,23 @@ zig version  # 0.15.2+
 
 ## Implementation Order
 
-| Phase | Status | What | Est. time |
-|---|---|---|---|
-| **A** | **Done** | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair | Done |
-| **B** | **Partial** | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, explicit session IPC wrappers, and first-paint/render stability fixes. Raw cold replay is disabled until snapshots/archive view exist. Remaining: clear-history UX. | 3-5 days |
-| **0** | Not started | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt` | 1 week |
-| **1** | Not started | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager | 2 weeks |
-| **2** | Not started | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
-| **3** | Not started | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests | 1-2 weeks |
-| **4** | Not started | Add `libghostty-vt` snapshot extension (native + WASM exports) | 2-3 weeks |
-| **5** | Partial prototype | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests | 1 week |
-| **6** | Not started | Write SQLite layer (zig-sqlite, migrations, query functions) | 1 week |
-| **7** | Not started | Integrate daemon with Electron main (launch, socket client, IPC bridge) | 1 week |
-| **8** | Not started | Renderer attach from snapshot + live stream; remove old pty-service path | 1 week |
-| **9** | Not started | Add agent adapter spawning + pi/codex/claude adapter scripts | 1-2 weeks |
-| **10** | **Done for Electron slice** | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists. | Done |
-| **11** | Not started | Search excerpts / FTS, cleanup/retention, clear-history UX | 1 week |
-| **12** | Not started | Stress testing: crash, restart, daemon fail, large logs, agent resume | 1-2 weeks |
+| Phase  | Status                      | What                                                                                                                                                                                                                                                                                                  | Est. time |
+| ------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| **A**  | **Done**                    | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair                                                                                                                                | Done      |
+| **B**  | **Done**                    | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, explicit session IPC wrappers, first-paint/render stability fixes, and current-file-store clear-history controls. Raw cold replay is disabled until snapshots/archive view exist. | Done      |
+| **0**  | Not started                 | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt`                                                                                                                                                                                                                        | 1 week    |
+| **1**  | Not started                 | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager                                                                                                                                                                                                               | 2 weeks   |
+| **2**  | Not started                 | Write PTY driver (posix_openpt, fork/exec, raw byte read/write)                                                                                                                                                                                                                                       | 1 week    |
+| **3**  | Not started                 | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests                                                                                                                                                                                                                                          | 1-2 weeks |
+| **4**  | Not started                 | Add `libghostty-vt` snapshot extension (native + WASM exports)                                                                                                                                                                                                                                        | 2-3 weeks |
+| **5**  | Partial prototype           | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests                                                                                                                                                                                                       | 1 week    |
+| **6**  | Not started                 | Write SQLite layer (zig-sqlite, migrations, query functions)                                                                                                                                                                                                                                          | 1 week    |
+| **7**  | Not started                 | Integrate daemon with Electron main (launch, socket client, IPC bridge)                                                                                                                                                                                                                               | 1 week    |
+| **8**  | Not started                 | Renderer attach from snapshot + live stream; remove old pty-service path                                                                                                                                                                                                                              | 1 week    |
+| **9**  | Not started                 | Add agent adapter spawning + pi/codex/claude adapter scripts                                                                                                                                                                                                                                          | 1-2 weeks |
+| **10** | **Done for Electron slice** | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                     | Done      |
+| **11** | Not started                 | Search excerpts / FTS and daemon cleanup/retention                                                                                                                                                                                                                                                    | 1 week    |
+| **12** | Not started                 | Stress testing: crash, restart, daemon fail, large logs, agent resume                                                                                                                                                                                                                                 | 1-2 weeks |
 
 **Total**: roughly 10-14 weeks, dominated by the libghostty-vt snapshot extension and robust daemon
 lifecycle.

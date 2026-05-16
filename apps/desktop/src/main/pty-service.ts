@@ -5,8 +5,11 @@ import {
   appendExit,
   appendOutput,
   appendResize,
+  clearAllSessionPersistence,
+  clearSessionPersistence,
   cleanupSessionPersistence,
   openPersistentSession,
+  resetPersistentSession,
   type PersistentSession,
 } from './session-persistence'
 import { defaultSettings, readSettings } from './settings-store'
@@ -229,6 +232,34 @@ function killPty(sessionId: string) {
   sessions.delete(sessionId)
 }
 
+function clearActiveSessionHistory(sessionId: string, session: PtySession) {
+  flushPtyBuffer(sessionId)
+  resetPtyBuffer(session)
+  resetPersistentSession(session.persistence)
+
+  const size = session.manager.getColsRows()
+  const seq = appendResize(session.persistence, size.cols, size.rows)
+  postToClient({ type: 'ready', sessionId, size, seq: bigintToSafeNumber(seq) })
+}
+
+function clearSessionHistory(sessionIds?: readonly string[]) {
+  const targetSessionIds = sessionIds ? new Set(sessionIds) : null
+
+  for (const [sessionId, session] of sessions) {
+    if (targetSessionIds && !targetSessionIds.has(sessionId)) continue
+    clearActiveSessionHistory(sessionId, session)
+  }
+
+  if (targetSessionIds) {
+    for (const sessionId of targetSessionIds) {
+      if (!sessions.has(sessionId)) clearSessionPersistence(sessionId)
+    }
+    return
+  }
+
+  clearAllSessionPersistence({ activeSessionIds: new Set(sessions.keys()) })
+}
+
 function killAllPtys() {
   while (sessions.size > 0) {
     const sessionId = sessions.keys().next().value
@@ -284,6 +315,9 @@ function handleClientMessage(message: PtyClientMessage) {
     }
     case 'kill':
       killPty(message.sessionId)
+      break
+    case 'clear-history':
+      clearSessionHistory(message.sessionIds)
       break
   }
 }

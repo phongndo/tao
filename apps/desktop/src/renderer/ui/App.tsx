@@ -1,6 +1,7 @@
 import {
   FiChevronLeft,
   FiChevronRight,
+  FiDatabase,
   FiFolderPlus,
   FiGitBranch,
   FiMenu,
@@ -105,6 +106,7 @@ function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean 
 function WorkspaceItem({
   workspace,
   onReorderWorkspace,
+  onClearWorkspaceHistory,
 }: {
   workspace: Workspace
   onReorderWorkspace(
@@ -112,6 +114,7 @@ function WorkspaceItem({
     targetWorkspaceId: string,
     placement: ReorderPlacement,
   ): void
+  onClearWorkspaceHistory(workspaceId: string): void
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
@@ -162,6 +165,18 @@ function WorkspaceItem({
             <span>{branchLabel}</span>
           </span>
         </span>
+      </button>
+      <button
+        type="button"
+        className="icon-button workspace-history-button"
+        aria-label={`Clear persisted terminal history for ${workspace.name}`}
+        title="Clear persisted terminal history"
+        onClick={(event) => {
+          event.stopPropagation()
+          onClearWorkspaceHistory(workspace.id)
+        }}
+      >
+        <FiDatabase size={13} />
       </button>
       <button
         type="button"
@@ -328,6 +343,7 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace,
   onNextWorkspace,
   onNewTab,
+  onClearActiveHistory,
   onSelectTab,
   onCloseTab,
   onReorderTab,
@@ -342,6 +358,7 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace(): void
   onNextWorkspace(): void
   onNewTab(): void
+  onClearActiveHistory(): void
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
@@ -406,6 +423,15 @@ const TabBar = memo(function TabBar({
           )
         })}
       </div>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Clear active persisted terminal history"
+        title="Clear active persisted terminal history"
+        onClick={onClearActiveHistory}
+      >
+        <FiDatabase size={15} />
+      </button>
       <button
         type="button"
         className="icon-button"
@@ -661,6 +687,10 @@ export function App() {
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
   )
+  const activePane = useMemo(
+    () => (activePaneId ? (panes.find((pane) => pane.id === activePaneId) ?? null) : null),
+    [activePaneId, panes],
+  )
   const workspacePathById = useMemo(
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
     [workspaces],
@@ -835,6 +865,57 @@ export function App() {
     useTaoStore.getState().selectWorkspace(workspace.id)
   }
 
+  function getSessionIdsForWorkspace(workspaceId: string): string[] {
+    const tabIds = new Set(
+      tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => tab.id),
+    )
+    return Array.from(
+      new Set(
+        panes
+          .filter((pane) => tabIds.has(pane.tabId) && pane.type === 'terminal')
+          .map((pane) => pane.lastSessionId ?? pane.id),
+      ),
+    )
+  }
+
+  async function clearActiveTerminalHistory() {
+    const sessionId =
+      activePane && activePane.type === 'terminal'
+        ? (activePane.lastSessionId ?? activePane.id)
+        : null
+    if (!sessionId) return
+    if (!window.confirm('Clear persisted terminal history for the active pane?')) return
+
+    try {
+      await window.electronAPI.clearSessionHistory(sessionId)
+    } catch (error) {
+      console.warn('[history] Failed to clear active terminal history:', error)
+    }
+  }
+
+  async function clearWorkspaceHistory(workspaceId: string) {
+    const sessionIds = getSessionIdsForWorkspace(workspaceId)
+    if (sessionIds.length === 0) return
+    if (!window.confirm('Clear persisted terminal history for this workspace?')) return
+
+    try {
+      await window.electronAPI.clearWorkspaceSessionHistory(sessionIds)
+    } catch (error) {
+      console.warn('[history] Failed to clear workspace terminal history:', error)
+    }
+  }
+
+  async function clearAllHistory() {
+    if (!window.confirm('Clear all persisted terminal history? Live shells will keep running.'))
+      return
+
+    try {
+      await window.electronAPI.clearAllSessionHistory()
+    } catch (error) {
+      console.warn('[history] Failed to clear terminal history:', error)
+    }
+  }
+
   const handleResizeSidebar = useCallback(
     (nextWidth: number) => {
       const clampedWidth =
@@ -883,6 +964,15 @@ export function App() {
             >
               <FiFolderPlus size={15} />
             </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Clear all persisted terminal history"
+              title="Clear all persisted terminal history"
+              onClick={clearAllHistory}
+            >
+              <FiDatabase size={15} />
+            </button>
           </div>
           <div className="sidebar-content">
             {workspaces.length > 0 ? (
@@ -892,6 +982,7 @@ export function App() {
                     key={workspace.id}
                     workspace={workspace}
                     onReorderWorkspace={reorderWorkspace}
+                    onClearWorkspaceHistory={clearWorkspaceHistory}
                   />
                 ))}
               </div>
@@ -912,6 +1003,7 @@ export function App() {
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
             onNewTab={() => newTab(activeWorkspaceKey)}
+            onClearActiveHistory={clearActiveTerminalHistory}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}

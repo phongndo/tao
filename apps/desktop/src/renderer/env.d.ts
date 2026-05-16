@@ -27,6 +27,9 @@ export interface ElectronAPI {
   writeSessionInput(sessionId: string, data: Uint8Array): void
   resizeSession(sessionId: string, cols: number, rows: number): void
   killSession(sessionId: string): Promise<void>
+  clearSessionHistory(sessionId: string): Promise<void>
+  clearWorkspaceSessionHistory(sessionIds: string[]): Promise<void>
+  clearAllSessionHistory(): Promise<void>
   onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void
   onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void
   spawnPty(

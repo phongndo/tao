@@ -242,6 +242,30 @@ export function openPersistentSession(sessionId: string): PersistentSession {
   }
 }
 
+export function resetPersistentSession(session: PersistentSession): void {
+  ensureRoot()
+  rmSync(session.dir, { recursive: true, force: true })
+  mkdirSync(session.dir, { recursive: true, mode: 0o700 })
+  writeHeader(session.eventLogPath, session.id)
+  session.seq = 0n
+}
+
+export function clearSessionPersistence(sessionId: string): void {
+  rmSync(sessionDir(sessionId), { recursive: true, force: true })
+}
+
+export function clearAllSessionPersistence(
+  options: { activeSessionIds?: ReadonlySet<string> } = {},
+): void {
+  ensureRoot()
+
+  const activeSessionIds = options.activeSessionIds ?? new Set<string>()
+  for (const dir of listSessionDirs()) {
+    if (activeSessionIds.has(dir.sessionId)) continue
+    rmSync(dir.path, { recursive: true, force: true })
+  }
+}
+
 export function appendSessionFrame(
   session: PersistentSession,
   kind: EventFrameKind,

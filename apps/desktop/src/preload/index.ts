@@ -395,6 +395,30 @@ const electronAPI = {
     return Promise.resolve()
   },
 
+  clearSessionHistory(sessionId: string): Promise<void> {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return Promise.resolve()
+    queuePtyMessage({ type: 'clear-history', sessionIds: [sessionId] })
+    return Promise.resolve()
+  },
+
+  clearWorkspaceSessionHistory(sessionIds: string[]): Promise<void> {
+    if (!Array.isArray(sessionIds)) return Promise.resolve()
+    const uniqueSessionIds = Array.from(
+      new Set(
+        sessionIds.filter((sessionId) => typeof sessionId === 'string' && sessionId.length > 0),
+      ),
+    )
+    if (uniqueSessionIds.length === 0) return Promise.resolve()
+
+    queuePtyMessage({ type: 'clear-history', sessionIds: uniqueSessionIds })
+    return Promise.resolve()
+  },
+
+  clearAllSessionHistory(): Promise<void> {
+    queuePtyMessage({ type: 'clear-history' })
+    return Promise.resolve()
+  },
+
   onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void {
     const callbacks = callbacksFor(sessionOutputCallbacks, sessionId)
     callbacks.push(callback)

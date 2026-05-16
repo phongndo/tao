@@ -93,6 +93,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 4px;
   -webkit-app-region: no-drag;
 }
 
@@ -330,6 +331,7 @@ body {
 }
 
 .tao-sidebar-compact .workspace-details,
+.tao-sidebar-compact .workspace-history-button,
 .tao-sidebar-compact .workspace-danger-button {
   display: none;
 }
