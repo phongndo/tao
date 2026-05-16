@@ -23,7 +23,7 @@
     "bench:cross": "pnpm --filter @tao/desktop bench:cross",
     "bench:startup": "pnpm --filter @tao/desktop bench:startup",
     "bench:all": "pnpm --filter @tao/desktop bench:all",
-    "postinstall": "node scripts/fix-node-pty-perms.mjs",
+    "postinstall": "node scripts/fix-node-pty-perms.mjs && node scripts/fix-electron-install.mjs",
     "fmt": "pnpm exec oxfmt .",
     "fmt:check": "pnpm exec oxfmt --check .",
     "lint": "pnpm --filter @tao/desktop --filter @tao/shared lint",

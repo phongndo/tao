@@ -14,9 +14,11 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
+    "predev": "node ../../scripts/fix-electron-install.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "prestart": "node ../../scripts/fix-electron-install.mjs",
     "start": "electron .",
     "bench": "tsx bench/benchmark.ts",
     "bench:latency": "bash bench/latency-bench.sh",
