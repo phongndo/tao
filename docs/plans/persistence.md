@@ -51,8 +51,22 @@ storage while the larger `taod` work is pending.
   identity is separate from terminal session identity.
 - **Framed PTY event log prototype**: PTY output, resize, and exit frames are appended under
   `~/.tao/sessions/<session-id>/events.taoev` with sequence numbers and CRC checks.
-- **Bounded cold visual replay**: when a session ID is reopened and no live PTY is available, Tao
-  replays the bounded event-log tail into the new terminal before continuing with a fresh shell.
+- **Hardened event-log parsing**: replay readers validate the file header, frame CRCs, monotonic
+  sequence numbers, partial tails, resize frames, and bounded truncation. Raw cold replay into a
+  newly spawned shell is disabled in the Electron slice because replaying arbitrary PTY tails without
+  a VT snapshot can duplicate prompts or restore them at stale cursor positions.
+- **Current file-store retention maintenance**: the utility PTY service periodically applies the
+  persistence retention settings to inactive session directories while preserving known live
+  sessions.
+- **Explicit transitional session APIs**: preload now exposes `createSession`, `attachSession`,
+  `detachSession`, `writeSessionInput`, `resizeSession`, `killSession`, and `onSessionOutput`
+  wrappers over the existing utility PTY bridge.
+- **Event-log regression tests**: the TypeScript event-log bridge has tests for CRC rejection,
+  partial tails, bounded replay truncation, large logs, and cleanup behavior.
+- **First-paint/render stability fixes**: the Electron window is shown only after the active pane is
+  ready; inactive terminals no longer signal app readiness; automatic DevTools opening is disabled;
+  terminal surfaces stay hidden through initial fit/resize settle to avoid exposing intermediate
+  Ghostty renders.
 - **Utility PTY process survives renderer/window reloads better**: closing a BrowserWindow no longer
   immediately kills the utility PTY service; new renderer ports can reconnect to the same service.
 - **Electron install repair**: `scripts/fix-electron-install.mjs` repairs incomplete Electron binary
@@ -63,27 +77,28 @@ storage while the larger `taod` work is pending.
 - There is **no Zig `taod` daemon yet**. PTYs are still owned by the Electron utility process.
 - Live reattach currently works only while the utility process remains alive. It is not yet the
   durable app-independent daemon guarantee described below.
-- There are **no libghostty-vt snapshots yet**. Visual restore is bounded log replay, not instant
-  binary snapshot deserialization.
+- There are **no libghostty-vt snapshots yet**. Visual restore into a new live shell is intentionally
+  not attempted from raw PTY tails; instant binary snapshot deserialization remains daemon work.
+- Cold reopening a dead utility-process session currently starts a **fresh shell** rather than showing
+  an archived visual terminal. This avoids incorrect prompt replay until a real VT snapshot/archive
+  view exists.
 - There is **no SQLite metadata layer yet**. Session metadata is implicit in files and layout JSON.
 - There are **no agent adapters or native AI CLI resume hooks yet**.
-- There is **no search/FTS, retention cleanup, clear-history UX, or persistence privacy toggle yet**.
+- There is **no search/FTS, clear-history UX, or persistence privacy toggle yet**.
 
 ### Next recommended work
 
-1. **Harden the TypeScript event-log bridge**: add tests for frame CRC validation, partial/corrupt
-   tails, large logs, and replay truncation; avoid duplicate replay when reattaching to a live PTY.
-2. **Add explicit session IPC names**: introduce `createSession` / `attachSession` wrappers over the
-   current PTY API so the renderer stops thinking in raw `spawnPty` terms.
-3. **Add retention and clear-history controls for the current file store** before persistence is on by
-   default for long-running users.
-4. **Create the `apps/taod` skeleton** with socket accept loop, control RPC types, and a minimal PTY
+1. **Add clear-history controls for the current file store** before persistence is on by default for
+   long-running users.
+2. **Add an explicit archived-session view** if visual history is needed before libghostty-vt
+   snapshots; do not replay raw PTY tails into a new live shell.
+3. **Create the `apps/taod` skeleton** with socket accept loop, control RPC types, and a minimal PTY
    driver; keep the current Electron utility service as a fallback until the daemon is usable.
-5. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
+4. **Move event-log ownership from the utility service to `taod`** once the daemon can spawn and stream
    PTYs.
-6. **Add SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
+5. **Add SQLite migrations** for `terminal_sessions` and `agent_sessions`, initially mirroring the
    session files already being written.
-7. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
+6. **Prototype libghostty-vt snapshot serialization** after the daemon owns VT parsing; this remains
    the largest unknown and should be isolated behind `apps/taod/src/vt.zig`.
 
 ---
@@ -247,7 +262,7 @@ tao/
 │           └── taod-protocol.ts            NEW: daemon RPC/stream message schemas
 │
 ├── apps/
-│   ├── taod/                               NEW: Zig daemon package
+│   ├── daemon/                               NEW: Zig daemon package
 │   │   ├── build.zig
 │   │   ├── build.zig.zon
 │   │   ├── src/
@@ -888,8 +903,8 @@ zig version  # 0.15.2+
 
 | Phase | Status | What | Est. time |
 |---|---|---|---|
-| **A** | **Done** | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, bounded replay, Electron install repair | Done |
-| **B** | **Next** | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, and explicit session IPC wrappers | 3-5 days |
+| **A** | **Done** | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair | Done |
+| **B** | **Partial** | Harden current event-log implementation with tests, corruption handling, replay de-duplication, retention controls, explicit session IPC wrappers, and first-paint/render stability fixes. Raw cold replay is disabled until snapshots/archive view exist. Remaining: clear-history UX. | 3-5 days |
 | **0** | Not started | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt` | 1 week |
 | **1** | Not started | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager | 2 weeks |
 | **2** | Not started | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
