@@ -10,6 +10,7 @@ import type {
   AttachSessionResult,
   CreateSessionInput,
   CreateSessionResult,
+  CurrentScreenSnapshotFrame,
   ExitInfo,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
@@ -32,6 +33,10 @@ export interface ElectronAPI {
   clearWorkspaceSessionHistory(sessionIds: string[]): Promise<void>
   clearAllSessionHistory(): Promise<void>
   onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void
+  onSessionSnapshot(
+    sessionId: string,
+    callback: (frame: CurrentScreenSnapshotFrame) => void,
+  ): () => void
   onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void
   onSessionExit(sessionId: string, callback: (info: ExitInfo) => void): () => void
   spawnPty(

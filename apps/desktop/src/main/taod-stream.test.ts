@@ -1,5 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {
+  currentScreenCrc32,
+  decodeCurrentScreenSnapshot,
+  decodeFallbackCurrentScreenSnapshotPayload,
+  encodeCurrentScreenSnapshot,
+  encodeFallbackCurrentScreenSnapshot,
+  fallbackCurrentScreenSnapshotToAnsi,
+  fallbackScreenFromText,
+  isFallbackCurrentScreenSnapshot,
+} from '@tao/shared/current-screen-snapshot'
 import { TaodStreamFrameKind } from '@tao/shared/taod-protocol'
 import {
   decodeTaodExitPayload,
@@ -73,4 +83,97 @@ test('taod resize and exit payload helpers round-trip', () => {
   exitPayload.writeInt32BE(2, 0)
   exitPayload.writeInt32BE(15, 4)
   assert.deepEqual(decodeTaodExitPayload(exitPayload), { exitCode: 2, signal: 15 })
+})
+
+test('current-screen snapshot envelopes and fallback payloads round-trip', () => {
+  const screen = fallbackScreenFromText(6, 2, ['hello', 'VT'])
+  const fallback = encodeFallbackCurrentScreenSnapshot({
+    cols: 6,
+    rows: 2,
+    cursorX: 2,
+    cursorY: 1,
+    screen,
+  })
+  const envelope = encodeCurrentScreenSnapshot({
+    seq: 42,
+    cols: 6,
+    rows: 2,
+    backendName: 'fallback',
+    payload: fallback,
+  })
+
+  const decoded = decodeCurrentScreenSnapshot(envelope)
+  assert.equal(decoded.seq, 42)
+  assert.equal(decoded.backendName, 'fallback')
+  assert.equal(isFallbackCurrentScreenSnapshot(decoded), true)
+  assert.equal(decoded.payloadCrc32, currentScreenCrc32(fallback))
+
+  const decodedFallback = decodeFallbackCurrentScreenSnapshotPayload(decoded.payload)
+  assert.equal(decodedFallback.cols, 6)
+  assert.equal(decodedFallback.rows, 2)
+  assert.equal(decodedFallback.cursorX, 2)
+  assert.equal(decodedFallback.cursorY, 1)
+  assert.equal(
+    fallbackCurrentScreenSnapshotToAnsi(decodedFallback),
+    '\x1b[2J\x1b[1;1Hhello\x1b[2;1HVT\x1b[2;3H',
+  )
+})
+
+test('current-screen snapshot decoder rejects corrupt payload CRCs', () => {
+  const fallback = encodeFallbackCurrentScreenSnapshot({
+    cols: 4,
+    rows: 1,
+    screen: fallbackScreenFromText(4, 1, ['bad']),
+  })
+  const envelope = Buffer.from(
+    encodeCurrentScreenSnapshot({
+      seq: 1,
+      cols: 4,
+      rows: 1,
+      backendName: 'fallback',
+      payload: fallback,
+    }),
+  )
+  envelope[envelope.length - 1]! ^= 0xff
+
+  assert.throws(() => decodeCurrentScreenSnapshot(envelope), /CRC/u)
+})
+
+test('current-screen snapshot envelope is backend-compatible and gates fallback decoding', () => {
+  const nativeEnvelope = encodeCurrentScreenSnapshot({
+    seq: 7,
+    cols: 80,
+    rows: 24,
+    backendName: 'libghostty_c',
+    payload: Buffer.from('native-backend-state'),
+  })
+
+  const decoded = decodeCurrentScreenSnapshot(nativeEnvelope)
+  assert.equal(decoded.backendName, 'libghostty_c')
+  assert.equal(isFallbackCurrentScreenSnapshot(decoded), false)
+  assert.throws(() => decodeFallbackCurrentScreenSnapshotPayload(decoded.payload), /fallback/u)
+})
+
+test('taod stream parser accepts snapshot frames with current-screen envelopes', () => {
+  const payload = encodeCurrentScreenSnapshot({
+    seq: 3,
+    cols: 2,
+    rows: 1,
+    backendName: 'fallback',
+    payload: encodeFallbackCurrentScreenSnapshot({
+      cols: 2,
+      rows: 1,
+      screen: fallbackScreenFromText(2, 1, ['ok']),
+    }),
+  })
+  const encoded = encodeTaodStreamFrame({
+    kind: TaodStreamFrameKind.Snapshot,
+    sessionId: 'session-1',
+    seq: 3,
+    payload,
+  })
+
+  const frames = new TaodStreamFrameParser().push(encoded)
+  assert.equal(frames[0]?.kind, TaodStreamFrameKind.Snapshot)
+  assert.equal(decodeCurrentScreenSnapshot(frames[0]!.payload).seq, 3)
 })

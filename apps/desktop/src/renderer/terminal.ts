@@ -1,4 +1,11 @@
 import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
+import {
+  decodeCurrentScreenSnapshot,
+  decodeFallbackCurrentScreenSnapshotPayload,
+  fallbackCurrentScreenSnapshotToAnsi,
+  isFallbackCurrentScreenSnapshot,
+} from '@tao/shared/current-screen-snapshot'
+import type { CurrentScreenSnapshotFrame, OutputFrame } from '@tao/shared/taod-protocol'
 import { createOscTitleScanner } from './osc-title'
 
 type CreateTerminalOptions = {
@@ -44,6 +51,7 @@ const SIDEBAR_RESIZE_FIT_DELAY_MS = 80
 const STARTUP_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024
 const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
 const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
+const warnedSnapshotBackends = new Set<string>()
 
 let terminalFontsLoad: Promise<void> | null = null
 
@@ -111,6 +119,49 @@ function renderTerminalError(container: HTMLElement, err: unknown) {
 
 function nextAnimationFrame(): Promise<void> {
   return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+}
+
+function base64ToBytes(dataBase64: string): Uint8Array {
+  const binary = atob(dataBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+function warnUnsupportedSnapshotBackend(backendName: string) {
+  if (warnedSnapshotBackends.has(backendName)) return
+  warnedSnapshotBackends.add(backendName)
+  console.warn(`[terminal] current-screen snapshot backend is not renderable yet: ${backendName}`)
+}
+
+function tryApplyCurrentScreenSnapshot(term: Terminal, frame: CurrentScreenSnapshotFrame): number {
+  if (frame.live === false) return 0
+
+  try {
+    const envelope = decodeCurrentScreenSnapshot(base64ToBytes(frame.dataBase64))
+    if (!isFallbackCurrentScreenSnapshot(envelope)) {
+      warnUnsupportedSnapshotBackend(envelope.backendName)
+      return 0
+    }
+
+    const snapshot = decodeFallbackCurrentScreenSnapshotPayload(envelope.payload)
+    if (snapshot.cols !== envelope.cols || snapshot.rows !== envelope.rows) return 0
+
+    if (term.cols !== snapshot.cols || term.rows !== snapshot.rows) {
+      term.resize(snapshot.cols, snapshot.rows)
+    }
+
+    // This consumes only the daemon's live current-screen frame. It is deliberately not event-log
+    // scrollback replay, and the daemon cold-start path does not feed persisted snapshots into it.
+    term.write(fallbackCurrentScreenSnapshotToAnsi(snapshot))
+    forceTerminalRender(term)
+    return Math.max(frame.seq, envelope.seq)
+  } catch (error) {
+    console.warn('[terminal] ignored invalid current-screen snapshot:', error)
+    return 0
+  }
 }
 
 export function forceTerminalRender(term: Terminal): void {
@@ -277,7 +328,9 @@ export async function createTerminal(
   let archived = false
   let bufferingStartupOutput = true
   let bufferedStartupChars = 0
-  const bufferedStartupOutput: string[] = []
+  let pendingStartupSnapshot: CurrentScreenSnapshotFrame | null = null
+  let suppressOutputThroughSeq = 0
+  const bufferedStartupOutput: OutputFrame[] = []
 
   term.loadAddon(fitAddon)
   await nextAnimationFrame()
@@ -294,47 +347,59 @@ export async function createTerminal(
     openedTerm.write(data)
   }
 
-  function bufferStartupData(data: string) {
-    if (data.length === 0) return
-    bufferedStartupOutput.push(data)
-    bufferedStartupChars += data.length
+  function bufferStartupFrame(frame: OutputFrame) {
+    if (frame.data.length === 0) return
+    bufferedStartupOutput.push(frame)
+    bufferedStartupChars += frame.data.length
 
     while (
       bufferedStartupChars > STARTUP_OUTPUT_BUFFER_MAX_CHARS &&
       bufferedStartupOutput.length > 1
     ) {
-      bufferedStartupChars -= bufferedStartupOutput.shift()?.length ?? 0
+      bufferedStartupChars -= bufferedStartupOutput.shift()?.data.length ?? 0
     }
 
     if (
       bufferedStartupChars > STARTUP_OUTPUT_BUFFER_MAX_CHARS &&
       bufferedStartupOutput.length === 1
     ) {
-      bufferedStartupOutput[0] = bufferedStartupOutput[0]!.slice(-STARTUP_OUTPUT_BUFFER_MAX_CHARS)
-      bufferedStartupChars = bufferedStartupOutput[0]!.length
+      bufferedStartupOutput[0] = {
+        ...bufferedStartupOutput[0]!,
+        data: bufferedStartupOutput[0]!.data.slice(-STARTUP_OUTPUT_BUFFER_MAX_CHARS),
+      }
+      bufferedStartupChars = bufferedStartupOutput[0]!.data.length
     }
   }
 
-  function flushStartupOutput() {
+  function flushStartupOutput(skipThroughSeq: number) {
     bufferingStartupOutput = false
     if (bufferedStartupOutput.length === 0) return
 
-    const data =
-      bufferedStartupOutput.length === 1
-        ? bufferedStartupOutput[0]!
-        : bufferedStartupOutput.join('')
+    const data = bufferedStartupOutput
+      .filter((frame) => frame.seq <= 0 || frame.seq > skipThroughSeq)
+      .map((frame) => frame.data)
+      .join('')
     bufferedStartupOutput.length = 0
     bufferedStartupChars = 0
-    writePtyData(data)
+    if (data.length > 0) writePtyData(data)
   }
 
-  const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
-    if (bufferingStartupOutput) {
-      bufferStartupData(data)
+  const unsubSessionOutput = window.electronAPI.onSessionOutput(sessionId, (frame) => {
+    if (suppressOutputThroughSeq > 0 && frame.seq > 0 && frame.seq <= suppressOutputThroughSeq) {
       return
     }
 
-    writePtyData(data)
+    if (bufferingStartupOutput) {
+      bufferStartupFrame(frame)
+      return
+    }
+
+    writePtyData(frame.data)
+  })
+
+  const unsubSessionSnapshot = window.electronAPI.onSessionSnapshot(sessionId, (frame) => {
+    if (!bufferingStartupOutput || archived) return
+    pendingStartupSnapshot = frame
   })
 
   let applyingReplayResize = false
@@ -412,10 +477,16 @@ export async function createTerminal(
     // final resize makes Ghostty preserve/reflow the early shell prompt at the wrong screen origin,
     // which presents as a blank terminal until the next input-triggered repaint. Flush only after
     // the terminal dimensions have settled for first paint.
-    flushStartupOutput()
+    await nextAnimationFrame()
+    if (!archived && pendingStartupSnapshot) {
+      suppressOutputThroughSeq = tryApplyCurrentScreenSnapshot(term, pendingStartupSnapshot)
+      pendingStartupSnapshot = null
+    }
+    flushStartupOutput(suppressOutputThroughSeq)
     await revealTerminalAfterStableRender(container, term)
   } catch (err) {
-    unsubPtyData()
+    unsubSessionOutput()
+    unsubSessionSnapshot()
     unsubSessionResize()
     unsubPtyError()
     unsubPtyExit()
@@ -437,7 +508,8 @@ export async function createTerminal(
       resizeFrame = null
     }
     pendingResize = null
-    unsubPtyData()
+    unsubSessionOutput()
+    unsubSessionSnapshot()
     unsubSessionResize()
     unsubPtyError()
     unsubPtyExit()

@@ -282,6 +282,17 @@ export class TaodPtyBridge {
           })
           break
         }
+        case TaodStreamFrameKind.Snapshot: {
+          if (session.archived) return
+          this.post({
+            type: 'snapshot',
+            sessionId,
+            dataBase64: frame.payload.toString('base64'),
+            seq: frame.seq,
+            live: true,
+          })
+          break
+        }
         case TaodStreamFrameKind.Exit: {
           const exit = decodeTaodExitPayload(frame.payload) ?? { exitCode: -1 }
           this.post({ type: 'exit', sessionId, info: exit })

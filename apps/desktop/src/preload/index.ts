@@ -9,6 +9,7 @@ import type {
   AttachSessionResult,
   CreateSessionInput,
   CreateSessionResult,
+  CurrentScreenSnapshotFrame,
   ExitInfo,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
@@ -28,6 +29,7 @@ import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
 type PtyDataCallback = (data: string) => void
 type SessionOutputCallback = (frame: OutputFrame) => void
+type SessionSnapshotCallback = (frame: CurrentScreenSnapshotFrame) => void
 type SessionResizeCallback = (cols: number, rows: number) => void
 type SessionExitCallback = (info: ExitInfo) => void
 type PtyErrorCallback = (error: string) => void
@@ -62,8 +64,10 @@ let pendingClientMessages: PtyClientMessage[] = []
 const rendererShownWaiters: Array<() => void> = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, PendingDataState>()
+const pendingSnapshots = new Map<string, CurrentScreenSnapshotFrame>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
 const sessionOutputCallbacks = new Map<string, SessionOutputCallback[]>()
+const sessionSnapshotCallbacks = new Map<string, SessionSnapshotCallback[]>()
 const sessionResizeCallbacks = new Map<string, SessionResizeCallback[]>()
 const sessionExitCallbacks = new Map<string, SessionExitCallback[]>()
 const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
@@ -191,8 +195,10 @@ function clearSessionState(sessionId: string) {
   }
   readyStates.delete(sessionId)
   pendingData.delete(sessionId)
+  pendingSnapshots.delete(sessionId)
   ptyDataCallbacks.delete(sessionId)
   sessionOutputCallbacks.delete(sessionId)
+  sessionSnapshotCallbacks.delete(sessionId)
   sessionResizeCallbacks.delete(sessionId)
   sessionExitCallbacks.delete(sessionId)
   ptyErrorCallbacks.delete(sessionId)
@@ -244,6 +250,18 @@ function handleSessionOutput(frame: OutputFrame) {
   }
 }
 
+function handleSessionSnapshot(frame: CurrentScreenSnapshotFrame) {
+  const callbacks = sessionSnapshotCallbacks.get(frame.sessionId)
+  if (!callbacks || callbacks.length === 0) {
+    pendingSnapshots.set(frame.sessionId, frame)
+    return
+  }
+
+  for (const callback of callbacks) {
+    callback(frame)
+  }
+}
+
 function handlePtyMessage(message: PtyServiceMessage) {
   switch (message.type) {
     case 'ready':
@@ -261,6 +279,14 @@ function handlePtyMessage(message: PtyServiceMessage) {
       for (const callback of sessionResizeCallbacks.get(message.sessionId) ?? []) {
         callback(message.cols, message.rows)
       }
+      break
+    case 'snapshot':
+      handleSessionSnapshot({
+        sessionId: message.sessionId,
+        seq: message.seq ?? 0,
+        dataBase64: message.dataBase64,
+        live: message.live ?? true,
+      })
       break
     case 'error':
       rejectPtyReady(message.sessionId, new Error(message.error))
@@ -322,8 +348,10 @@ ipcRenderer.on('pty:service-error', (_event, error: string) => {
   const sessionIds = new Set([
     ...readyStates.keys(),
     ...pendingData.keys(),
+    ...pendingSnapshots.keys(),
     ...ptyDataCallbacks.keys(),
     ...sessionOutputCallbacks.keys(),
+    ...sessionSnapshotCallbacks.keys(),
     ...sessionResizeCallbacks.keys(),
     ...sessionExitCallbacks.keys(),
     ...ptyErrorCallbacks.keys(),
@@ -467,6 +495,20 @@ const electronAPI = {
     const callbacks = callbacksFor(sessionOutputCallbacks, sessionId)
     callbacks.push(callback)
     return () => removeCallback(sessionOutputCallbacks, sessionId, callback)
+  },
+
+  onSessionSnapshot(
+    sessionId: string,
+    callback: (frame: CurrentScreenSnapshotFrame) => void,
+  ): () => void {
+    const callbacks = callbacksFor(sessionSnapshotCallbacks, sessionId)
+    callbacks.push(callback)
+    const pendingSnapshot = pendingSnapshots.get(sessionId)
+    if (pendingSnapshot) {
+      pendingSnapshots.delete(sessionId)
+      callback(pendingSnapshot)
+    }
+    return () => removeCallback(sessionSnapshotCallbacks, sessionId, callback)
   },
 
   onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void {

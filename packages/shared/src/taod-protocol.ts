@@ -64,6 +64,13 @@ export const OutputFrameSchema = Schema.Struct({
   data: Schema.String,
 })
 
+export const CurrentScreenSnapshotFrameSchema = Schema.Struct({
+  sessionId: NonEmptyString,
+  seq: Schema.Number,
+  dataBase64: Schema.String,
+  live: Schema.optional(Schema.Boolean),
+})
+
 export const ExitInfoSchema = Schema.Struct({
   exitCode: Schema.Number,
   signal: Schema.optional(Schema.Number),
@@ -80,5 +87,6 @@ export type CreateSessionResult = Schema.Schema.Type<typeof CreateSessionResultS
 export type AttachSessionInput = Schema.Schema.Type<typeof AttachSessionInputSchema>
 export type AttachSessionResult = Schema.Schema.Type<typeof AttachSessionResultSchema>
 export type OutputFrame = Schema.Schema.Type<typeof OutputFrameSchema>
+export type CurrentScreenSnapshotFrame = Schema.Schema.Type<typeof CurrentScreenSnapshotFrameSchema>
 export type ExitInfo = Schema.Schema.Type<typeof ExitInfoSchema>
 export type AgentStatus = Schema.Schema.Type<typeof AgentStatusSchema>

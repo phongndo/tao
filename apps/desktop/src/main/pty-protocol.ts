@@ -70,6 +70,13 @@ export const PtyServiceMessageSchema = Schema.Union([
     replay: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
+    type: Schema.Literal('snapshot'),
+    sessionId: SessionIdSchema,
+    dataBase64: Schema.String,
+    seq: Schema.optional(Schema.Number),
+    live: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
     type: Schema.Literal('error'),
     sessionId: SessionIdSchema,
     error: Schema.String,

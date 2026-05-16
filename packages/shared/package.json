@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./app-command": "./src/app-command.ts",
+    "./current-screen-snapshot": "./src/current-screen-snapshot.ts",
     "./session": "./src/session.ts",
     "./storage-path": "./src/storage-path.ts",
     "./taod-protocol": "./src/taod-protocol.ts",
