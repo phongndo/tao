@@ -61,6 +61,7 @@ export const WorkspaceLayoutSchema = Schema.Struct({
   projectPath: Schema.NullOr(Schema.String),
   branch: Schema.optional(Schema.String),
   worktrees: Schema.optional(Schema.Array(Schema.Unknown)),
+  lastActiveTabId: Schema.optional(Schema.String),
   order: Schema.Number,
 })
 
@@ -69,6 +70,7 @@ export const TabLayoutSchema = Schema.Struct({
   workspaceId: Schema.String,
   name: Schema.String,
   layout: Schema.Unknown,
+  lastActivePaneId: Schema.optional(Schema.String),
   order: Schema.Number,
 })
 
@@ -94,6 +96,7 @@ export const PaneLayoutDataSchema = Schema.Struct({
   version: Schema.Number,
   workspaces: Schema.Array(WorkspaceLayoutSchema),
   activeWorkspaceId: Schema.NullOr(Schema.String),
+  lastActiveLocalTabId: Schema.optional(Schema.NullOr(Schema.String)),
   tabs: Schema.Array(TabLayoutSchema),
   panes: Schema.Array(PaneLayoutSchema),
   activeTabId: Schema.NullOr(Schema.String),

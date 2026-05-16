@@ -6,7 +6,6 @@ import {
   appendOutput,
   appendResize,
   openPersistentSession,
-  readReplayOutput,
   type PersistentSession,
 } from './session-persistence'
 import {
@@ -153,7 +152,6 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
 
   try {
     const persistence = openPersistentSession(sessionId)
-    const replay = readReplayOutput(sessionId)
     const manager = new PtyManager(shell, { cols, rows, cwd })
     const session: PtySession = {
       manager,
@@ -179,9 +177,6 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
       postToClient({ type: 'exit', sessionId, info: { exitCode, signal } })
     })
     postToClient({ type: 'ready', sessionId, size: manager.getColsRows() })
-    if (replay.length > 0) {
-      sendPtyData(sessionId, replay)
-    }
   } catch (err) {
     console.error(`[pty-service] Failed to spawn PTY ${sessionId}:`, err)
     postToClient({ type: 'error', sessionId, error: String(err) })

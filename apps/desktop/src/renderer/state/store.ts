@@ -11,6 +11,7 @@ export const LOCAL_WORKSPACE_ID = 'tao:local'
 export interface TaoState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
+  lastActiveLocalTabId: string | null
   tabs: Tab[]
   activeTabId: string | null
   panes: Pane[]
@@ -54,6 +55,7 @@ export interface Workspace {
   projectPath: string
   branch?: string
   worktrees?: WorktreeInfo[]
+  lastActiveTabId?: string
   order: number
 }
 
@@ -62,6 +64,7 @@ export interface Tab {
   workspaceId: string
   name: string
   layout: MosaicLayoutNode
+  lastActivePaneId?: string
   order: number
 }
 
@@ -96,6 +99,7 @@ const PersistedWorkspaceSchema = Schema.Struct({
   projectPath: Schema.String,
   branch: Schema.optional(Schema.String),
   worktrees: Schema.optional(Schema.Array(WorktreeInfoSchema)),
+  lastActiveTabId: Schema.optional(Schema.String),
   order: Schema.optional(Schema.Number),
 })
 
@@ -104,6 +108,7 @@ const PersistedTabSchema = Schema.Struct({
   workspaceId: Schema.String,
   name: Schema.String,
   layout: Schema.Unknown,
+  lastActivePaneId: Schema.optional(Schema.String),
   order: Schema.optional(Schema.Number),
 })
 
@@ -121,6 +126,7 @@ const PersistedPaneSchema = Schema.Struct({
 const PersistedTaoStateSchema = Schema.Struct({
   workspaces: Schema.optional(Schema.Array(PersistedWorkspaceSchema)),
   activeWorkspaceId: Schema.optional(Schema.NullOr(Schema.String)),
+  lastActiveLocalTabId: Schema.optional(Schema.NullOr(Schema.String)),
   tabs: Schema.optional(Schema.Array(PersistedTabSchema)),
   activeTabId: Schema.optional(Schema.NullOr(Schema.String)),
   panes: Schema.optional(Schema.Array(PersistedPaneSchema)),
@@ -173,6 +179,7 @@ function createTerminalTab(workspaceId: string, order: number): { tab: Tab; pane
       workspaceId,
       name: order === 0 ? 'Terminal' : `Terminal ${order + 1}`,
       layout: pane.id,
+      lastActivePaneId: pane.id,
       order,
     },
     pane,
@@ -194,6 +201,68 @@ function getPaneIdsInLayout(layout: MosaicLayoutNode): string[] {
 
 function getFirstPaneId(layout: MosaicLayoutNode): string | null {
   return getPaneIdsInLayout(layout)[0] ?? null
+}
+
+function getPreferredPaneId(tab: Tab): string | null {
+  return tab.lastActivePaneId && layoutContainsPane(tab.layout, tab.lastActivePaneId)
+    ? tab.lastActivePaneId
+    : getFirstPaneId(tab.layout)
+}
+
+function getPreferredWorkspaceTab(
+  tabs: Tab[],
+  workspaces: Workspace[],
+  workspaceId: string,
+  lastActiveLocalTabId?: string | null,
+): Tab | null {
+  const workspaceTabs = getWorkspaceTabs(tabs, workspaceId)
+  const workspace = workspaces.find((candidate) => candidate.id === workspaceId)
+  const preferredTabId =
+    workspaceId === LOCAL_WORKSPACE_ID ? lastActiveLocalTabId : workspace?.lastActiveTabId
+
+  return (
+    (preferredTabId ? workspaceTabs.find((tab) => tab.id === preferredTabId) : undefined) ??
+    workspaceTabs[0] ??
+    null
+  )
+}
+
+function rememberWorkspaceTab(
+  workspaces: Workspace[],
+  workspaceId: string,
+  tabId: string,
+): Workspace[] {
+  if (workspaceId === LOCAL_WORKSPACE_ID) return workspaces
+
+  let changed = false
+  const nextWorkspaces = workspaces.map((workspace) => {
+    if (workspace.id !== workspaceId) return workspace
+    if (workspace.lastActiveTabId === tabId) return workspace
+    changed = true
+    return { ...workspace, lastActiveTabId: tabId }
+  })
+
+  return changed ? nextWorkspaces : workspaces
+}
+
+function rememberLocalTab(
+  workspaceId: string,
+  tabId: string,
+): Pick<TaoState, 'lastActiveLocalTabId'> | {} {
+  return workspaceId === LOCAL_WORKSPACE_ID ? { lastActiveLocalTabId: tabId } : {}
+}
+
+function rememberTabPane(tabs: Tab[], tabId: string, paneId: string | null): Tab[] {
+  let changed = false
+  const nextTabs = tabs.map((tab) => {
+    if (tab.id !== tabId) return tab
+    const lastActivePaneId = paneId && layoutContainsPane(tab.layout, paneId) ? paneId : undefined
+    if (tab.lastActivePaneId === lastActivePaneId) return tab
+    changed = true
+    return { ...tab, lastActivePaneId }
+  })
+
+  return changed ? nextTabs : tabs
 }
 
 type PaneRect = {
@@ -370,16 +439,39 @@ function closeTabState(state: TaoState, tabId: string): Partial<TaoState> {
   const nextPanes = state.panes.filter((pane) => pane.tabId !== tabId && !paneIds.has(pane.id))
 
   if (state.activeTabId !== tabId) {
-    return { tabs: nextTabs, panes: nextPanes }
+    return {
+      tabs: nextTabs,
+      panes: nextPanes,
+      workspaces:
+        tab.workspaceId !== LOCAL_WORKSPACE_ID &&
+        state.workspaces.some((workspace) => workspace.lastActiveTabId === tabId)
+          ? state.workspaces.map((workspace) =>
+              workspace.id === tab.workspaceId && workspace.lastActiveTabId === tabId
+                ? {
+                    ...workspace,
+                    lastActiveTabId: getWorkspaceTabs(nextTabs, tab.workspaceId)[0]?.id,
+                  }
+                : workspace,
+            )
+          : state.workspaces,
+      ...(tab.workspaceId === LOCAL_WORKSPACE_ID && state.lastActiveLocalTabId === tabId
+        ? { lastActiveLocalTabId: getWorkspaceTabs(nextTabs, LOCAL_WORKSPACE_ID)[0]?.id ?? null }
+        : {}),
+    }
   }
 
   const nextActiveTab = getWorkspaceTabs(nextTabs, tab.workspaceId)[0] ?? null
+  const nextActivePaneId = nextActiveTab ? getPreferredPaneId(nextActiveTab) : null
 
   return {
     tabs: nextTabs,
     panes: nextPanes,
+    workspaces: nextActiveTab
+      ? rememberWorkspaceTab(state.workspaces, tab.workspaceId, nextActiveTab.id)
+      : state.workspaces,
+    ...(nextActiveTab ? rememberLocalTab(tab.workspaceId, nextActiveTab.id) : {}),
     activeTabId: nextActiveTab?.id ?? null,
-    activePaneId: nextActiveTab ? getFirstPaneId(nextActiveTab.layout) : null,
+    activePaneId: nextActivePaneId,
   }
 }
 
@@ -397,10 +489,12 @@ function closePaneState(state: TaoState, paneId: string): Partial<TaoState> {
   const nextPaneIds = new Set(paneIdsInLayout)
   const activePaneId =
     state.activePaneId === pane.id ? (paneIdsInLayout[0] ?? null) : state.activePaneId
+  const lastActivePaneId =
+    tab.lastActivePaneId === pane.id ? (activePaneId ?? undefined) : tab.lastActivePaneId
 
   return {
     tabs: state.tabs.map((candidate) =>
-      candidate.id === tab.id ? { ...candidate, layout } : candidate,
+      candidate.id === tab.id ? { ...candidate, layout, lastActivePaneId } : candidate,
     ),
     panes: state.panes.filter(
       (candidate) => candidate.tabId !== tab.id || nextPaneIds.has(candidate.id),
@@ -411,14 +505,15 @@ function closePaneState(state: TaoState, paneId: string): Partial<TaoState> {
 
 function ensureWorkspaceTabState(state: TaoState, workspaceId: string): Partial<TaoState> {
   const workspaceTabs = getWorkspaceTabs(state.tabs, workspaceId)
-  const existingTab = workspaceTabs.find((tab) => tab.id === state.activeTabId) ?? workspaceTabs[0]
+  const existingTab =
+    workspaceTabs.find((tab) => tab.id === state.activeTabId) ??
+    getPreferredWorkspaceTab(state.tabs, state.workspaces, workspaceId, state.lastActiveLocalTabId)
   if (existingTab) {
-    const activePaneId =
-      state.activePaneId && layoutContainsPane(existingTab.layout, state.activePaneId)
-        ? state.activePaneId
-        : getFirstPaneId(existingTab.layout)
+    const activePaneId = getPreferredPaneId(existingTab)
 
     return {
+      workspaces: rememberWorkspaceTab(state.workspaces, workspaceId, existingTab.id),
+      ...rememberLocalTab(workspaceId, existingTab.id),
       activeTabId: existingTab.id,
       activePaneId,
     }
@@ -428,6 +523,7 @@ function ensureWorkspaceTabState(state: TaoState, workspaceId: string): Partial<
   return {
     tabs: [...state.tabs, tab],
     panes: [...state.panes, pane],
+    ...rememberLocalTab(workspaceId, tab.id),
     activeTabId: tab.id,
     activePaneId: pane.id,
   }
@@ -524,6 +620,9 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
       ...workspace,
       name: sanitizeTerminalTitle(workspace.name) ?? workspaceNameFallback(workspace.projectPath),
       worktrees: workspace.worktrees ? [...workspace.worktrees] : undefined,
+      lastActiveTabId: isNonEmptyString(workspace.lastActiveTabId ?? '')
+        ? workspace.lastActiveTabId
+        : undefined,
       order,
     }))
 
@@ -561,19 +660,39 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
           ...tab,
           name: sanitizeTerminalTitle(tab.name) ?? 'Terminal',
           layout,
+          lastActivePaneId:
+            isNonEmptyString(tab.lastActivePaneId ?? '') &&
+            layoutContainsPane(layout, tab.lastActivePaneId!)
+              ? tab.lastActivePaneId
+              : (getFirstPaneId(layout) ?? undefined),
           order: finiteNumber(tab.order ?? 0, 0),
         },
       ]
     }),
   )
 
+  const tabIds = new Set(tabs.map((tab) => tab.id))
+  const repairedWorkspaces = workspaces.map((workspace) =>
+    workspace.lastActiveTabId && tabIds.has(workspace.lastActiveTabId)
+      ? workspace
+      : { ...workspace, lastActiveTabId: undefined },
+  )
+  const lastActiveLocalTabId =
+    persisted.lastActiveLocalTabId &&
+    tabs.some(
+      (tab) => tab.workspaceId === LOCAL_WORKSPACE_ID && tab.id === persisted.lastActiveLocalTabId,
+    )
+      ? persisted.lastActiveLocalTabId
+      : null
+
   return {
-    workspaces,
+    workspaces: repairedWorkspaces,
     activeWorkspaceId:
       persisted.activeWorkspaceId &&
       workspaces.some((workspace) => workspace.id === persisted.activeWorkspaceId)
         ? persisted.activeWorkspaceId
         : null,
+    lastActiveLocalTabId,
     tabs,
     activeTabId: persisted.activeTabId ?? null,
     panes: panes.filter((pane) => usedPaneIds.has(pane.id)),
@@ -604,6 +723,7 @@ function repairPersistedState(state: TaoState): TaoState {
 export const useTaoStore = create<TaoState>()((set) => ({
   workspaces: [],
   activeWorkspaceId: null,
+  lastActiveLocalTabId: initialLocalTab.tab.id,
   tabs: [initialLocalTab.tab],
   activeTabId: initialLocalTab.tab.id,
   panes: [initialLocalTab.pane],
@@ -619,17 +739,34 @@ export const useTaoStore = create<TaoState>()((set) => ({
     set((state) => {
       const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)
       if (existingWorkspace) {
+        const preferredTab = getPreferredWorkspaceTab(
+          state.tabs,
+          state.workspaces,
+          existingWorkspace.id,
+          state.lastActiveLocalTabId,
+        )
         return {
           activeWorkspaceId: existingWorkspace.id,
-          ...ensureWorkspaceTabState(state, existingWorkspace.id),
+          ...(preferredTab
+            ? {
+                activeTabId: preferredTab.id,
+                activePaneId: getPreferredPaneId(preferredTab),
+                workspaces: rememberWorkspaceTab(
+                  state.workspaces,
+                  existingWorkspace.id,
+                  preferredTab.id,
+                ),
+              }
+            : ensureWorkspaceTabState(state, existingWorkspace.id)),
         }
       }
 
-      const orderedWorkspace = {
+      const { tab, pane } = createTerminalTab(workspace.id, 0)
+      const orderedWorkspace: Workspace = {
         ...workspace,
+        lastActiveTabId: tab.id,
         order: state.workspaces.length,
       }
-      const { tab, pane } = createTerminalTab(orderedWorkspace.id, 0)
 
       return {
         workspaces: [...state.workspaces, orderedWorkspace],
@@ -657,8 +794,8 @@ export const useTaoStore = create<TaoState>()((set) => ({
 
       const nextState = { ...state, workspaces, tabs, panes, activeWorkspaceId }
       const nextTab = activeWorkspaceId
-        ? getWorkspaceTabs(tabs, activeWorkspaceId)[0]
-        : getWorkspaceTabs(tabs, LOCAL_WORKSPACE_ID)[0]
+        ? getPreferredWorkspaceTab(tabs, workspaces, activeWorkspaceId, state.lastActiveLocalTabId)
+        : getPreferredWorkspaceTab(tabs, workspaces, LOCAL_WORKSPACE_ID, state.lastActiveLocalTabId)
 
       return {
         workspaces,
@@ -666,7 +803,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
         tabs,
         panes,
         activeTabId: nextTab?.id ?? null,
-        activePaneId: nextTab ? getFirstPaneId(nextTab.layout) : null,
+        activePaneId: nextTab ? getPreferredPaneId(nextTab) : null,
         ...(activeWorkspaceId ? ensureWorkspaceTabState(nextState, activeWorkspaceId) : {}),
       }
     }),
@@ -696,6 +833,8 @@ export const useTaoStore = create<TaoState>()((set) => ({
       const { tab, pane } = createTerminalTab(targetWorkspaceId, order)
 
       return {
+        workspaces: rememberWorkspaceTab(state.workspaces, targetWorkspaceId, tab.id),
+        ...rememberLocalTab(targetWorkspaceId, tab.id),
         tabs: [...state.tabs, tab],
         activeTabId: tab.id,
         panes: [...state.panes, pane],
@@ -711,10 +850,12 @@ export const useTaoStore = create<TaoState>()((set) => ({
       if (!tab) return {}
 
       return {
+        workspaces: rememberWorkspaceTab(state.workspaces, tab.workspaceId, tab.id),
+        ...rememberLocalTab(tab.workspaceId, tab.id),
         activeWorkspaceId:
           tab.workspaceId === LOCAL_WORKSPACE_ID ? state.activeWorkspaceId : tab.workspaceId,
         activeTabId: tab.id,
-        activePaneId: getFirstPaneId(tab.layout),
+        activePaneId: getPreferredPaneId(tab),
       }
     }),
   selectTabByIndex: (index) =>
@@ -724,8 +865,10 @@ export const useTaoStore = create<TaoState>()((set) => ({
       if (!tab) return {}
 
       return {
+        workspaces: rememberWorkspaceTab(state.workspaces, tab.workspaceId, tab.id),
+        ...rememberLocalTab(tab.workspaceId, tab.id),
         activeTabId: tab.id,
-        activePaneId: getFirstPaneId(tab.layout),
+        activePaneId: getPreferredPaneId(tab),
       }
     }),
   reorderTab: (tabId, targetTabId, placement) =>
@@ -757,10 +900,14 @@ export const useTaoStore = create<TaoState>()((set) => ({
         state.activeTabId === tabId && (!state.activePaneId || !paneIds.has(state.activePaneId))
           ? firstPaneId
           : state.activePaneId
+      const lastActivePaneId =
+        tab.lastActivePaneId && paneIds.has(tab.lastActivePaneId)
+          ? tab.lastActivePaneId
+          : (firstPaneId ?? undefined)
 
       return {
         tabs: state.tabs.map((candidate) =>
-          candidate.id === tabId ? { ...candidate, layout } : candidate,
+          candidate.id === tabId ? { ...candidate, layout, lastActivePaneId } : candidate,
         ),
         panes: state.panes.filter((pane) => pane.tabId !== tabId || paneIds.has(pane.id)),
         activePaneId,
@@ -770,8 +917,14 @@ export const useTaoStore = create<TaoState>()((set) => ({
     set((state) => {
       const pane = state.panes.find((candidate) => candidate.id === paneId)
       if (!pane) return {}
+      const tab = state.tabs.find((candidate) => candidate.id === pane.tabId)
 
       return {
+        tabs: rememberTabPane(state.tabs, pane.tabId, pane.id),
+        workspaces: tab
+          ? rememberWorkspaceTab(state.workspaces, tab.workspaceId, tab.id)
+          : state.workspaces,
+        ...(tab ? rememberLocalTab(tab.workspaceId, tab.id) : {}),
         activePaneId: pane.id,
         activeTabId: pane.tabId,
       }
@@ -786,6 +939,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
       if (!nextPaneId) return {}
 
       return {
+        tabs: rememberTabPane(state.tabs, activeTab.id, nextPaneId),
         activePaneId: nextPaneId,
       }
     }),
@@ -837,7 +991,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
 
       return {
         tabs: state.tabs.map((candidate) =>
-          candidate.id === tab.id ? { ...candidate, layout } : candidate,
+          candidate.id === tab.id ? { ...candidate, layout, lastActivePaneId: pane.id } : candidate,
         ),
         panes: [...state.panes, newPane],
         activeTabId: tab.id,
@@ -860,7 +1014,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
 
       return {
         tabs: state.tabs.map((candidate) =>
-          candidate.id === tab.id ? { ...candidate, layout } : candidate,
+          candidate.id === tab.id ? { ...candidate, layout, lastActivePaneId: pane.id } : candidate,
         ),
         panes: [...state.panes, newPane],
         activeTabId: tab.id,
@@ -889,14 +1043,17 @@ export function selectPaneLayoutData(state: TaoState): PaneLayoutData {
       projectPath: workspace.projectPath,
       branch: workspace.branch,
       worktrees: workspace.worktrees,
+      lastActiveTabId: workspace.lastActiveTabId,
       order: workspace.order,
     })),
     activeWorkspaceId: state.activeWorkspaceId,
+    lastActiveLocalTabId: state.lastActiveLocalTabId,
     tabs: state.tabs.map((tab) => ({
       id: tab.id,
       workspaceId: tab.workspaceId,
       name: tab.name,
       layout: tab.layout,
+      lastActivePaneId: tab.lastActivePaneId,
       order: tab.order,
     })),
     panes: state.panes.map((pane) => ({

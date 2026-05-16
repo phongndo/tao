@@ -121,30 +121,27 @@ export async function createTerminal(
   sessionId: string,
   options: CreateTerminalOptions = {},
 ): Promise<Terminal> {
-  // Step 1: Load Ghostty WASM and PTY metadata in parallel.
+  // Step 1: Load Ghostty WASM/font metadata before starting the shell. The PTY must be
+  // spawned at the fitted terminal size, otherwise shell prompts with right-side content
+  // render against the initial 80x24 size and leave stale fragments after pane splits.
   updateStatus('Loading Ghostty WASM...')
   const wasmUrl = new URL('ghostty-vt.wasm', window.location.href).href
 
   const t0 = performance.now()
-  const ptyReady = window.electronAPI.spawnPty(sessionId, 80, 24, options.cwd)
   const fontsReady = loadTerminalFonts()
   let term: Terminal | null = null
 
   try {
-    const [ghostty, { cols: initialCols, rows: initialRows }] = await Promise.all([
-      loadGhostty(wasmUrl),
-      ptyReady,
-      fontsReady,
-    ])
-    updateStatus(`Ghostty WASM + PTY metadata ready in ${(performance.now() - t0).toFixed(0)}ms`)
+    const [ghostty] = await Promise.all([loadGhostty(wasmUrl), fontsReady])
+    updateStatus(`Ghostty WASM + fonts ready in ${(performance.now() - t0).toFixed(0)}ms`)
 
     // Step 2: Create terminal instance (with pre-loaded Ghostty)
     updateStatus('Creating terminal...')
 
     term = new Terminal({
       ghostty, // Pass the pre-loaded Ghostty instance for instant open
-      cols: initialCols,
-      rows: initialRows,
+      cols: 80,
+      rows: 24,
       fontSize: 14,
       fontFamily: terminalFontFamily,
       theme: THEME,
@@ -180,6 +177,11 @@ export async function createTerminal(
   updateStatus('Wiring IPC...')
 
   const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
+  const fitAddon = new FitAddon()
+
+  term.loadAddon(fitAddon)
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  fitAddon.fit()
 
   const unsubPtyData = window.electronAPI.onPtyData(sessionId, (data: string) => {
     if (scanTitle) {
@@ -230,10 +232,27 @@ export async function createTerminal(
     },
   )
 
-  // FitAddon
-  const fitAddon = new FitAddon()
-  term.loadAddon(fitAddon)
-  fitAddon.fit()
+  try {
+    const initialPtySize = await window.electronAPI.spawnPty(
+      sessionId,
+      term.cols,
+      term.rows,
+      options.cwd,
+    )
+    if (initialPtySize.cols !== term.cols || initialPtySize.rows !== term.rows) {
+      term.resize(initialPtySize.cols, initialPtySize.rows)
+    }
+  } catch (err) {
+    unsubPtyData()
+    unsubPtyError()
+    unsubPtyExit()
+    fitAddon.dispose()
+    term.dispose()
+    window.electronAPI.killPty(sessionId)
+    renderTerminalError(container, err)
+    throw err
+  }
+
   fitAddon.observeResize()
 
   // Cleanup
