@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -37,9 +37,39 @@ function copyGhosttyWasm() {
   }
 }
 
+/**
+ * Bundle the built taod binary beside Electron's main output so production
+ * builds do not depend on a source-tree-relative Zig artifact.
+ */
+function copyTaodBinary() {
+  let outDir = ''
+
+  return {
+    name: 'copy-taod-binary',
+    configResolved(config: any) {
+      outDir = config.build.outDir
+    },
+    closeBundle() {
+      const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
+      const taodSource = resolve(__dirname, '../daemon/zig-out/bin', exeName)
+      const taodDestDir = resolve(outDir, '../bin')
+      const taodDest = resolve(taodDestDir, exeName)
+
+      if (!existsSync(taodSource)) {
+        throw new Error(`[copy-taod-binary] taod source not found: ${taodSource}`)
+      }
+
+      mkdirSync(taodDestDir, { recursive: true })
+      copyFileSync(taodSource, taodDest)
+      if (process.platform !== 'win32') chmodSync(taodDest, 0o755)
+      console.log('[copy-taod-binary] Copied taod to', taodDest)
+    },
+  }
+}
+
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), copyTaodBinary()],
     build: {
       // node-pty has been removed — taod owns PTY lifecycle
     },

@@ -19,6 +19,8 @@ import {
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 500
 const DEFAULT_START_TIMEOUT_MS = 3000
+const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 10_000
+const DEFAULT_RESTART_BACKOFF_MS = 750
 const CONTROL_RESPONSE_MAX_BYTES = 1024 * 1024
 
 type TaodRequest = Record<string, unknown>
@@ -116,6 +118,8 @@ function candidateTaodPaths(): string[] {
         join(cwd, '../../apps/daemon/zig-out/bin', exeName),
         appPath ? join(appPath, '../daemon/zig-out/bin', exeName) : null,
         appPath ? join(appPath, '../../daemon/zig-out/bin', exeName) : null,
+        appPath ? join(appPath, 'bin', exeName) : null,
+        typeof __dirname === 'string' ? join(__dirname, '../bin', exeName) : null,
         typeof __dirname === 'string'
           ? join(__dirname, '../../../daemon/zig-out/bin', exeName)
           : null,
@@ -307,24 +311,49 @@ export class TaodClient {
   private readonly socketPath: string
   private readonly connectTimeoutMs: number
   private readonly startTimeoutMs: number
+  private readonly healthCheckIntervalMs: number
+  private readonly restartBackoffMs: number
   private startPromise: Promise<void> | null = null
   private spawnedProcess: ChildProcess | null = null
+  private healthTimer: ReturnType<typeof setInterval> | null = null
+  private restartTimer: ReturnType<typeof setTimeout> | null = null
+  private disposed = false
 
   constructor(
-    options: { socketPath?: string; connectTimeoutMs?: number; startTimeoutMs?: number } = {},
+    options: {
+      socketPath?: string
+      connectTimeoutMs?: number
+      startTimeoutMs?: number
+      healthCheckIntervalMs?: number
+      restartBackoffMs?: number
+    } = {},
   ) {
     this.socketPath = options.socketPath ?? defaultSocketPath()
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
     this.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS
+    this.healthCheckIntervalMs = options.healthCheckIntervalMs ?? DEFAULT_HEALTH_CHECK_INTERVAL_MS
+    this.restartBackoffMs = options.restartBackoffMs ?? DEFAULT_RESTART_BACKOFF_MS
   }
 
   async ensureRunning(): Promise<void> {
+    if (this.disposed) throw new Error('taod client is disposed')
+    this.startHealthChecks()
     if (await this.canConnect()) return
 
     this.startPromise ??= this.startDaemon().finally(() => {
       this.startPromise = null
     })
     return this.startPromise
+  }
+
+  dispose(): void {
+    this.disposed = true
+    if (this.healthTimer) clearInterval(this.healthTimer)
+    this.healthTimer = null
+    if (this.restartTimer) clearTimeout(this.restartTimer)
+    this.restartTimer = null
+    this.spawnedProcess?.removeAllListeners()
+    this.spawnedProcess = null
   }
 
   async createSession(input: TaodCreateSessionInput): Promise<TaodControlResponse> {
@@ -436,13 +465,30 @@ export class TaodClient {
       )
     }
 
-    this.spawnedProcess = spawn(binaryPath, [], {
-      detached: true,
-      stdio: 'ignore',
-      env: process.env,
-      cwd: dirname(binaryPath),
-    })
-    this.spawnedProcess.unref()
+    if (
+      !this.spawnedProcess ||
+      this.spawnedProcess.exitCode !== null ||
+      this.spawnedProcess.killed
+    ) {
+      const child = spawn(binaryPath, [], {
+        detached: true,
+        stdio: 'ignore',
+        env: process.env,
+        cwd: dirname(binaryPath),
+      })
+      this.spawnedProcess = child
+      child.once('exit', (code, signal) => {
+        if (this.spawnedProcess === child) this.spawnedProcess = null
+        if (!this.disposed) {
+          this.scheduleRestart(`taod exited (code ${code ?? 'null'}, signal ${signal ?? 'null'})`)
+        }
+      })
+      child.once('error', (error) => {
+        if (this.spawnedProcess === child) this.spawnedProcess = null
+        if (!this.disposed) this.scheduleRestart(`taod process error: ${error.message}`)
+      })
+      child.unref()
+    }
 
     const deadline = Date.now() + this.startTimeoutMs
     let lastError: unknown = null
@@ -456,6 +502,34 @@ export class TaodClient {
     }
 
     throw new Error(`Timed out waiting for taod to start: ${String(lastError ?? 'no response')}`)
+  }
+
+  private startHealthChecks(): void {
+    if (this.healthCheckIntervalMs <= 0 || this.healthTimer) return
+
+    this.healthTimer = setInterval(() => {
+      void this.runHealthCheck()
+    }, this.healthCheckIntervalMs)
+    this.healthTimer.unref?.()
+  }
+
+  private async runHealthCheck(): Promise<void> {
+    if (this.disposed || this.startPromise) return
+    if (await this.canConnect()) return
+    this.scheduleRestart('taod health check failed')
+  }
+
+  private scheduleRestart(reason: string): void {
+    if (this.disposed || this.restartTimer) return
+
+    console.warn(`[taod-client] ${reason}; scheduling restart`)
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null
+      void this.ensureRunning().catch((error) => {
+        console.warn('[taod-client] taod restart failed:', error)
+      })
+    }, this.restartBackoffMs)
+    this.restartTimer.unref?.()
   }
 
   private async request(

@@ -60,23 +60,19 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
   removed from the app path because replaying arbitrary PTY tails creates fake/stale terminal state.
 - **No cold shell scrollback restore**: if a pane's process is gone, Tao starts a fresh shell or will
   run the captured CLI/agent resume command. Old `zsh` scrollback is not shown as a restored terminal.
-- **Current file-store retention maintenance**: the utility PTY service periodically applies the
-  persistence retention settings to inactive session directories while preserving known live
-  sessions.
-- **Clear-history controls for the current file store**: users can clear persisted history for the
-  active pane, for a workspace's known sessions, or for all session directories; live shells keep
-  running and their event logs are reset instead of killing the PTY.
+- **Historical file-store retention maintenance (superseded)**: the old utility PTY service
+  retention/clear-history path has been replaced by daemon-owned retention and clear-history RPCs.
 - **Explicit transitional session APIs**: preload now exposes `createSession`, `attachSession`,
   `detachSession`, `writeSessionInput`, `resizeSession`, `killSession`, and `onSessionOutput`
-  wrappers over the existing utility PTY bridge.
-- **Event-log regression tests**: the TypeScript event-log bridge has tests for CRC rejection,
-  partial tails, bounded diagnostic reads, large logs, and cleanup behavior.
+  wrappers over the daemon-backed PTY bridge.
+- **Event-log regression tests**: the daemon framed-log implementation has Zig tests for CRC
+  rejection, partial tails, bounded diagnostics/excerpts, and cleanup behavior.
 - **First-paint/render stability fixes**: the Electron window is shown only after the active pane is
   ready; inactive terminals no longer signal app readiness; automatic DevTools opening is disabled;
   terminal surfaces stay hidden through initial fit/resize settle to avoid exposing intermediate
   Ghostty renders.
-- **Utility PTY process survives renderer/window reloads better**: closing a BrowserWindow no longer
-  immediately kills the utility PTY service; new renderer ports can reconnect to the same service.
+- **Renderer/window reload survival**: closing a BrowserWindow no longer kills PTY ownership because
+  `taod` owns sessions outside the renderer and new renderer ports reconnect through the daemon bridge.
 - **Electron install repair**: `scripts/fix-electron-install.mjs` repairs incomplete Electron binary
   installs before `dev` / `start`.
 - **Initial Zig daemon skeleton**: `apps/daemon` now exists as a pnpm workspace package with
@@ -156,6 +152,17 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 - **Daemon-only desktop PTY path**: the Electron main process no longer falls back to the legacy
   utility-process `pty-service` path. If `taod` cannot be launched or reached, the renderer receives
   an explicit daemon-unavailable error instead of silently switching persistence backends.
+- **Production daemon bundling**: desktop production builds now copy the built `taod` binary into
+  the Electron output (`out/bin/taod`), and the desktop client resolves that bundled binary before
+  falling back to source-tree development paths or `TAOD_PATH`.
+- **Daemon lifecycle supervision**: the Electron `TaodClient` now health-checks `taod`, restarts it
+  after process exit/crash, and retries startup instead of treating the daemon as a one-shot child.
+- **Slow-client backpressure policy**: daemon attach sockets are switched to non-blocking mode for
+  stream writes; subscribers that cannot keep up are explicitly dropped while PTY draining, event-log
+  append, VT state, and other subscribers continue.
+- **Legacy Electron event-log scaffold removed**: the old desktop-side `session-persistence` event-log
+  writer/replay helper and `node-pty` install repair hook are gone; event logs are daemon-owned
+  diagnostics only and are not a desktop fallback backend.
 - **Zig tooling and CI support**: Nix now provides Zig 0.15.x, matching ZLS, and `nixpkgs-fmt`; root
   pnpm `zig:*` scripts wrap build/test/lint/format/LSP checks; CI installs Zig 0.15.2, pins macOS jobs
   to macOS 15 for that toolchain, runs `pnpm check`, verifies the Nix dev-shell/ZLS path, and builds
@@ -164,12 +171,12 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 ### Important limitations of the current slice
 
 - There is now an **Electron-integrated `taod` path**, and it is the only desktop PTY backend. The
-  main process can launch/connect to a built daemon, but production packaging and hardened daemon
-  lifecycle supervision still need work.
+  main process launches/connects to a bundled daemon in production builds and supervises daemon
+  health, but OS-level launch-agent/service integration is still future work.
 - Live reattach in the shipping Electron path now depends on the daemon staying alive. The daemon path
   keeps PTYs outside the renderer/window and drains detached PTY output in daemon-owned reader
-  threads, but production lifecycle supervision and slow-client backpressure policies still need
-  hardening.
+  threads. Electron now supervises/restarts `taod`, but a daemon crash still downgrades existing
+  terminals to command/agent resume because arbitrary Unix process memory cannot be resurrected.
 - Native current-screen snapshots are **visible-screen restore payloads**, not cold scrollback. The
   daemon serializes the active libghostty-vt screen to VT restore bytes and the renderer applies them
   only for live first paint; archived/cold snapshots are still ignored rather than replayed as shell
@@ -185,17 +192,15 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 
 ### Next recommended work
 
-1. **Harden/package the `taod` desktop path**: bundle the daemon in production builds and add
-   lifecycle supervision, health checks, and explicit slow-client backpressure/drop policies.
-2. **Expose SQLite/search metadata in the UI**: add visible search, session diagnostics, and
+1. **Expose SQLite/search metadata in the UI**: add visible search, session diagnostics, and
    user-facing command/agent resume status surfaces on top of the daemon metadata APIs.
-3. **Harden daemon maintenance** with more cleanup tests, transcript re-index scheduling, and visible UX for
+2. **Harden daemon maintenance** with more cleanup tests, transcript re-index scheduling, and visible UX for
    daemon-side retention/clear-history results.
-4. **Replace built-in agent heuristics with external adapters** so `pi`, `codex`, `claude`, and future
+3. **Replace built-in agent heuristics with external adapters** so `pi`, `codex`, `claude`, and future
    agents can discover native ids and resume commands without recompiling `taod`.
-5. **Harden/package native VT snapshots** by fuzzing the Ghostty-native snapshot decoder, bounding
+4. **Harden/package native VT snapshots** by fuzzing the Ghostty-native snapshot decoder, bounding
    renderer apply failures, and documenting compatibility for older fallback snapshot payloads.
-6. **Add a persistence privacy toggle in the daemon path** so settings can disable or narrow terminal
+5. **Add a persistence privacy toggle in the daemon path** so settings can disable or narrow terminal
    output/excerpt persistence before data is written.
 
 ---
@@ -388,10 +393,10 @@ tao/
 │           ├── main/
 │           │   ├── index.ts                MODIFY: launch/connect taod, bridge IPC
 │           │   ├── taod-client.ts          NEW: Unix socket control/stream client
-│           │   ├── session-ipc.ts          NEW: session IPC handlers
+│           │   ├── taod-pty-bridge.ts      daemon MessagePort session bridge
 │           │   ├── layout-store.ts         NEW: pane-layouts.json service
 │           │   ├── settings-store.ts       NEW: settings.json service
-│           │   └── pty-service.ts          REMOVE/REPLACE with taod bridge
+│           │   └── pty-service.ts          removed/replaced with taod bridge
 │           ├── preload/
 │           │   └── index.ts                MODIFY: expose session APIs
 │           └── renderer/
@@ -988,17 +993,18 @@ pnpm zig:check
 | **2**  | Done for POSIX prototype        | Write PTY driver. `pty.zig` now uses `forkpty`/`execvp`, resize, input writes, output reads, termination, and exit polling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Done      |
 | **3**  | Done for Zig-native VT boundary | `vt.zig` now isolates the VT backend, session objects own upstream Zig-native libghostty-vt state, daemon output/resize paths feed that state, smoke tests cover the wrapper/current-screen boundary, and native snapshots are supported. The fallback and C ABI backends have been retired.                                                                                                                                                                                                                                                                                                                             | Done      |
 | **4**  | Done for native live path       | Optional current-screen snapshot extension for nicer live reattach first paint. The daemon has a versioned/CRC-checked `current-screen.state` envelope, Ghostty-native VT snapshot round-trips, detach checkpointing, snapshot DB metadata, event-log snapshot marks, and attach-time snapshot stream frames. Electron now forwards/decodes snapshot frames, applies supported native current-screen snapshots before first paint, suppresses duplicate pending output through the snapshot seq, and ignores archived/cold/unsupported snapshots. Do not use snapshots/event-log tails as cold shell scrollback restore. | Done      |
-| **5**  | Partial daemon ownership        | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests. The daemon now creates session logs and appends output/resize/exit frames; the legacy Electron utility logging code remains only as transitional/test scaffolding and is no longer selected by the desktop PTY path.                                                                                                                                                                                                                                                                                                    | 1 week    |
+| **5**  | Done for daemon ownership       | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests. The daemon now creates session logs, appends output/resize/exit/snapshot-mark frames, owns retention/clear-history, and the legacy Electron utility logging scaffold has been removed.                                                                                                                                                                                                                                                                                                                                  | Done      |
 | **6**  | Substantial metadata slice done | Write SQLite layer (migrations, query functions). `taod` now opens SQLite through `vrischmann/zig-sqlite`, runs migrations, mirrors terminal session lifecycle metadata, records initial agent-session resume rows, indexes bounded search excerpts, and uses restart lookup queries for cold command/agent relaunch. Richer query UI and re-index scheduling remain.                                                                                                                                                                                                                                                    | 1 week    |
-| **7**  | Initial bridge done             | Integrate daemon with Electron main (launch, socket client, IPC bridge). A `TaodClient`/MessagePort bridge now launches or connects to `taod` and maps the renderer session protocol to control RPC + binary stream frames. Packaging/lifecycle hardening remains.                                                                                                                                                                                                                                                                                                                                                       | 1 week    |
-| **8**  | Done for daemon path            | Renderer attach to live stream and native command/agent resume results; remove old pty-service path once daemon lifecycle is hardened. The renderer now uses explicit session APIs, attach results report live/fresh/command-resume/agent-resume, command/agent resume is surfaced in UI, and Electron main no longer falls back to the utility-process PTY service.                                                                                                                                                                                                                                                     | Done      |
+| **7**  | Done for production readiness   | Integrate daemon with Electron main (launch, socket client, IPC bridge). A `TaodClient`/MessagePort bridge now launches or connects to `taod`, maps the renderer session protocol to control RPC + binary stream frames, bundles `taod` into desktop production output, health-checks it, restarts after exit/crash, and daemon stream writes drop slow subscribers instead of blocking PTY draining.                                                                                                                                                                                                                    | Done      |
+| **8**  | Done for daemon path            | Renderer attach to live stream and native command/agent resume results. The renderer now uses explicit session APIs, attach results report live/fresh/command-resume/agent-resume, command/agent resume is surfaced in UI, and Electron main no longer falls back to the utility-process PTY service.                                                                                                                                                                                                                                                                                                                    | Done      |
 | **9**  | Initial heuristics done         | Add agent adapter spawning + pi/codex/claude adapter scripts. Built-in argv/session-id heuristics now seed `agent_sessions` and resume argv metadata; external adapter process spawning remains.                                                                                                                                                                                                                                                                                                                                                                                                                         | 1-2 weeks |
 | **10** | **Done for Electron slice**     | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Done      |
 | **11** | Partial                         | Search excerpts / FTS and daemon cleanup/retention. Daemon-side clear-history and retention RPCs now reset live logs, delete inactive session directories, clear stale search rows, prune metadata for missing logs, and index bounded excerpts on exit. Search UI and scheduled background re-indexing remain.                                                                                                                                                                                                                                                                                                          | 1 week    |
-| **12** | Not started                     | Stress testing: crash, restart, daemon fail, large logs, agent resume                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 1-2 weeks |
+| **12** | Started                         | Stress testing: crash/restart supervision, daemon fail, large logs, agent resume. Lifecycle health checks and slow-client drop policy are implemented; broader soak/fault-injection coverage remains.                                                                                                                                                                                                                                                                                                                                                                                                                    | 1-2 weeks |
 
-**Total**: dominated by robust daemon lifecycle, packaging, and agent/command resume metadata. The
-old libghostty-vt scrollback/snapshot cold-restore work is no longer the critical path.
+**Total**: now dominated by UI/search surfaces, external adapters, privacy controls, and broader
+soak/fault-injection coverage. The old libghostty-vt scrollback/snapshot cold-restore work is no
+longer the critical path.
 
 ---
 

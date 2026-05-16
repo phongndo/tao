@@ -27,8 +27,7 @@
     "bench:cross": "bash bench/cross-terminal.sh",
     "bench:startup": "bash bench/startup-bench.sh",
     "bench:all": "bash bench/run-all.sh",
-    "test:persistence": "tsx --test src/main/session-persistence.test.ts src/main/taod-stream.test.ts",
-
+    "test:persistence": "tsx --test src/main/taod-stream.test.ts",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
     "lint": "oxlint . --jsx-a11y-plugin --deny-warnings --report-unused-disable-directives",

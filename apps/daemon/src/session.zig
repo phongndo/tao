@@ -279,6 +279,14 @@ pub const Manager = struct {
         return true;
     }
 
+    pub fn hasSubscriber(self: *Manager, session_id: []const u8, fd: std.c.fd_t) bool {
+        const item = self.find(session_id) orelse return false;
+        for (item.subscribers.items) |existing| {
+            if (existing == fd) return true;
+        }
+        return false;
+    }
+
     pub fn resize(self: *Manager, session_id: []const u8, cols: u16, rows: u16) bool {
         const item = self.find(session_id) orelse return false;
         item.resizeVt(self.allocator, cols, rows) catch return false;
@@ -318,6 +326,10 @@ test "session manager creates and updates sessions" {
     try std.testing.expectEqual(Status.detached, manager.find("session-1").?.status);
     try std.testing.expect(manager.attach("session-1") != null);
     try std.testing.expectEqual(Status.live, manager.find("session-1").?.status);
+    try std.testing.expect(try manager.addSubscriber("session-1", 42));
+    try std.testing.expect(manager.hasSubscriber("session-1", 42));
+    try std.testing.expect(manager.removeSubscriber("session-1", 42));
+    try std.testing.expect(!manager.hasSubscriber("session-1", 42));
     try std.testing.expect(manager.kill("session-1"));
     try std.testing.expectEqualStrings("killed", manager.find("session-1").?.status.text());
     try std.testing.expect(manager.remove("session-1"));

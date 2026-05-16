@@ -149,6 +149,7 @@ export class TaodPtyBridge {
     this.sessions.clear()
     this.port?.close()
     this.port = null
+    this.client.dispose()
   }
 
   private async handleClientMessage(message: PtyClientMessage): Promise<void> {
@@ -258,22 +259,6 @@ export class TaodPtyBridge {
       }
     }
     if (attachMode === 'live') attachMode = responseAttachMode(attachResponse)
-
-    if (attachResponse.status === 'archived') {
-      // Older daemons could attach persisted logs as read-only archive sessions.
-      // Tao no longer restores cold shell scrollback; upgrade that case to a
-      // real fresh shell under the same session id.
-      stream.close()
-      await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
-      attachMode = 'fresh'
-      ;({ response: attachResponse, stream } = await this.client.attachSession({
-        sessionId,
-        terminalId,
-        cols,
-        rows,
-        cwd,
-      }))
-    }
 
     const archived = false
     const session: BridgeSession = {

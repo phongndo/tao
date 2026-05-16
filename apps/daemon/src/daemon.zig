@@ -10,7 +10,6 @@ const snapshot = @import("snapshot.zig");
 const vt = @import("vt.zig");
 
 const control_payload_max = 64 * 1024;
-
 const AttachKind = enum {
     live,
     command_resume,
@@ -590,7 +589,7 @@ pub const Daemon = struct {
         try self.applyPendingClientFrames(session_id, &pending);
 
         while (true) {
-            if (!self.sessionCanContinueStreaming(session_id)) return;
+            if (!self.sessionCanContinueStreaming(session_id, socket_fd)) return;
 
             var poll_fds = [_]std.posix.pollfd{.{ .fd = socket_fd, .events = std.posix.POLL.IN, .revents = 0 }};
 
@@ -600,7 +599,13 @@ pub const Daemon = struct {
                 if ((poll_fds[0].revents & (std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) return;
                 var buffer: [64 * 1024]u8 = undefined;
                 const amount = std.c.read(socket_fd, &buffer, buffer.len);
-                if (amount <= 0) return;
+                if (amount < 0) {
+                    switch (std.posix.errno(amount)) {
+                        .INTR, .AGAIN => continue,
+                        else => return,
+                    }
+                }
+                if (amount == 0) return;
                 try pending.appendSlice(self.allocator, buffer[0..@intCast(amount)]);
                 try self.applyPendingClientFrames(session_id, &pending);
             }
@@ -621,6 +626,7 @@ pub const Daemon = struct {
 
         const item = self.sessions.find(session_id) orelse return false;
         if (!isLiveAttachable(item)) return false;
+        try setNonBlockingFd(socket_fd);
         if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
         self.sendCurrentScreenSnapshotToSubscriberLocked(item, socket_fd) catch |err| {
             std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ item.id, err });
@@ -649,12 +655,13 @@ pub const Daemon = struct {
         return removed;
     }
 
-    fn sessionCanContinueStreaming(self: *Daemon, session_id: []const u8) bool {
+    fn sessionCanContinueStreaming(self: *Daemon, session_id: []const u8, socket_fd: std.c.fd_t) bool {
         self.lock();
         defer self.unlock();
 
         const item = self.sessions.find(session_id) orelse return false;
-        return isLiveAttachable(item);
+        if (!isLiveAttachable(item)) return false;
+        return self.sessions.hasSubscriber(session_id, socket_fd);
     }
 
     fn runSessionReader(self: *Daemon, session_id: []const u8) !void {
@@ -981,7 +988,7 @@ pub const Daemon = struct {
         defer self.allocator.free(buffer);
 
         const encoded = try rpc.encodeStreamFrame(buffer, .snapshot, item.id, item.last_seq, encoded_snapshot);
-        try writeAllFd(socket_fd, encoded);
+        try writeAllFdNonBlocking(socket_fd, encoded);
     }
 
     fn broadcastStreamFrameLocked(
@@ -1006,8 +1013,8 @@ pub const Daemon = struct {
         var index: usize = 0;
         while (index < item.subscribers.items.len) {
             const fd = item.subscribers.items[index];
-            writeAllFd(fd, encoded) catch |err| {
-                std.log.warn("dropping taod subscriber for {s}: {t}", .{ item.id, err });
+            writeAllFdNonBlocking(fd, encoded) catch |err| {
+                std.log.warn("dropping slow taod subscriber for {s}: {t}", .{ item.id, err });
                 _ = item.subscribers.orderedRemove(index);
                 continue;
             };
@@ -1023,7 +1030,7 @@ pub const Daemon = struct {
             const buffer = try self.allocator.alloc(u8, encoded_len);
             defer self.allocator.free(buffer);
             const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
-            try writeAllFd(socket_fd, encoded);
+            try writeAllFdNonBlocking(socket_fd, encoded);
         }
 
         item.clearPendingOutput(self.allocator);
@@ -1230,6 +1237,28 @@ fn writeAllFd(fd: std.posix.fd_t, data: []const u8) !void {
         if (written <= 0) return error.SocketWriteFailed;
         offset += @intCast(written);
     }
+}
+
+fn writeAllFdNonBlocking(fd: std.posix.fd_t, data: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < data.len) {
+        const written = std.c.write(fd, data[offset..].ptr, data.len - offset);
+        if (written < 0) {
+            switch (std.posix.errno(written)) {
+                .INTR => continue,
+                .AGAIN => return error.SlowClientBackpressure,
+                else => return error.SocketWriteFailed,
+            }
+        }
+        if (written == 0) return error.SocketWriteFailed;
+        offset += @intCast(written);
+    }
+}
+
+fn setNonBlockingFd(fd: std.posix.fd_t) !void {
+    var flags = try std.posix.fcntl(fd, std.posix.F.GETFL, 0);
+    flags |= 1 << @bitOffsetOf(std.posix.O, "NONBLOCK");
+    _ = try std.posix.fcntl(fd, std.posix.F.SETFL, flags);
 }
 
 fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !ControlPayload {
