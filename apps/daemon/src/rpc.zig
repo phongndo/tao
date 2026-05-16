@@ -6,6 +6,7 @@ pub const RequestType = enum {
     resize,
     detach,
     kill,
+    ping,
     unknown,
 
     pub fn fromText(text: []const u8) RequestType {
@@ -14,6 +15,7 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "resize")) return .resize;
         if (std.mem.eql(u8, text, "detach")) return .detach;
         if (std.mem.eql(u8, text, "kill")) return .kill;
+        if (std.mem.eql(u8, text, "ping")) return .ping;
         return .unknown;
     }
 };
@@ -268,6 +270,7 @@ fn trimStreamSessionId(field: []const u8) []const u8 {
 
 test "request type decoding is stable" {
     try std.testing.expectEqual(RequestType.create, RequestType.fromText("create"));
+    try std.testing.expectEqual(RequestType.ping, RequestType.fromText("ping"));
     try std.testing.expectEqual(RequestType.unknown, RequestType.fromText("other"));
 }
 

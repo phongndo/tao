@@ -1,4 +1,5 @@
 const std = @import("std");
+const db = @import("db.zig");
 const event_log = @import("event_log.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
@@ -8,6 +9,7 @@ const control_payload_max = 64 * 1024;
 
 pub const Config = struct {
     root_dir: []const u8,
+    database_path: []const u8,
     run_dir: []const u8,
     sessions_dir: []const u8,
     socket_path: []const u8,
@@ -16,6 +18,8 @@ pub const Config = struct {
     pub fn fromHome(allocator: std.mem.Allocator, home: []const u8) !Config {
         const root_dir = try std.fs.path.join(allocator, &.{ home, ".tao" });
         errdefer allocator.free(root_dir);
+        const database_path = try std.fs.path.join(allocator, &.{ root_dir, "tao.db" });
+        errdefer allocator.free(database_path);
         const run_dir = try std.fs.path.join(allocator, &.{ root_dir, "run" });
         errdefer allocator.free(run_dir);
         const sessions_dir = try std.fs.path.join(allocator, &.{ root_dir, "sessions" });
@@ -26,6 +30,7 @@ pub const Config = struct {
 
         return .{
             .root_dir = root_dir,
+            .database_path = database_path,
             .run_dir = run_dir,
             .sessions_dir = sessions_dir,
             .socket_path = socket_path,
@@ -35,6 +40,7 @@ pub const Config = struct {
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.root_dir);
+        allocator.free(self.database_path);
         allocator.free(self.run_dir);
         allocator.free(self.sessions_dir);
         allocator.free(self.socket_path);
@@ -48,6 +54,7 @@ pub const Daemon = struct {
     config: Config,
     sessions: session.Manager,
     pty_driver: pty.Driver,
+    database: ?db.Database,
     mutex: std.atomic.Mutex = .unlocked,
 
     pub fn init(allocator: std.mem.Allocator, config: Config) Daemon {
@@ -56,24 +63,28 @@ pub const Daemon = struct {
             .config = config,
             .sessions = session.Manager.init(allocator),
             .pty_driver = pty.Driver.init(allocator),
+            .database = null,
         };
     }
 
     pub fn deinit(self: *Daemon) void {
+        if (self.database) |*database| database.deinit();
         self.sessions.deinit();
     }
 
     pub fn prepareStorage(self: *Daemon, io: std.Io) !void {
         try std.Io.Dir.cwd().createDirPath(io, self.config.run_dir);
         try std.Io.Dir.cwd().createDirPath(io, self.config.sessions_dir);
+        if (self.database == null) self.database = try db.Database.open(self.allocator, self.config.database_path);
         try self.writePidFile(io);
     }
 
     pub fn printConfig(self: *Daemon) void {
         std.debug.print(
-            "root={s}\nrun={s}\nsessions={s}\nsocket={s}\npid={s}\n",
+            "root={s}\ndatabase={s}\nrun={s}\nsessions={s}\nsocket={s}\npid={s}\n",
             .{
                 self.config.root_dir,
+                self.config.database_path,
                 self.config.run_dir,
                 self.config.sessions_dir,
                 self.config.socket_path,
@@ -139,6 +150,11 @@ pub const Daemon = struct {
             .resize => self.handleResizeLocked(allocator, request),
             .detach => self.handleDetachLocked(allocator, request),
             .kill => self.handleKillLocked(allocator, request),
+            .ping => rpc.responseJsonAlloc(allocator, .{
+                .id = request.requestId(),
+                .ok = true,
+                .status = "ok",
+            }),
             .unknown => rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
                 .ok = false,
@@ -211,6 +227,10 @@ pub const Daemon = struct {
                 std.log.warn("failed to append create resize frame for {s}: {t}", .{ created.id, err });
             };
         }
+        const argv_json = try argvJsonAlloc(self.allocator, request.argv orelse &.{});
+        defer if (argv_json) |json| self.allocator.free(json);
+        self.recordTerminalSessionLocked(created, argv_json);
+        try self.startSessionReaderLocked(created);
 
         return sessionResponse(allocator, request, created);
     }
@@ -218,6 +238,14 @@ pub const Daemon = struct {
     fn handleAttachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         const attached = self.sessions.attach(session_id) orelse return notFound(allocator, request);
+        if (!isLiveAttachable(attached)) {
+            return rpc.responseJsonAlloc(allocator, .{
+                .id = request.requestId(),
+                .ok = false,
+                .error_message = "session is not live",
+            });
+        }
+        self.recordTerminalSessionLocked(attached, null);
         return sessionResponse(allocator, request, attached);
     }
 
@@ -233,6 +261,7 @@ pub const Daemon = struct {
                 std.log.warn("failed to append resize frame for {s}: {t}", .{ item.id, err });
             };
         }
+        self.recordTerminalSessionLocked(item, null);
 
         return sessionResponse(allocator, request, self.sessions.find(session_id).?);
     }
@@ -240,6 +269,7 @@ pub const Daemon = struct {
     fn handleDetachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         if (!self.sessions.detach(session_id)) return notFound(allocator, request);
+        self.recordTerminalSessionLocked(self.sessions.find(session_id).?, null);
 
         return sessionResponse(allocator, request, self.sessions.find(session_id).?);
     }
@@ -255,7 +285,11 @@ pub const Daemon = struct {
                 std.log.warn("failed to append kill exit frame for {s}: {t}", .{ item.id, err });
             };
         }
+        item.pty_child = null;
+        item.reader_started = false;
+        try self.broadcastExitFrameLocked(item, item.last_seq, 0, 15);
         if (!self.sessions.kill(session_id)) return notFound(allocator, request);
+        self.recordTerminalEndedLocked(item, 0, 15);
 
         return sessionResponse(allocator, request, self.sessions.find(session_id).?);
     }
@@ -268,7 +302,12 @@ pub const Daemon = struct {
     }
 
     fn ensureSessionProcess(self: *Daemon, item: *session.TerminalSession, argv: []const []const u8) !void {
-        if (item.pty_child != null or argv.len == 0) return;
+        if (item.pty_child) |child| {
+            if (child.master_fd >= 0) return;
+            item.pty_child = null;
+            item.reader_started = false;
+        }
+        if (argv.len == 0) return;
 
         item.pty_child = try self.pty_driver.spawn(.{
             .argv = argv,
@@ -279,36 +318,98 @@ pub const Daemon = struct {
         item.status = .live;
     }
 
+    fn startSessionReaderLocked(self: *Daemon, item: *session.TerminalSession) !void {
+        if (item.reader_started) return;
+        const child = item.pty_child orelse return;
+        if (child.master_fd < 0) return;
+        item.reader_started = true;
+        const thread = std.Thread.spawn(.{}, sessionReaderThread, .{ self, item.id }) catch |err| {
+            item.reader_started = false;
+            return err;
+        };
+        thread.detach();
+    }
+
     fn streamAttachedSession(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
+        if (!try self.addSubscriber(session_id, socket_fd)) return;
+        defer _ = self.removeSubscriber(session_id, socket_fd);
+
         var pending: std.ArrayList(u8) = .empty;
         defer pending.deinit(self.allocator);
         try pending.appendSlice(self.allocator, initial_tail);
+        try self.applyPendingClientFrames(session_id, &pending);
 
         while (true) {
-            const child_fd = self.liveChildFd(session_id) orelse return;
-            var poll_fds = [_]std.posix.pollfd{
-                .{ .fd = socket_fd, .events = std.posix.POLL.IN, .revents = 0 },
-                .{ .fd = child_fd, .events = std.posix.POLL.IN, .revents = 0 },
-            };
+            if (!self.sessionCanContinueStreaming(session_id)) return;
+
+            var poll_fds = [_]std.posix.pollfd{.{ .fd = socket_fd, .events = std.posix.POLL.IN, .revents = 0 }};
 
             _ = try std.posix.poll(&poll_fds, 250);
 
             if ((poll_fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
+                if ((poll_fds[0].revents & (std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) return;
                 var buffer: [64 * 1024]u8 = undefined;
                 const amount = std.c.read(socket_fd, &buffer, buffer.len);
                 if (amount <= 0) return;
                 try pending.appendSlice(self.allocator, buffer[0..@intCast(amount)]);
+                try self.applyPendingClientFrames(session_id, &pending);
+            }
+        }
+    }
 
-                var visitor = ClientFrameVisitor{ .daemon = self, .session_id = session_id };
-                const result = try rpc.parseStreamFrames(pending.items, &visitor);
-                if (result.valid_bytes > 0) try pending.replaceRange(self.allocator, 0, result.valid_bytes, &.{});
+    fn applyPendingClientFrames(self: *Daemon, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
+        if (pending.items.len == 0) return;
+
+        var visitor = ClientFrameVisitor{ .daemon = self, .session_id = session_id };
+        const result = try rpc.parseStreamFrames(pending.items, &visitor);
+        if (result.valid_bytes > 0) try pending.replaceRange(self.allocator, 0, result.valid_bytes, &.{});
+    }
+
+    fn addSubscriber(self: *Daemon, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
+        self.lock();
+        defer self.unlock();
+
+        const item = self.sessions.find(session_id) orelse return false;
+        if (!isLiveAttachable(item)) return false;
+        if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+        self.flushPendingOutputToSubscriberLocked(item, socket_fd) catch |err| {
+            std.log.warn("failed to flush pending output for {s}: {t}", .{ item.id, err });
+            _ = self.sessions.removeSubscriber(session_id, socket_fd);
+            return false;
+        };
+        return true;
+    }
+
+    fn removeSubscriber(self: *Daemon, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+        self.lock();
+        defer self.unlock();
+
+        const removed = self.sessions.removeSubscriber(session_id, socket_fd);
+        if (removed) {
+            if (self.sessions.find(session_id)) |item| self.recordTerminalSessionLocked(item, null);
+        }
+        return removed;
+    }
+
+    fn sessionCanContinueStreaming(self: *Daemon, session_id: []const u8) bool {
+        self.lock();
+        defer self.unlock();
+
+        const item = self.sessions.find(session_id) orelse return false;
+        return isLiveAttachable(item);
+    }
+
+    fn runSessionReader(self: *Daemon, session_id: []const u8) !void {
+        while (true) {
+            const child_fd = self.liveChildFd(session_id) orelse return;
+            var poll_fds = [_]std.posix.pollfd{.{ .fd = child_fd, .events = std.posix.POLL.IN, .revents = 0 }};
+
+            _ = try std.posix.poll(&poll_fds, 250);
+            if ((poll_fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
+                try self.readPtyAndBroadcast(session_id);
             }
 
-            if ((poll_fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
-                try self.readPtyAndBroadcast(socket_fd, session_id);
-            }
-
-            if (try self.reapExitedChild(socket_fd, session_id)) return;
+            if (try self.reapExitedChild(session_id)) return;
         }
     }
 
@@ -323,7 +424,7 @@ pub const Daemon = struct {
         return child.master_fd;
     }
 
-    fn readPtyAndBroadcast(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8) !void {
+    fn readPtyAndBroadcast(self: *Daemon, session_id: []const u8) !void {
         var child_copy: pty.Child = blk: {
             self.lock();
             defer self.unlock();
@@ -334,24 +435,29 @@ pub const Daemon = struct {
         var buffer: [64 * 1024]u8 = undefined;
         const amount = self.pty_driver.read(&child_copy, &buffer) catch |err| {
             std.log.warn("PTY read failed for {s}: {t}", .{ session_id, err });
-            _ = try self.markExitedAndSend(socket_fd, session_id, -1, 0);
+            _ = try self.markExitedAndBroadcast(session_id, -1, 0);
             return;
         };
         if (amount == 0) {
-            _ = try self.markExitedAndSend(socket_fd, session_id, -1, 0);
+            _ = try self.markExitedAndBroadcast(session_id, -1, 0);
             return;
         }
 
         const payload = buffer[0..amount];
+        self.lock();
+        defer self.unlock();
+
+        const item = self.sessions.find(session_id) orelse return;
         const seq = seq: {
-            self.lock();
-            defer self.unlock();
-            const item = self.sessions.find(session_id) orelse return;
-            const path = item.event_log_path orelse return;
-            break :seq try event_log.appendOutput(self.allocator, path, item.excerpt_path, &item.last_seq, payload);
+            if (item.event_log_path) |path| {
+                break :seq try event_log.appendOutput(self.allocator, path, item.excerpt_path, &item.last_seq, payload);
+            }
+
+            item.last_seq += 1;
+            break :seq item.last_seq;
         };
 
-        try self.sendStreamFrame(socket_fd, .output, session_id, seq, payload);
+        try self.broadcastStreamFrameLocked(item, .output, seq, payload);
     }
 
     fn applyClientFrame(self: *Daemon, frame: rpc.StreamFrame) !void {
@@ -371,12 +477,13 @@ pub const Daemon = struct {
                 if (item.event_log_path) |path| {
                     _ = try event_log.appendResize(self.allocator, path, &item.last_seq, resize.cols, resize.rows);
                 }
+                self.recordTerminalSessionLocked(item, null);
             },
             else => {},
         }
     }
 
-    fn reapExitedChild(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8) !bool {
+    fn reapExitedChild(self: *Daemon, session_id: []const u8) !bool {
         self.lock();
         defer self.unlock();
 
@@ -390,45 +497,119 @@ pub const Daemon = struct {
             };
         }
         child.close();
-        try self.sendExitFrame(socket_fd, item.id, item.last_seq, status.exit_code, status.signal);
+        item.pty_child = null;
+        item.reader_started = false;
+        try self.broadcastExitFrameLocked(item, item.last_seq, status.exit_code, status.signal);
+        self.recordTerminalEndedLocked(item, status.exit_code, status.signal);
         return true;
     }
 
-    fn markExitedAndSend(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
+    fn markExitedAndBroadcast(self: *Daemon, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
         self.lock();
         defer self.unlock();
 
         const item = self.sessions.find(session_id) orelse return true;
+        if (item.status == .killed) return true;
         item.status = .exited;
         if (item.pty_child) |*child| child.close();
+        item.pty_child = null;
+        item.reader_started = false;
         if (item.event_log_path) |path| {
             _ = event_log.appendExit(self.allocator, path, &item.last_seq, exit_code, signal_value) catch |err| {
                 std.log.warn("failed to append synthetic exit frame for {s}: {t}", .{ item.id, err });
             };
         }
-        try self.sendExitFrame(socket_fd, item.id, item.last_seq, exit_code, signal_value);
+        try self.broadcastExitFrameLocked(item, item.last_seq, exit_code, signal_value);
+        self.recordTerminalEndedLocked(item, exit_code, signal_value);
         return true;
     }
 
-    fn sendExitFrame(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8, seq: u64, exit_code: i32, signal_value: i32) !void {
-        var payload: [8]u8 = undefined;
-        const encoded_payload = try rpc.encodeExitPayload(&payload, exit_code, signal_value);
-        try self.sendStreamFrame(socket_fd, .exit, session_id, seq, encoded_payload);
+    fn recordTerminalSessionLocked(self: *Daemon, item: *const session.TerminalSession, argv_json: ?[]const u8) void {
+        const database = if (self.database) |*database| database else return;
+        const event_log_path = item.event_log_path orelse return;
+        const pid: ?i64 = if (item.pidU32()) |value| @intCast(value) else null;
+
+        database.recordTerminalSession(.{
+            .id = item.id,
+            .terminal_id = item.terminal_id,
+            .cwd = item.cwd,
+            .argv_json = argv_json,
+            .status = item.status.text(),
+            .pid = pid,
+            .cols = item.cols,
+            .rows = item.rows,
+            .event_log_path = event_log_path,
+            .last_seq = item.last_seq,
+        }) catch |err| {
+            std.log.warn("failed to record terminal session {s}: {t}", .{ item.id, err });
+        };
     }
 
-    fn sendStreamFrame(
+    fn recordTerminalEndedLocked(self: *Daemon, item: *const session.TerminalSession, exit_code: i32, signal_value: i32) void {
+        const database = if (self.database) |*database| database else return;
+
+        database.recordTerminalEnded(.{
+            .id = item.id,
+            .status = item.status.text(),
+            .cols = item.cols,
+            .rows = item.rows,
+            .last_seq = item.last_seq,
+            .exit_code = exit_code,
+            .signal = signal_value,
+        }) catch |err| {
+            std.log.warn("failed to record terminal session exit {s}: {t}", .{ item.id, err });
+        };
+    }
+
+    fn broadcastExitFrameLocked(self: *Daemon, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
+        var payload: [8]u8 = undefined;
+        const encoded_payload = try rpc.encodeExitPayload(&payload, exit_code, signal_value);
+        try self.broadcastStreamFrameLocked(item, .exit, seq, encoded_payload);
+    }
+
+    fn broadcastStreamFrameLocked(
         self: *Daemon,
-        socket_fd: std.c.fd_t,
+        item: *session.TerminalSession,
         kind: rpc.StreamKind,
-        session_id: []const u8,
         seq: u64,
         payload: []const u8,
     ) !void {
+        if (item.subscribers.items.len == 0) {
+            if (kind == .output) item.bufferPendingOutput(self.allocator, seq, payload) catch |err| {
+                std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, err });
+            };
+            return;
+        }
+
         const encoded_len = rpc.encodedStreamFrameSize(payload.len);
         const buffer = try self.allocator.alloc(u8, encoded_len);
         defer self.allocator.free(buffer);
-        const encoded = try rpc.encodeStreamFrame(buffer, kind, session_id, seq, payload);
-        try writeAllFd(socket_fd, encoded);
+        const encoded = try rpc.encodeStreamFrame(buffer, kind, item.id, seq, payload);
+
+        var index: usize = 0;
+        while (index < item.subscribers.items.len) {
+            const fd = item.subscribers.items[index];
+            writeAllFd(fd, encoded) catch |err| {
+                std.log.warn("dropping taod subscriber for {s}: {t}", .{ item.id, err });
+                _ = item.subscribers.orderedRemove(index);
+                continue;
+            };
+            index += 1;
+        }
+    }
+
+    fn flushPendingOutputToSubscriberLocked(self: *Daemon, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
+        if (item.pending_output.items.len == 0) return;
+
+        for (item.pending_output.items) |frame| {
+            const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
+            const buffer = try self.allocator.alloc(u8, encoded_len);
+            defer self.allocator.free(buffer);
+            const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
+            try writeAllFd(socket_fd, encoded);
+        }
+
+        item.clearPendingOutput(self.allocator);
     }
 
     fn lock(self: *Daemon) void {
@@ -481,6 +662,23 @@ fn handleConnectionThread(context: *ConnectionContext) void {
     };
 }
 
+fn sessionReaderThread(daemon: *Daemon, session_id: []const u8) void {
+    daemon.runSessionReader(session_id) catch |err| {
+        std.log.warn("session reader failed for {s}: {t}", .{ session_id, err });
+        _ = daemon.markExitedAndBroadcast(session_id, -1, 0) catch {};
+    };
+}
+
+fn isLiveAttachable(item: *const session.TerminalSession) bool {
+    return switch (item.status) {
+        .live, .detached => blk: {
+            const child = item.pty_child orelse break :blk false;
+            break :blk child.master_fd >= 0;
+        },
+        .exited, .crashed, .archived, .killed => false,
+    };
+}
+
 fn sessionResponse(
     allocator: std.mem.Allocator,
     request: rpc.ControlRequestJson,
@@ -519,6 +717,22 @@ fn notFound(allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8
         .ok = false,
         .error_message = "session not found",
     });
+}
+
+fn argvJsonAlloc(allocator: std.mem.Allocator, argv: []const []const u8) !?[]u8 {
+    if (argv.len == 0) return null;
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    try out.writer.writeByte('[');
+    for (argv, 0..) |arg, index| {
+        if (index > 0) try out.writer.writeByte(',');
+        try out.writer.print("{f}", .{std.json.fmt(arg, .{})});
+    }
+    try out.writer.writeByte(']');
+
+    return try out.toOwnedSlice();
 }
 
 fn writeAllFd(fd: std.posix.fd_t, data: []const u8) !void {

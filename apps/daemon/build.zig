@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "taod", .module = mod }},
     });
     if (target.result.os.tag == .linux) exe_mod.linkSystemLibrary("util", .{});
+    exe_mod.linkSystemLibrary("sqlite3", .{});
 
     const exe = b.addExecutable(.{
         .name = "taod",
@@ -34,6 +35,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     if (target.result.os.tag == .linux) mod.linkSystemLibrary("util", .{});
+    mod.linkSystemLibrary("sqlite3", .{});
     const mod_tests = b.addTest(.{ .root_module = mod });
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
