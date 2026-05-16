@@ -10,6 +10,7 @@ type TerminalError = {
 
 export function TerminalPane({
   sessionId,
+  terminalId,
   cwd,
   isActive,
   focusToken,
@@ -18,6 +19,7 @@ export function TerminalPane({
   onArchiveStateChange,
 }: {
   sessionId: string
+  terminalId?: string
   cwd?: string
   isActive: boolean
   focusToken: number
@@ -66,6 +68,7 @@ export function TerminalPane({
         setIsArchived(false)
         onArchiveStateChangeRef.current?.(false)
         const terminal = await createTerminal(surface, sessionId, {
+          terminalId,
           cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
           onArchived: () => {
@@ -109,7 +112,7 @@ export function TerminalPane({
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
-  }, [sessionId])
+  }, [sessionId, terminalId])
 
   useEffect(() => {
     const terminal = terminalRef.current

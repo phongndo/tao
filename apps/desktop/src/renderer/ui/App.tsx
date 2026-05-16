@@ -558,6 +558,7 @@ const PaneTile = memo(function PaneTile({
       {pane.type === 'terminal' ? (
         <TerminalPane
           sessionId={pane.lastSessionId ?? pane.id}
+          terminalId={pane.terminalId}
           cwd={pane.cwd ?? terminalCwd}
           isActive={isActive}
           focusToken={focusToken}

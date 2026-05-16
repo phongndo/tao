@@ -14,6 +14,9 @@ extern "c" fn sqlite3_bind_int(stmt: *sqlite3_stmt, index: c_int, value: c_int) 
 extern "c" fn sqlite3_bind_int64(stmt: *sqlite3_stmt, index: c_int, value: i64) c_int;
 extern "c" fn sqlite3_bind_null(stmt: *sqlite3_stmt, index: c_int) c_int;
 extern "c" fn sqlite3_bind_text(stmt: *sqlite3_stmt, index: c_int, value: [*]const u8, value_len: c_int, destructor: ?*const anyopaque) c_int;
+extern "c" fn sqlite3_column_text(stmt: *sqlite3_stmt, index: c_int) ?[*]const u8;
+extern "c" fn sqlite3_column_bytes(stmt: *sqlite3_stmt, index: c_int) c_int;
+extern "c" fn sqlite3_column_int64(stmt: *sqlite3_stmt, index: c_int) i64;
 
 const sqlite_ok = 0;
 const sqlite_row = 100;
@@ -145,6 +148,87 @@ const update_terminal_ended_sql =
     \\WHERE id = ?;
 ;
 
+const find_terminal_by_id_sql =
+    \\SELECT id, terminal_id, cwd, argv_json, status, cols, rows, event_log_path, last_seq
+    \\FROM terminal_sessions
+    \\WHERE id = ?
+    \\LIMIT 1;
+;
+
+const find_terminal_by_terminal_id_sql =
+    \\SELECT id, terminal_id, cwd, argv_json, status, cols, rows, event_log_path, last_seq
+    \\FROM terminal_sessions
+    \\WHERE terminal_id = ?
+    \\ORDER BY updated_at DESC
+    \\LIMIT 1;
+;
+
+const list_terminal_event_logs_sql =
+    \\SELECT id, event_log_path FROM terminal_sessions;
+;
+
+const clear_terminal_history_metadata_sql =
+    \\UPDATE terminal_sessions
+    \\SET scrollback_excerpt = NULL,
+    \\    last_seq = 0,
+    \\    snapshot_path = NULL,
+    \\    snapshot_seq = 0,
+    \\    snapshot_crc32 = NULL,
+    \\    snapshot_size = NULL,
+    \\    last_activity_at = datetime('now')
+    \\WHERE id = ?;
+;
+
+const delete_terminal_search_sql =
+    \\DELETE FROM terminal_search WHERE terminal_session_id = ?;
+;
+
+const delete_terminal_session_sql =
+    \\DELETE FROM terminal_sessions WHERE id = ?;
+;
+
+const upsert_agent_session_sql =
+    \\INSERT INTO agent_sessions (
+    \\    id, terminal_session_id, provider, native_session_id, original_argv_json,
+    \\    resume_argv_json, cwd, transcript_path, model, title, status, last_activity_at
+    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    \\ON CONFLICT(id) DO UPDATE SET
+    \\    provider = excluded.provider,
+    \\    native_session_id = COALESCE(excluded.native_session_id, agent_sessions.native_session_id),
+    \\    original_argv_json = COALESCE(excluded.original_argv_json, agent_sessions.original_argv_json),
+    \\    resume_argv_json = COALESCE(excluded.resume_argv_json, agent_sessions.resume_argv_json),
+    \\    cwd = COALESCE(excluded.cwd, agent_sessions.cwd),
+    \\    transcript_path = COALESCE(excluded.transcript_path, agent_sessions.transcript_path),
+    \\    model = COALESCE(excluded.model, agent_sessions.model),
+    \\    title = COALESCE(excluded.title, agent_sessions.title),
+    \\    status = excluded.status,
+    \\    last_activity_at = datetime('now')
+    \\;
+;
+
+const find_agent_resume_by_terminal_sql =
+    \\SELECT id, provider, native_session_id, resume_argv_json, status
+    \\FROM agent_sessions
+    \\WHERE terminal_session_id = ?
+    \\  AND native_session_id IS NOT NULL
+    \\  AND resume_argv_json IS NOT NULL
+    \\  AND status IN ('detected', 'running', 'resumable', 'resumed')
+    \\ORDER BY updated_at DESC
+    \\LIMIT 1;
+;
+
+const insert_terminal_search_sql =
+    \\INSERT INTO terminal_search (terminal_session_id, workspace_id, title, excerpt)
+    \\VALUES (?, ?, ?, ?);
+;
+
+const search_terminal_excerpts_sql =
+    \\SELECT terminal_session_id, title, excerpt
+    \\FROM terminal_search
+    \\WHERE terminal_search MATCH ?
+    \\LIMIT ?;
+;
+
 pub const TerminalSessionRecord = struct {
     id: []const u8,
     terminal_id: []const u8,
@@ -169,6 +253,90 @@ pub const TerminalEndedRecord = struct {
     last_seq: u64,
     exit_code: i32,
     signal: i32,
+};
+
+pub const TerminalSessionLookup = struct {
+    id: []u8,
+    terminal_id: []u8,
+    cwd: ?[]u8,
+    argv_json: ?[]u8,
+    status: []u8,
+    cols: u16,
+    rows: u16,
+    event_log_path: []u8,
+    last_seq: u64,
+
+    pub fn deinit(self: *TerminalSessionLookup, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.terminal_id);
+        if (self.cwd) |value| allocator.free(value);
+        if (self.argv_json) |value| allocator.free(value);
+        allocator.free(self.status);
+        allocator.free(self.event_log_path);
+        self.* = undefined;
+    }
+};
+
+pub const TerminalEventLogRef = struct {
+    id: []u8,
+    event_log_path: []u8,
+
+    pub fn deinit(self: *TerminalEventLogRef, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.event_log_path);
+        self.* = undefined;
+    }
+};
+
+pub const AgentSessionRecord = struct {
+    id: []const u8,
+    terminal_session_id: []const u8,
+    provider: []const u8,
+    native_session_id: ?[]const u8 = null,
+    original_argv_json: ?[]const u8 = null,
+    resume_argv_json: ?[]const u8 = null,
+    cwd: ?[]const u8 = null,
+    transcript_path: ?[]const u8 = null,
+    model: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    status: []const u8,
+};
+
+pub const AgentResumeLookup = struct {
+    id: []u8,
+    provider: []u8,
+    native_session_id: []u8,
+    resume_argv_json: []u8,
+    status: []u8,
+
+    pub fn deinit(self: *AgentResumeLookup, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.provider);
+        allocator.free(self.native_session_id);
+        allocator.free(self.resume_argv_json);
+        allocator.free(self.status);
+        self.* = undefined;
+    }
+};
+
+pub const TerminalSearchRecord = struct {
+    terminal_session_id: []const u8,
+    workspace_id: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    excerpt: []const u8,
+};
+
+pub const TerminalSearchResult = struct {
+    terminal_session_id: []u8,
+    title: ?[]u8,
+    excerpt: []u8,
+
+    pub fn deinit(self: *TerminalSearchResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.terminal_session_id);
+        if (self.title) |value| allocator.free(value);
+        allocator.free(self.excerpt);
+        self.* = undefined;
+    }
 };
 
 pub const Database = struct {
@@ -259,6 +427,163 @@ pub const Database = struct {
         try stmt.stepDone();
     }
 
+    pub fn findTerminalSessionById(self: *Database, allocator: std.mem.Allocator, id: []const u8) !?TerminalSessionLookup {
+        var stmt = try self.prepare(find_terminal_by_id_sql);
+        defer stmt.deinit();
+        try stmt.bindText(1, id);
+        return try readTerminalLookup(allocator, &stmt);
+    }
+
+    pub fn findTerminalSessionByTerminalId(self: *Database, allocator: std.mem.Allocator, terminal_id: []const u8) !?TerminalSessionLookup {
+        var stmt = try self.prepare(find_terminal_by_terminal_id_sql);
+        defer stmt.deinit();
+        try stmt.bindText(1, terminal_id);
+        return try readTerminalLookup(allocator, &stmt);
+    }
+
+    pub fn listTerminalEventLogs(self: *Database, allocator: std.mem.Allocator) ![]TerminalEventLogRef {
+        var stmt = try self.prepare(list_terminal_event_logs_sql);
+        defer stmt.deinit();
+
+        var refs: std.ArrayList(TerminalEventLogRef) = .empty;
+        errdefer {
+            for (refs.items) |*item| item.deinit(allocator);
+            refs.deinit(allocator);
+        }
+
+        while (try stmt.stepRow()) {
+            const id = try stmt.columnTextAlloc(allocator, 0);
+            errdefer allocator.free(id);
+            const path = try stmt.columnTextAlloc(allocator, 1);
+            errdefer allocator.free(path);
+            try refs.append(allocator, .{ .id = id, .event_log_path = path });
+        }
+
+        return refs.toOwnedSlice(allocator);
+    }
+
+    pub fn clearTerminalHistoryMetadata(self: *Database, session_id: []const u8) !void {
+        {
+            var stmt = try self.prepare(delete_terminal_search_sql);
+            defer stmt.deinit();
+            try stmt.bindText(1, session_id);
+            try stmt.stepDone();
+        }
+        {
+            var stmt = try self.prepare(clear_terminal_history_metadata_sql);
+            defer stmt.deinit();
+            try stmt.bindText(1, session_id);
+            try stmt.stepDone();
+        }
+    }
+
+    pub fn deleteTerminalSessionMetadata(self: *Database, session_id: []const u8) !void {
+        {
+            var stmt = try self.prepare(delete_terminal_search_sql);
+            defer stmt.deinit();
+            try stmt.bindText(1, session_id);
+            try stmt.stepDone();
+        }
+        {
+            var stmt = try self.prepare(delete_terminal_session_sql);
+            defer stmt.deinit();
+            try stmt.bindText(1, session_id);
+            try stmt.stepDone();
+        }
+    }
+
+    pub fn recordAgentSession(self: *Database, record: AgentSessionRecord) !void {
+        var stmt = try self.prepare(upsert_agent_session_sql);
+        defer stmt.deinit();
+
+        try stmt.bindText(1, record.id);
+        try stmt.bindText(2, record.terminal_session_id);
+        try stmt.bindText(3, record.provider);
+        try stmt.bindNullableText(4, record.native_session_id);
+        try stmt.bindNullableText(5, record.original_argv_json);
+        try stmt.bindNullableText(6, record.resume_argv_json);
+        try stmt.bindNullableText(7, record.cwd);
+        try stmt.bindNullableText(8, record.transcript_path);
+        try stmt.bindNullableText(9, record.model);
+        try stmt.bindNullableText(10, record.title);
+        try stmt.bindText(11, record.status);
+        try stmt.stepDone();
+    }
+
+    pub fn findAgentResumeForTerminal(self: *Database, allocator: std.mem.Allocator, terminal_session_id: []const u8) !?AgentResumeLookup {
+        var stmt = try self.prepare(find_agent_resume_by_terminal_sql);
+        defer stmt.deinit();
+        try stmt.bindText(1, terminal_session_id);
+
+        if (!try stmt.stepRow()) return null;
+        const id = try stmt.columnTextAlloc(allocator, 0);
+        errdefer allocator.free(id);
+        const provider = try stmt.columnTextAlloc(allocator, 1);
+        errdefer allocator.free(provider);
+        const native_session_id = try stmt.columnTextAlloc(allocator, 2);
+        errdefer allocator.free(native_session_id);
+        const resume_argv_json = try stmt.columnTextAlloc(allocator, 3);
+        errdefer allocator.free(resume_argv_json);
+        const status = try stmt.columnTextAlloc(allocator, 4);
+        errdefer allocator.free(status);
+
+        return .{
+            .id = id,
+            .provider = provider,
+            .native_session_id = native_session_id,
+            .resume_argv_json = resume_argv_json,
+            .status = status,
+        };
+    }
+
+    pub fn recordTerminalSearch(self: *Database, record: TerminalSearchRecord) !void {
+        {
+            var stmt = try self.prepare(delete_terminal_search_sql);
+            defer stmt.deinit();
+            try stmt.bindText(1, record.terminal_session_id);
+            try stmt.stepDone();
+        }
+        {
+            var stmt = try self.prepare(insert_terminal_search_sql);
+            defer stmt.deinit();
+            try stmt.bindText(1, record.terminal_session_id);
+            try stmt.bindNullableText(2, record.workspace_id);
+            try stmt.bindNullableText(3, record.title);
+            try stmt.bindText(4, record.excerpt);
+            try stmt.stepDone();
+        }
+    }
+
+    pub fn searchTerminalExcerpts(self: *Database, allocator: std.mem.Allocator, query: []const u8, limit: u32) ![]TerminalSearchResult {
+        var stmt = try self.prepare(search_terminal_excerpts_sql);
+        defer stmt.deinit();
+        try stmt.bindText(1, query);
+        try stmt.bindInt64(2, limit);
+
+        var results: std.ArrayList(TerminalSearchResult) = .empty;
+        errdefer {
+            for (results.items) |*item| item.deinit(allocator);
+            results.deinit(allocator);
+        }
+
+        while (try stmt.stepRow()) {
+            const terminal_session_id = try stmt.columnTextAlloc(allocator, 0);
+            errdefer allocator.free(terminal_session_id);
+            const title = try stmt.columnNullableTextAlloc(allocator, 1);
+            errdefer if (title) |value| allocator.free(value);
+            const excerpt = try stmt.columnTextAlloc(allocator, 2);
+            errdefer allocator.free(excerpt);
+
+            try results.append(allocator, .{
+                .terminal_session_id = terminal_session_id,
+                .title = title,
+                .excerpt = excerpt,
+            });
+        }
+
+        return results.toOwnedSlice(allocator);
+    }
+
     pub fn countTerminalSessions(self: *Database) !u64 {
         var stmt = try self.prepare("SELECT COUNT(*) FROM terminal_sessions;");
         defer stmt.deinit();
@@ -269,6 +594,18 @@ pub const Database = struct {
         var stmt = try self.prepare("SELECT COUNT(*) FROM terminal_sessions WHERE status = ?;");
         defer stmt.deinit();
         try stmt.bindText(1, status);
+        return stmt.stepCount();
+    }
+
+    pub fn countAgentSessions(self: *Database) !u64 {
+        var stmt = try self.prepare("SELECT COUNT(*) FROM agent_sessions;");
+        defer stmt.deinit();
+        return stmt.stepCount();
+    }
+
+    pub fn countSearchRows(self: *Database) !u64 {
+        var stmt = try self.prepare("SELECT COUNT(*) FROM terminal_search;");
+        defer stmt.deinit();
         return stmt.stepCount();
     }
 
@@ -351,14 +688,71 @@ const Statement = struct {
         };
     }
 
+    fn stepRow(self: *Statement) !bool {
+        const rc = sqlite3_step(self.handle);
+        return switch (rc) {
+            sqlite_row => true,
+            sqlite_done => false,
+            else => error.SqliteStepFailed,
+        };
+    }
+
     fn stepCount(self: *Statement) !u64 {
         const rc = sqlite3_step(self.handle);
         if (rc != sqlite_row) return error.SqliteStepFailed;
         return @intCast(sqlite3_column_int64(self.handle, 0));
     }
+
+    fn columnInt64(self: *Statement, index: c_int) i64 {
+        return sqlite3_column_int64(self.handle, index);
+    }
+
+    fn columnTextAlloc(self: *Statement, allocator: std.mem.Allocator, index: c_int) ![]u8 {
+        const ptr = sqlite3_column_text(self.handle, index) orelse return error.SqliteUnexpectedNull;
+        const len = sqlite3_column_bytes(self.handle, index);
+        if (len < 0) return error.SqliteValueTooLarge;
+        return allocator.dupe(u8, ptr[0..@intCast(len)]);
+    }
+
+    fn columnNullableTextAlloc(self: *Statement, allocator: std.mem.Allocator, index: c_int) !?[]u8 {
+        const ptr = sqlite3_column_text(self.handle, index) orelse return null;
+        const len = sqlite3_column_bytes(self.handle, index);
+        if (len < 0) return error.SqliteValueTooLarge;
+        return try allocator.dupe(u8, ptr[0..@intCast(len)]);
+    }
 };
 
-extern "c" fn sqlite3_column_int64(stmt: *sqlite3_stmt, index: c_int) i64;
+fn readTerminalLookup(allocator: std.mem.Allocator, stmt: *Statement) !?TerminalSessionLookup {
+    if (!try stmt.stepRow()) return null;
+
+    const id = try stmt.columnTextAlloc(allocator, 0);
+    errdefer allocator.free(id);
+    const terminal_id = try stmt.columnTextAlloc(allocator, 1);
+    errdefer allocator.free(terminal_id);
+    const cwd = try stmt.columnNullableTextAlloc(allocator, 2);
+    errdefer if (cwd) |value| allocator.free(value);
+    const argv_json = try stmt.columnNullableTextAlloc(allocator, 3);
+    errdefer if (argv_json) |value| allocator.free(value);
+    const status = try stmt.columnTextAlloc(allocator, 4);
+    errdefer allocator.free(status);
+    const cols = @as(u16, @intCast(stmt.columnInt64(5)));
+    const rows = @as(u16, @intCast(stmt.columnInt64(6)));
+    const event_log_path = try stmt.columnTextAlloc(allocator, 7);
+    errdefer allocator.free(event_log_path);
+    const last_seq = @as(u64, @intCast(stmt.columnInt64(8)));
+
+    return .{
+        .id = id,
+        .terminal_id = terminal_id,
+        .cwd = cwd,
+        .argv_json = argv_json,
+        .status = status,
+        .cols = cols,
+        .rows = rows,
+        .event_log_path = event_log_path,
+        .last_seq = last_seq,
+    };
+}
 
 test "sqlite migrations are registered in order" {
     try std.testing.expectEqual(@as(usize, 3), migrations.len);
@@ -397,4 +791,81 @@ test "sqlite database applies migrations and records terminal sessions" {
 
     try std.testing.expectEqual(@as(u64, 0), try database.countTerminalSessionsByStatus("live"));
     try std.testing.expectEqual(@as(u64, 1), try database.countTerminalSessionsByStatus("exited"));
+}
+
+test "sqlite database looks up terminal restart metadata" {
+    var database = try Database.openInMemory(std.testing.allocator);
+    defer database.deinit();
+
+    try database.recordTerminalSession(.{
+        .id = "session-restart",
+        .terminal_id = "terminal-restart",
+        .cwd = "/project",
+        .argv_json = "[\"bash\",\"-lc\",\"echo ok\"]",
+        .status = "detached",
+        .cols = 100,
+        .rows = 30,
+        .event_log_path = "/tmp/restart/events.taoev",
+        .last_seq = 42,
+    });
+
+    var by_id = (try database.findTerminalSessionById(std.testing.allocator, "session-restart")).?;
+    defer by_id.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("terminal-restart", by_id.terminal_id);
+    try std.testing.expectEqualStrings("/project", by_id.cwd.?);
+    try std.testing.expectEqual(@as(u16, 100), by_id.cols);
+    try std.testing.expectEqual(@as(u64, 42), by_id.last_seq);
+
+    var by_terminal = (try database.findTerminalSessionByTerminalId(std.testing.allocator, "terminal-restart")).?;
+    defer by_terminal.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("session-restart", by_terminal.id);
+}
+
+test "sqlite database records agent resume metadata and FTS excerpts" {
+    var database = try Database.openInMemory(std.testing.allocator);
+    defer database.deinit();
+
+    try database.recordTerminalSession(.{
+        .id = "session-agent",
+        .terminal_id = "terminal-agent",
+        .status = "live",
+        .cols = 80,
+        .rows = 24,
+        .event_log_path = "/tmp/agent/events.taoev",
+        .last_seq = 1,
+    });
+
+    try database.recordAgentSession(.{
+        .id = "agent-session-agent-codex",
+        .terminal_session_id = "session-agent",
+        .provider = "codex",
+        .native_session_id = "native-123",
+        .original_argv_json = "[\"codex\"]",
+        .resume_argv_json = "[\"codex\",\"resume\",\"native-123\"]",
+        .status = "resumable",
+    });
+
+    try std.testing.expectEqual(@as(u64, 1), try database.countAgentSessions());
+    var agent_resume = (try database.findAgentResumeForTerminal(std.testing.allocator, "session-agent")).?;
+    defer agent_resume.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("codex", agent_resume.provider);
+    try std.testing.expectEqualStrings("native-123", agent_resume.native_session_id);
+
+    try database.recordTerminalSearch(.{
+        .terminal_session_id = "session-agent",
+        .title = "Agent",
+        .excerpt = "build failed with uniqueerror",
+    });
+    try std.testing.expectEqual(@as(u64, 1), try database.countSearchRows());
+
+    const results = try database.searchTerminalExcerpts(std.testing.allocator, "uniqueerror", 10);
+    defer {
+        for (results) |*result| result.deinit(std.testing.allocator);
+        std.testing.allocator.free(results);
+    }
+    try std.testing.expectEqual(@as(usize, 1), results.len);
+    try std.testing.expectEqualStrings("session-agent", results[0].terminal_session_id);
+
+    try database.clearTerminalHistoryMetadata("session-agent");
+    try std.testing.expectEqual(@as(u64, 0), try database.countSearchRows());
 }

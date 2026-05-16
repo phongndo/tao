@@ -2,6 +2,7 @@ import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
 import { createOscTitleScanner } from './osc-title'
 
 type CreateTerminalOptions = {
+  readonly terminalId?: string
   readonly cwd?: string
   readonly onTitle?: (title: string) => void
   readonly onArchived?: () => void
@@ -345,6 +346,7 @@ export async function createTerminal(
   try {
     const attachedSession = await window.electronAPI.attachSession({
       sessionId,
+      terminalId: options.terminalId,
       cols: term.cols,
       rows: term.rows,
       cwd: options.cwd,

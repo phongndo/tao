@@ -77,6 +77,30 @@ pub const TerminalSession = struct {
         self.last_seq = files.last_seq;
     }
 
+    pub fn updateCreateMetadata(
+        self: *TerminalSession,
+        allocator: std.mem.Allocator,
+        terminal_id: []const u8,
+        cwd: ?[]const u8,
+        cols: u16,
+        rows: u16,
+    ) !void {
+        if (!std.mem.eql(u8, self.terminal_id, terminal_id)) {
+            const next_terminal_id = try allocator.dupe(u8, terminal_id);
+            allocator.free(self.terminal_id);
+            self.terminal_id = next_terminal_id;
+        }
+
+        if (!optionalTextEql(self.cwd, cwd)) {
+            const next_cwd = if (cwd) |value| try allocator.dupe(u8, value) else null;
+            if (self.cwd) |value| allocator.free(value);
+            self.cwd = next_cwd;
+        }
+
+        self.cols = cols;
+        self.rows = rows;
+    }
+
     pub fn bufferPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator, seq: u64, payload: []const u8) !void {
         if (payload.len == 0) return;
 
@@ -203,6 +227,12 @@ pub const Manager = struct {
     }
 };
 
+fn optionalTextEql(lhs: ?[]const u8, rhs: ?[]const u8) bool {
+    if (lhs == null and rhs == null) return true;
+    if (lhs == null or rhs == null) return false;
+    return std.mem.eql(u8, lhs.?, rhs.?);
+}
+
 test "session manager creates and updates sessions" {
     var manager = Manager.init(std.testing.allocator);
     defer manager.deinit();
@@ -225,6 +255,26 @@ test "session manager creates and updates sessions" {
     try std.testing.expectEqual(Status.live, manager.find("session-1").?.status);
     try std.testing.expect(manager.kill("session-1"));
     try std.testing.expectEqualStrings("killed", manager.find("session-1").?.status.text());
+}
+
+test "terminal session create metadata can be refreshed for restart fallback" {
+    var manager = Manager.init(std.testing.allocator);
+    defer manager.deinit();
+
+    const created = try manager.create(.{
+        .session_id = "session-refresh",
+        .terminal_id = "term-old",
+        .cols = 80,
+        .rows = 24,
+        .cwd = "/old",
+        .argv = &.{},
+    });
+
+    try created.updateCreateMetadata(std.testing.allocator, "term-new", "/new", 100, 40);
+    try std.testing.expectEqualStrings("term-new", created.terminal_id);
+    try std.testing.expectEqualStrings("/new", created.cwd.?);
+    try std.testing.expectEqual(@as(u16, 100), created.cols);
+    try std.testing.expectEqual(@as(u16, 40), created.rows);
 }
 
 test "terminal session keeps bounded pending output for first live attach" {

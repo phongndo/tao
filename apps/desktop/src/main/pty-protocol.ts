@@ -18,6 +18,7 @@ export const PtyClientMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal('spawn'),
     sessionId: SessionIdSchema,
+    terminalId: Schema.optional(SessionIdSchema),
     cols: Schema.Number,
     rows: Schema.Number,
     cwd: Schema.optional(CwdSchema),
@@ -25,6 +26,7 @@ export const PtyClientMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal('attach'),
     sessionId: SessionIdSchema,
+    terminalId: Schema.optional(SessionIdSchema),
     cols: Schema.Number,
     rows: Schema.Number,
     cwd: Schema.optional(CwdSchema),

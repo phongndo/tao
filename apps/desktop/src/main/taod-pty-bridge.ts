@@ -117,6 +117,7 @@ export class TaodPtyBridge {
         if (!isValidSize(message.cols, message.rows)) return
         await this.openSession(
           message.sessionId,
+          message.terminalId ?? message.sessionId,
           message.cols,
           message.rows,
           sanitizeCwd(message.cwd),
@@ -129,6 +130,7 @@ export class TaodPtyBridge {
         if (!isValidSize(message.cols, message.rows)) return
         await this.openSession(
           message.sessionId,
+          message.terminalId ?? message.sessionId,
           message.cols,
           message.rows,
           sanitizeCwd(message.cwd),
@@ -159,6 +161,7 @@ export class TaodPtyBridge {
 
   private async openSession(
     sessionId: string,
+    terminalId: string,
     cols: number,
     rows: number,
     cwd: string | undefined,
@@ -176,10 +179,10 @@ export class TaodPtyBridge {
     let attachResponse: TaodControlResponse
     let stream: TaodSessionStream
     if (options.forceCreate) {
-      await this.createShellSession(sessionId, cols, rows, cwd)
+      await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
       ;({ response: attachResponse, stream } = await this.client.attachSession({
         sessionId,
-        terminalId: sessionId,
+        terminalId,
         cols,
         rows,
         cwd,
@@ -188,17 +191,17 @@ export class TaodPtyBridge {
       try {
         ;({ response: attachResponse, stream } = await this.client.attachSession({
           sessionId,
-          terminalId: sessionId,
+          terminalId,
           cols,
           rows,
           cwd,
         }))
       } catch (error) {
         if (!isNotFoundError(error)) throw error
-        await this.createShellSession(sessionId, cols, rows, cwd)
+        await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
         ;({ response: attachResponse, stream } = await this.client.attachSession({
           sessionId,
-          terminalId: sessionId,
+          terminalId,
           cols,
           rows,
           cwd,
@@ -211,10 +214,10 @@ export class TaodPtyBridge {
       // Tao no longer restores cold shell scrollback; upgrade that case to a
       // real fresh shell under the same session id.
       stream.close()
-      await this.createShellSession(sessionId, cols, rows, cwd)
+      await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
       ;({ response: attachResponse, stream } = await this.client.attachSession({
         sessionId,
-        terminalId: sessionId,
+        terminalId,
         cols,
         rows,
         cwd,
@@ -239,13 +242,14 @@ export class TaodPtyBridge {
 
   private async createShellSession(
     sessionId: string,
+    terminalId: string,
     cols: number,
     rows: number,
     cwd?: string,
   ): Promise<TaodControlResponse> {
     return this.client.createSession({
       sessionId,
-      terminalId: sessionId,
+      terminalId,
       cols,
       rows,
       cwd,

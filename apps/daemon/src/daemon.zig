@@ -1,4 +1,5 @@
 const std = @import("std");
+const adapter = @import("adapter.zig");
 const cleanup = @import("cleanup.zig");
 const db = @import("db.zig");
 const event_log = @import("event_log.zig");
@@ -214,8 +215,7 @@ pub const Daemon = struct {
 
         const created = if (self.sessions.find(session_id)) |existing| blk: {
             existing.status = .live;
-            existing.cols = cols;
-            existing.rows = rows;
+            try existing.updateCreateMetadata(self.allocator, terminal_id, request.cwd, cols, rows);
             break :blk existing;
         } else try self.sessions.create(.{
             .session_id = session_id,
@@ -236,6 +236,7 @@ pub const Daemon = struct {
         const argv_json = try argvJsonAlloc(self.allocator, request.argv orelse &.{});
         defer if (argv_json) |json| self.allocator.free(json);
         self.recordTerminalSessionLocked(created, argv_json);
+        self.recordAgentSessionLocked(created, request.argv orelse &.{}, argv_json, "running");
         try self.startSessionReaderLocked(created);
 
         return sessionResponse(allocator, request, created);
@@ -243,7 +244,9 @@ pub const Daemon = struct {
 
     fn handleAttachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
-        const attached = self.sessions.attach(session_id) orelse return notFound(allocator, request);
+        const attached = self.sessions.attach(session_id) orelse
+            (try self.restoreSessionFromDatabaseLocked(session_id, request)) orelse
+            return notFound(allocator, request);
         if (!isLiveAttachable(attached)) {
             return rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
@@ -317,6 +320,11 @@ pub const Daemon = struct {
                         continue;
                     };
                     result.add(removed);
+                    if (removed.removed_sessions > 0) {
+                        if (self.database) |*database| database.deleteTerminalSessionMetadata(session_id) catch |err| {
+                            std.log.warn("failed to delete cleared session metadata {s}: {t}", .{ session_id, err });
+                        };
+                    }
                 }
             }
         } else {
@@ -341,6 +349,7 @@ pub const Daemon = struct {
                 };
                 result.add(removed);
             }
+            self.pruneMissingEventLogMetadataLocked();
         }
 
         return rpc.responseJsonAlloc(allocator, .{
@@ -383,6 +392,7 @@ pub const Daemon = struct {
                 .error_message = @errorName(err),
             });
         };
+        self.pruneMissingEventLogMetadataLocked();
 
         return rpc.responseJsonAlloc(allocator, .{
             .id = request.requestId(),
@@ -390,6 +400,70 @@ pub const Daemon = struct {
             .removed_sessions = result.removed_sessions,
             .removed_bytes = result.removed_bytes,
         });
+    }
+
+    fn restoreSessionFromDatabaseLocked(
+        self: *Daemon,
+        session_id: []const u8,
+        request: rpc.ControlRequestJson,
+    ) !?*session.TerminalSession {
+        const database = if (self.database) |*database| database else return null;
+        var record = (try database.findTerminalSessionById(self.allocator, session_id)) orelse record: {
+            const terminal_id = request.requestTerminalId() orelse return null;
+            break :record (try database.findTerminalSessionByTerminalId(self.allocator, terminal_id)) orelse return null;
+        };
+        defer record.deinit(self.allocator);
+
+        const resume_lookup = try database.findAgentResumeForTerminal(self.allocator, record.id);
+        var mutable_resume_lookup = resume_lookup;
+        defer if (mutable_resume_lookup) |*lookup| lookup.deinit(self.allocator);
+
+        const restart_argv_json = if (mutable_resume_lookup) |lookup| lookup.resume_argv_json else record.argv_json orelse return null;
+        var parsed_argv = parseArgvJson(self.allocator, restart_argv_json) catch |err| {
+            std.log.warn("failed to parse restart argv for {s}: {t}", .{ record.id, err });
+            return null;
+        };
+        defer parsed_argv.deinit();
+
+        const argv = parsed_argv.items();
+        if (argv.len == 0) return null;
+
+        const cols = request.cols orelse record.cols;
+        const rows = request.rows orelse record.rows;
+        const cwd = request.cwd orelse record.cwd;
+        const terminal_id = request.requestTerminalId() orelse record.terminal_id;
+
+        const restored = try self.sessions.create(.{
+            .session_id = session_id,
+            .terminal_id = terminal_id,
+            .cols = cols,
+            .rows = rows,
+            .cwd = cwd,
+            .argv = argv,
+        });
+        restored.status = .live;
+
+        try self.ensureSessionPersistence(restored);
+        self.ensureSessionProcess(restored, argv) catch |err| {
+            std.log.warn("failed to restore session process for {s}: {t}", .{ record.id, err });
+            return null;
+        };
+        if (!isLiveAttachable(restored)) return null;
+
+        if (restored.event_log_path) |path| {
+            _ = event_log.appendResize(self.allocator, path, &restored.last_seq, cols, rows) catch |err| {
+                std.log.warn("failed to append restored resize frame for {s}: {t}", .{ restored.id, err });
+            };
+        }
+
+        const current_argv_json = try argvJsonAlloc(self.allocator, argv);
+        defer if (current_argv_json) |json| self.allocator.free(json);
+        self.recordTerminalSessionLocked(restored, current_argv_json);
+        self.recordAgentSessionLocked(restored, argv, current_argv_json, if (mutable_resume_lookup != null) "resumed" else "running");
+        try self.startSessionReaderLocked(restored);
+
+        std.log.info("restored persisted session {s} with native command resume", .{restored.id});
+        return restored;
     }
 
     fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
@@ -403,6 +477,12 @@ pub const Daemon = struct {
         const files = try event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item.id);
         item.installPersistence(self.allocator, files);
         item.clearPendingOutput(self.allocator);
+
+        if (self.database) |*database| {
+            database.clearTerminalHistoryMetadata(item.id) catch |err| {
+                std.log.warn("failed to clear metadata history for {s}: {t}", .{ item.id, err });
+            };
+        }
 
         if (isLiveAttachable(item)) {
             if (item.event_log_path) |path| {
@@ -673,6 +753,90 @@ pub const Daemon = struct {
         }) catch |err| {
             std.log.warn("failed to record terminal session exit {s}: {t}", .{ item.id, err });
         };
+
+        self.indexSearchExcerptLocked(item);
+    }
+
+    fn recordAgentSessionLocked(
+        self: *Daemon,
+        item: *const session.TerminalSession,
+        argv: []const []const u8,
+        original_argv_json: ?[]const u8,
+        status: []const u8,
+    ) void {
+        const database = if (self.database) |*database| database else return;
+        const provider = adapter.Provider.detectArgv(argv);
+        if (provider == .unknown) return;
+
+        const agent_id = std.fmt.allocPrint(self.allocator, "agent-{s}-{s}", .{ item.id, provider.text() }) catch |err| {
+            std.log.warn("failed to allocate agent id for {s}: {t}", .{ item.id, err });
+            return;
+        };
+        defer self.allocator.free(agent_id);
+
+        const native_session_id = adapter.discoverNativeSessionIdArgv(argv);
+        const resume_argv_json = if (native_session_id) |native_id|
+            adapter.resumeArgvJsonAlloc(self.allocator, provider, argv[0], native_id) catch |err| blk: {
+                std.log.warn("failed to build {s} resume argv for {s}: {t}", .{ provider.text(), item.id, err });
+                break :blk null;
+            }
+        else
+            null;
+        defer if (resume_argv_json) |json| self.allocator.free(json);
+
+        database.recordAgentSession(.{
+            .id = agent_id,
+            .terminal_session_id = item.id,
+            .provider = provider.text(),
+            .native_session_id = native_session_id,
+            .original_argv_json = original_argv_json,
+            .resume_argv_json = resume_argv_json,
+            .cwd = item.cwd,
+            .transcript_path = item.excerpt_path,
+            .status = if (native_session_id != null and std.mem.eql(u8, status, "running")) "resumable" else status,
+        }) catch |err| {
+            std.log.warn("failed to record agent session {s}: {t}", .{ item.id, err });
+        };
+    }
+
+    fn indexSearchExcerptLocked(self: *Daemon, item: *const session.TerminalSession) void {
+        const database = if (self.database) |*database| database else return;
+        const excerpt_path = item.excerpt_path orelse return;
+
+        const excerpt = readSmallFileAlloc(self.allocator, excerpt_path, event_log.max_excerpt_bytes) catch |err| {
+            std.log.warn("failed to read search excerpt for {s}: {t}", .{ item.id, err });
+            return;
+        };
+        defer if (excerpt) |bytes| self.allocator.free(bytes);
+        const bytes = excerpt orelse return;
+        if (bytes.len == 0) return;
+
+        database.recordTerminalSearch(.{
+            .terminal_session_id = item.id,
+            .title = item.terminal_id,
+            .excerpt = bytes,
+        }) catch |err| {
+            std.log.warn("failed to index search excerpt for {s}: {t}", .{ item.id, err });
+        };
+    }
+
+    fn pruneMissingEventLogMetadataLocked(self: *Daemon) void {
+        const database = if (self.database) |*database| database else return;
+        const refs = database.listTerminalEventLogs(self.allocator) catch |err| {
+            std.log.warn("failed to list terminal metadata for pruning: {t}", .{err});
+            return;
+        };
+        defer {
+            for (refs) |*item| item.deinit(self.allocator);
+            self.allocator.free(refs);
+        }
+
+        for (refs) |ref| {
+            if (fileExists(ref.event_log_path)) continue;
+            database.deleteTerminalSessionMetadata(ref.id) catch |err| {
+                std.log.warn("failed to prune missing session metadata {s}: {t}", .{ ref.id, err });
+            };
+        }
     }
 
     fn broadcastExitFrameLocked(self: *Daemon, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
@@ -833,6 +997,26 @@ fn notFound(allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8
     });
 }
 
+const ParsedArgv = struct {
+    parsed: ?std.json.Parsed([][]const u8) = null,
+
+    fn deinit(self: *ParsedArgv) void {
+        if (self.parsed) |*parsed| parsed.deinit();
+        self.* = undefined;
+    }
+
+    fn items(self: *const ParsedArgv) []const []const u8 {
+        if (self.parsed) |parsed| return parsed.value;
+        return &.{};
+    }
+};
+
+fn parseArgvJson(allocator: std.mem.Allocator, json: []const u8) !ParsedArgv {
+    if (json.len == 0) return .{};
+    const parsed = try std.json.parseFromSlice([][]const u8, allocator, json, .{});
+    return .{ .parsed = parsed };
+}
+
 fn argvJsonAlloc(allocator: std.mem.Allocator, argv: []const []const u8) !?[]u8 {
     if (argv.len == 0) return null;
 
@@ -847,6 +1031,55 @@ fn argvJsonAlloc(allocator: std.mem.Allocator, argv: []const []const u8) !?[]u8 
     try out.writer.writeByte(']');
 
     return try out.toOwnedSlice();
+}
+
+fn readSmallFileAlloc(allocator: std.mem.Allocator, path: []const u8, limit: usize) !?[]u8 {
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+
+    const fd = std.c.open(path_z.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) {
+        return switch (std.posix.errno(fd)) {
+            .NOENT => null,
+            else => error.FileOpenFailed,
+        };
+    }
+    defer _ = std.c.close(fd);
+
+    var stat: std.c.Stat = undefined;
+    if (std.c.fstat(fd, &stat) != 0) return error.FileStatFailed;
+    if (stat.size < 0) return error.FileTooBig;
+    const size: usize = @intCast(stat.size);
+    if (size > limit) return error.FileTooBig;
+
+    const data = try allocator.alloc(u8, size);
+    errdefer allocator.free(data);
+
+    var offset: usize = 0;
+    while (offset < data.len) {
+        const amount = std.c.read(fd, data[offset..].ptr, data.len - offset);
+        if (amount < 0) {
+            switch (std.posix.errno(amount)) {
+                .INTR => continue,
+                else => return error.FileReadFailed,
+            }
+        }
+        if (amount == 0) break;
+        offset += @intCast(amount);
+    }
+
+    return data[0..offset];
+}
+
+fn fileExists(path: []const u8) bool {
+    const allocator = std.heap.smp_allocator;
+    const path_z = allocator.dupeZ(u8, path) catch return false;
+    defer allocator.free(path_z);
+
+    const fd = std.c.open(path_z.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) return false;
+    _ = std.c.close(fd);
+    return true;
 }
 
 fn writeAllFd(fd: std.posix.fd_t, data: []const u8) !void {
@@ -938,6 +1171,15 @@ test "daemon control RPC creates and updates sessions" {
 
     try std.testing.expectEqual(@as(u16, 120), daemon.sessions.find("s1").?.cols);
     try std.testing.expect(std.mem.indexOf(u8, resized, "\"cols\":120") != null);
+
+    const recreated = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"2b","method":"create","session_id":"s1","terminal_id":"t1b","cols":90,"rows":25,"cwd":"/tmp"}
+    );
+    defer std.testing.allocator.free(recreated);
+
+    try std.testing.expectEqualStrings("t1b", daemon.sessions.find("s1").?.terminal_id);
+    try std.testing.expectEqualStrings("/tmp", daemon.sessions.find("s1").?.cwd.?);
+    try std.testing.expectEqual(@as(u16, 90), daemon.sessions.find("s1").?.cols);
 
     const protocol_created = try daemon.handleControlPayload(std.testing.allocator,
         \\{"id":"3","type":"create","sessionId":"s2","terminalId":"t2","cols":80,"rows":24}

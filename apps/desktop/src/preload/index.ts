@@ -356,6 +356,7 @@ const electronAPI = {
     const sessionId = createSessionId()
     await this.attachSession({
       sessionId,
+      terminalId: input.terminalId,
       cols: input.cols,
       rows: input.rows,
       cwd: input.cwd,
@@ -375,9 +376,11 @@ const electronAPI = {
     const rows = typeof input.rows === 'number' ? input.rows : 24
     const state = getReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
+    const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
     queuePtyMessage({
       type: 'attach',
       sessionId,
+      ...(terminalId.length > 0 ? { terminalId } : {}),
       cols,
       rows,
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
