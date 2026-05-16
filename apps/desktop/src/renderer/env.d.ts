@@ -6,6 +6,13 @@
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
 import type {
+  AttachSessionInput,
+  AttachSessionResult,
+  CreateSessionInput,
+  CreateSessionResult,
+  OutputFrame,
+} from '@tao/shared/taod-protocol'
+import type {
   WorkspaceGitBranchResponse,
   WorkspaceGitStatusResponse,
   WorkspaceGitWorktreesResponse,
@@ -14,6 +21,14 @@ import type {
 } from '@tao/shared/workspace'
 
 export interface ElectronAPI {
+  createSession(input: CreateSessionInput): Promise<CreateSessionResult>
+  attachSession(input: AttachSessionInput): Promise<AttachSessionResult>
+  detachSession(sessionId: string): Promise<void>
+  writeSessionInput(sessionId: string, data: Uint8Array): void
+  resizeSession(sessionId: string, cols: number, rows: number): void
+  killSession(sessionId: string): Promise<void>
+  onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void
+  onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void
   spawnPty(
     sessionId: string,
     cols: number,

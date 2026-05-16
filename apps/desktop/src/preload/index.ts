@@ -4,6 +4,13 @@ import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protoco
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
+import type {
+  AttachSessionInput,
+  AttachSessionResult,
+  CreateSessionInput,
+  CreateSessionResult,
+  OutputFrame,
+} from '@tao/shared/taod-protocol'
 import {
   WorkspaceError,
   WorkspacePickDirectoryResponseSchema,
@@ -19,6 +26,8 @@ import {
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
 type PtyDataCallback = (data: string) => void
+type SessionOutputCallback = (frame: OutputFrame) => void
+type SessionResizeCallback = (cols: number, rows: number) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
@@ -33,6 +42,7 @@ type PendingDataState = {
 
 type ReadyState = {
   size: PtySize | null
+  seq: number
   promise: Promise<PtySize>
   resolve: ((size: PtySize) => void) | null
   reject: ((err: Error) => void) | null
@@ -48,6 +58,8 @@ let pendingClientMessages: PtyClientMessage[] = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, PendingDataState>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
+const sessionOutputCallbacks = new Map<string, SessionOutputCallback[]>()
+const sessionResizeCallbacks = new Map<string, SessionResizeCallback[]>()
 const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
 const ptyExitCallbacks = new Map<string, PtyExitCallback[]>()
 
@@ -56,6 +68,7 @@ function createReadyState(sessionId: string): ReadyState {
   let rejectReady: ((err: Error) => void) | null = null
   const state: ReadyState = {
     size: null,
+    seq: 0,
     promise: new Promise<PtySize>((resolve, reject) => {
       resolveReady = resolve
       rejectReady = reject
@@ -98,10 +111,11 @@ function rejectPtyReady(sessionId: string, error: Error) {
   state.reject = null
 }
 
-function resolvePtyReady(sessionId: string, size: PtySize) {
+function resolvePtyReady(sessionId: string, size: PtySize, seq = 0) {
   const state = readyStates.get(sessionId)
   if (!state) return
   state.size = size
+  state.seq = seq
   clearReadyTimeout(state)
   state.resolve?.(size)
   state.resolve = null
@@ -170,6 +184,8 @@ function clearSessionState(sessionId: string) {
   readyStates.delete(sessionId)
   pendingData.delete(sessionId)
   ptyDataCallbacks.delete(sessionId)
+  sessionOutputCallbacks.delete(sessionId)
+  sessionResizeCallbacks.delete(sessionId)
   ptyErrorCallbacks.delete(sessionId)
   ptyExitCallbacks.delete(sessionId)
 }
@@ -213,13 +229,29 @@ function handlePtyData(sessionId: string, data: string) {
   }
 }
 
+function handleSessionOutput(frame: OutputFrame) {
+  for (const callback of sessionOutputCallbacks.get(frame.sessionId) ?? []) {
+    callback(frame)
+  }
+}
+
 function handlePtyMessage(message: PtyServiceMessage) {
   switch (message.type) {
     case 'ready':
-      resolvePtyReady(message.sessionId, message.size)
+      resolvePtyReady(message.sessionId, message.size, message.seq ?? 0)
       break
     case 'data':
+      handleSessionOutput({
+        sessionId: message.sessionId,
+        seq: message.seq ?? 0,
+        data: message.data,
+      })
       handlePtyData(message.sessionId, message.data)
+      break
+    case 'resize':
+      for (const callback of sessionResizeCallbacks.get(message.sessionId) ?? []) {
+        callback(message.cols, message.rows)
+      }
       break
     case 'error':
       rejectPtyReady(message.sessionId, new Error(message.error))
@@ -254,6 +286,12 @@ function decodePtyServiceMessage(message: unknown): PtyServiceMessage | null {
   return decoded._tag === 'Some' ? decoded.value : null
 }
 
+function createSessionId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.()
+  if (randomUUID) return `session-${randomUUID}`
+  return `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
 ipcRenderer.on('pty:port', (event) => {
   const [port] = event.ports
   if (!port) return
@@ -273,6 +311,8 @@ ipcRenderer.on('pty:service-error', (_event, error: string) => {
     ...readyStates.keys(),
     ...pendingData.keys(),
     ...ptyDataCallbacks.keys(),
+    ...sessionOutputCallbacks.keys(),
+    ...sessionResizeCallbacks.keys(),
     ...ptyErrorCallbacks.keys(),
     ...ptyExitCallbacks.keys(),
   ])
@@ -294,6 +334,79 @@ ipcRenderer.send('pty:requestPort')
  * these specific methods, nothing else.
  */
 const electronAPI = {
+  async createSession(input: CreateSessionInput): Promise<CreateSessionResult> {
+    if (!input || typeof input.terminalId !== 'string' || input.terminalId.length === 0) {
+      return Promise.reject(new Error('terminalId is required'))
+    }
+    if (typeof input.cols !== 'number' || typeof input.rows !== 'number') {
+      return Promise.reject(new Error('Session size must be numeric'))
+    }
+
+    const sessionId = createSessionId()
+    await this.attachSession({
+      sessionId,
+      cols: input.cols,
+      rows: input.rows,
+      cwd: input.cwd,
+    })
+    return { sessionId }
+  },
+
+  async attachSession(
+    input: AttachSessionInput & { cols?: number; rows?: number; cwd?: string },
+  ): Promise<AttachSessionResult> {
+    const sessionId = input.sessionId ?? input.terminalId
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return Promise.reject(new Error('sessionId or terminalId is required'))
+    }
+
+    const cols = typeof input.cols === 'number' ? input.cols : 80
+    const rows = typeof input.rows === 'number' ? input.rows : 24
+    const state = getReadyState(sessionId)
+    const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
+    queuePtyMessage({
+      type: 'attach',
+      sessionId,
+      cols,
+      rows,
+      ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
+    })
+    const size = state.size ?? (await state.promise)
+    return { sessionId, seq: state.seq, cols: size.cols, rows: size.rows }
+  },
+
+  detachSession(sessionId: string): Promise<void> {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return Promise.resolve()
+    queuePtyMessage({ type: 'detach', sessionId })
+    return Promise.resolve()
+  },
+
+  writeSessionInput(sessionId: string, data: Uint8Array): void {
+    if (!(data instanceof Uint8Array) || data.length === 0) return
+    this.sendPtyInput(sessionId, new TextDecoder().decode(data))
+  },
+
+  resizeSession(sessionId: string, cols: number, rows: number): void {
+    this.resizePty(sessionId, cols, rows)
+  },
+
+  killSession(sessionId: string): Promise<void> {
+    this.killPty(sessionId)
+    return Promise.resolve()
+  },
+
+  onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void {
+    const callbacks = callbacksFor(sessionOutputCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => removeCallback(sessionOutputCallbacks, sessionId, callback)
+  },
+
+  onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void {
+    const callbacks = callbacksFor(sessionResizeCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => removeCallback(sessionResizeCallbacks, sessionId, callback)
+  },
+
   spawnPty(sessionId: string, cols: number, rows: number, cwd?: string): Promise<PtySize> {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       return Promise.reject(new Error('PTY sessionId is required'))

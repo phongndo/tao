@@ -18,6 +18,9 @@ export const CreateSessionResultSchema = Schema.Struct({
 export const AttachSessionInputSchema = Schema.Struct({
   sessionId: Schema.optional(NonEmptyString),
   terminalId: Schema.optional(NonEmptyString),
+  cols: Schema.optional(Schema.Number),
+  rows: Schema.optional(Schema.Number),
+  cwd: Schema.optional(Schema.String),
 })
 
 export const AttachSessionResultSchema = Schema.Struct({

@@ -22,6 +22,14 @@ export const PtyClientMessageSchema = Schema.Union([
     rows: Schema.Number,
     cwd: Schema.optional(CwdSchema),
   }),
+  Schema.Struct({
+    type: Schema.Literal('attach'),
+    sessionId: SessionIdSchema,
+    cols: Schema.Number,
+    rows: Schema.Number,
+    cwd: Schema.optional(CwdSchema),
+  }),
+  Schema.Struct({ type: Schema.Literal('detach'), sessionId: SessionIdSchema }),
   Schema.Struct({ type: Schema.Literal('write'), sessionId: SessionIdSchema, data: Schema.String }),
   Schema.Struct({
     type: Schema.Literal('resize'),
@@ -33,8 +41,27 @@ export const PtyClientMessageSchema = Schema.Union([
 ])
 
 export const PtyServiceMessageSchema = Schema.Union([
-  Schema.Struct({ type: Schema.Literal('ready'), sessionId: SessionIdSchema, size: PtySizeSchema }),
-  Schema.Struct({ type: Schema.Literal('data'), sessionId: SessionIdSchema, data: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal('ready'),
+    sessionId: SessionIdSchema,
+    size: PtySizeSchema,
+    seq: Schema.optional(Schema.Number),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('data'),
+    sessionId: SessionIdSchema,
+    data: Schema.String,
+    seq: Schema.optional(Schema.Number),
+    replay: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('resize'),
+    sessionId: SessionIdSchema,
+    cols: Schema.Number,
+    rows: Schema.Number,
+    seq: Schema.optional(Schema.Number),
+    replay: Schema.optional(Schema.Boolean),
+  }),
   Schema.Struct({
     type: Schema.Literal('error'),
     sessionId: SessionIdSchema,

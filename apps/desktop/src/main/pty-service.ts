@@ -5,9 +5,11 @@ import {
   appendExit,
   appendOutput,
   appendResize,
+  cleanupSessionPersistence,
   openPersistentSession,
   type PersistentSession,
 } from './session-persistence'
+import { defaultSettings, readSettings } from './settings-store'
 import {
   type PtyClientMessage,
   PtyClientMessageSchema,
@@ -27,6 +29,7 @@ const PTY_INTERACTIVE_FLUSH_INTERVAL = 1 // ms, keeps typed-key echo snappy
 const PTY_MAX_BUFFER_CHARS = 64 * 1024 // cap per IPC payload to avoid renderer jank
 const PTY_INTERACTIVE_WINDOW_MS = 32
 const PTY_INTERACTIVE_CHARS = 256
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 
 type PtySession = {
   manager: PtyManager
@@ -42,6 +45,9 @@ type PtySession = {
 // utility process alive on every platform/build. Keep the service process
 // explicitly alive until the main process kills it during app shutdown.
 const keepAliveTimer = setInterval(() => {}, 60_000)
+const cleanupTimer = setInterval(() => {
+  void runSessionCleanup()
+}, SESSION_CLEANUP_INTERVAL_MS)
 
 let rendererReadyForPty = false
 let port: MessagePortMain | null = null
@@ -76,7 +82,11 @@ function resetPtyBuffer(session: PtySession) {
   session.bufferedChars = 0
 }
 
-function sendPtyData(sessionId: string, data: string) {
+function bigintToSafeNumber(value: bigint): number {
+  return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value)
+}
+
+function sendPtyData(sessionId: string, data: string, seq?: bigint, replay?: boolean) {
   if (data.length === 0) return
 
   for (let start = 0; start < data.length; ) {
@@ -87,7 +97,13 @@ function sendPtyData(sessionId: string, data: string) {
       if (code >= 0xdc00 && code <= 0xdfff) end--
     }
 
-    postToClient({ type: 'data', sessionId, data: data.slice(start, end) })
+    postToClient({
+      type: 'data',
+      sessionId,
+      data: data.slice(start, end),
+      ...(seq === undefined ? {} : { seq: bigintToSafeNumber(seq) }),
+      ...(replay ? { replay: true } : {}),
+    })
     start = end
   }
 }
@@ -99,7 +115,7 @@ function flushPtyBuffer(sessionId: string) {
   clearPtyFlushTimer(session)
   if (session.bufferedChars === 0 || !rendererReadyForPty) return
 
-  sendPtyData(sessionId, takePtyBuffer(session))
+  sendPtyData(sessionId, takePtyBuffer(session), session.persistence.seq)
 }
 
 function schedulePtyFlush(sessionId: string, session: PtySession, delay: number) {
@@ -142,7 +158,12 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
   if (existingSession) {
     existingSession.manager.resize(cols, rows)
     appendResize(existingSession.persistence, cols, rows)
-    postToClient({ type: 'ready', sessionId, size: existingSession.manager.getColsRows() })
+    postToClient({
+      type: 'ready',
+      sessionId,
+      size: existingSession.manager.getColsRows(),
+      seq: bigintToSafeNumber(existingSession.persistence.seq),
+    })
     flushPtyBuffer(sessionId)
     return
   }
@@ -166,8 +187,9 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
     appendResize(persistence, cols, rows)
 
     manager.onData((data) => {
-      appendOutput(persistence, data)
+      const seq = appendOutput(persistence, data)
       bufferPtyData(sessionId, data)
+      session.persistence.seq = seq
     })
     manager.onExit(({ exitCode, signal }) => {
       flushPtyBuffer(sessionId)
@@ -176,11 +198,24 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
       sessions.delete(sessionId)
       postToClient({ type: 'exit', sessionId, info: { exitCode, signal } })
     })
-    postToClient({ type: 'ready', sessionId, size: manager.getColsRows() })
+    postToClient({
+      type: 'ready',
+      sessionId,
+      size: manager.getColsRows(),
+      seq: bigintToSafeNumber(persistence.seq),
+    })
   } catch (err) {
     console.error(`[pty-service] Failed to spawn PTY ${sessionId}:`, err)
     postToClient({ type: 'error', sessionId, error: String(err) })
   }
+}
+
+function detachPty(sessionId: string) {
+  const session = sessions.get(sessionId)
+  if (!session) return
+
+  flushPtyBuffer(sessionId)
+  resetPtyBuffer(session)
 }
 
 function killPty(sessionId: string) {
@@ -211,6 +246,7 @@ function handleClientMessage(message: PtyClientMessage) {
       }
       break
     case 'spawn':
+    case 'attach':
       if (
         !Number.isInteger(message.cols) ||
         !Number.isInteger(message.rows) ||
@@ -220,6 +256,9 @@ function handleClientMessage(message: PtyClientMessage) {
         return
       }
       spawnPty(message.sessionId, message.cols, message.rows, message.cwd)
+      break
+    case 'detach':
+      detachPty(message.sessionId)
       break
     case 'write': {
       if (message.data.length === 0) return
@@ -246,6 +285,22 @@ function handleClientMessage(message: PtyClientMessage) {
     case 'kill':
       killPty(message.sessionId)
       break
+  }
+}
+
+async function runSessionCleanup(): Promise<void> {
+  try {
+    const settings = (await readSettings()) ?? defaultSettings
+    const persistence = settings.persistence ?? defaultSettings.persistence
+    if (!persistence?.enabled) return
+
+    cleanupSessionPersistence({
+      retainDays: persistence.retainDays,
+      maxSessionBytes: persistence.maxSessionBytes,
+      activeSessionIds: new Set(sessions.keys()),
+    })
+  } catch (error) {
+    console.warn('[pty-service] Session cleanup failed:', error)
   }
 }
 
@@ -278,5 +333,8 @@ parentPort.on('message', (event) => {
 
 process.once('exit', () => {
   clearInterval(keepAliveTimer)
+  clearInterval(cleanupTimer)
   killAllPtys()
 })
+
+void runSessionCleanup()
