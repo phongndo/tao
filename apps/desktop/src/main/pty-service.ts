@@ -9,6 +9,8 @@ import {
   clearSessionPersistence,
   cleanupSessionPersistence,
   openPersistentSession,
+  readReplayEvents,
+  readSessionPersistenceSummary,
   resetPersistentSession,
   type PersistentSession,
 } from './session-persistence'
@@ -213,6 +215,47 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
   }
 }
 
+function attachPty(sessionId: string, cols: number, rows: number, cwd?: string) {
+  const existingSession = sessions.get(sessionId)
+  if (existingSession) {
+    spawnPty(sessionId, cols, rows, cwd)
+    return
+  }
+
+  const summary = readSessionPersistenceSummary(sessionId)
+  if (!summary) {
+    spawnPty(sessionId, cols, rows, cwd)
+    return
+  }
+
+  const size = summary.size ?? { cols, rows }
+  for (const event of readReplayEvents(sessionId)) {
+    switch (event.type) {
+      case 'output':
+        sendPtyData(sessionId, event.data, event.seq, true)
+        break
+      case 'resize':
+        postToClient({
+          type: 'resize',
+          sessionId,
+          cols: event.cols,
+          rows: event.rows,
+          seq: bigintToSafeNumber(event.seq),
+          replay: true,
+        })
+        break
+    }
+  }
+
+  postToClient({
+    type: 'ready',
+    sessionId,
+    size,
+    seq: bigintToSafeNumber(summary.lastSeq),
+    archived: true,
+  })
+}
+
 function detachPty(sessionId: string) {
   const session = sessions.get(sessionId)
   if (!session) return
@@ -277,7 +320,6 @@ function handleClientMessage(message: PtyClientMessage) {
       }
       break
     case 'spawn':
-    case 'attach':
       if (
         !Number.isInteger(message.cols) ||
         !Number.isInteger(message.rows) ||
@@ -287,6 +329,17 @@ function handleClientMessage(message: PtyClientMessage) {
         return
       }
       spawnPty(message.sessionId, message.cols, message.rows, message.cwd)
+      break
+    case 'attach':
+      if (
+        !Number.isInteger(message.cols) ||
+        !Number.isInteger(message.rows) ||
+        message.cols <= 0 ||
+        message.rows <= 0
+      ) {
+        return
+      }
+      attachPty(message.sessionId, message.cols, message.rows, message.cwd)
       break
     case 'detach':
       detachPty(message.sessionId)

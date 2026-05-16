@@ -75,6 +75,21 @@ test('render replay events preserve resize frames and avoid mid-frame output tru
   assert.deepEqual(persistence.readReplayEvents('resize-replay-session', 8), [])
 })
 
+test('summarizes persisted sessions for archived restore detection', () => {
+  const session = persistence.openPersistentSession('summary-session')
+  persistence.appendResize(session, 100, 30)
+  persistence.appendOutput(session, 'archived')
+  persistence.appendExit(session, 0)
+
+  assert.deepEqual(persistence.readSessionPersistenceSummary('summary-session'), {
+    lastSeq: 3n,
+    size: { cols: 100, rows: 30 },
+    hasOutput: true,
+    hasExit: true,
+  })
+  assert.equal(persistence.readSessionPersistenceSummary('missing-summary-session'), null)
+})
+
 test('cleanup honors retention, total-size cap, and active sessions', () => {
   const keep = persistence.openPersistentSession('active-session')
   persistence.appendOutput(keep, 'keep')

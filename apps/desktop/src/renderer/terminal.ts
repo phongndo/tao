@@ -4,6 +4,7 @@ import { createOscTitleScanner } from './osc-title'
 type CreateTerminalOptions = {
   readonly cwd?: string
   readonly onTitle?: (title: string) => void
+  readonly onArchived?: () => void
 }
 
 /**
@@ -263,6 +264,7 @@ export async function createTerminal(
   const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
   const fitAddon = new FitAddon()
   let stopResizeObserver: (() => void) | null = null
+  let archived = false
 
   term.loadAddon(fitAddon)
   await nextAnimationFrame()
@@ -294,6 +296,7 @@ export async function createTerminal(
 
   // Terminal input → PTY (no debug overhead)
   term.onData((data: string) => {
+    if (archived) return
     window.electronAPI.sendPtyInput(sessionId, data)
   })
 
@@ -310,7 +313,7 @@ export async function createTerminal(
       resizeFrame = null
       const nextResize = pendingResize
       pendingResize = null
-      if (nextResize) {
+      if (nextResize && !archived) {
         window.electronAPI.resizePty(sessionId, nextResize.cols, nextResize.rows)
       }
     })
@@ -339,6 +342,10 @@ export async function createTerminal(
       rows: term.rows,
       cwd: options.cwd,
     })
+    if (attachedSession.archived) {
+      archived = true
+      options.onArchived?.()
+    }
     const initialPtySize = { cols: attachedSession.cols, rows: attachedSession.rows }
     if (initialPtySize.cols !== term.cols || initialPtySize.rows !== term.rows) {
       term.resize(initialPtySize.cols, initialPtySize.rows)

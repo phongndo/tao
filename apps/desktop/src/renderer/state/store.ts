@@ -33,6 +33,7 @@ export interface TaoState {
   setTabLayout(tabId: string, layout: MosaicLayoutNode | null): void
   selectPane(paneId: string): void
   selectPaneByDirection(direction: PaneFocusDirection): void
+  restartPaneSession(paneId: string): void
   setPaneTitle(paneId: string, title: string): void
   setPaneStatus(paneId: string, status: PaneStatus): void
   splitPane(paneId: string, direction: MosaicDirection): void
@@ -941,6 +942,19 @@ export const useTaoStore = create<TaoState>()((set) => ({
       return {
         tabs: rememberTabPane(state.tabs, activeTab.id, nextPaneId),
         activePaneId: nextPaneId,
+      }
+    }),
+  restartPaneSession: (paneId) =>
+    set((state) => {
+      const pane = state.panes.find((candidate) => candidate.id === paneId)
+      if (!pane || pane.type !== 'terminal') return {}
+
+      return {
+        panes: state.panes.map((candidate) =>
+          candidate.id === pane.id
+            ? { ...candidate, lastSessionId: createId('session'), status: 'idle' }
+            : candidate,
+        ),
       }
     }),
   setPaneTitle: (paneId, title) =>

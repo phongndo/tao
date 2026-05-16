@@ -9,6 +9,7 @@ import type {
   AttachSessionResult,
   CreateSessionInput,
   CreateSessionResult,
+  ExitInfo,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
 import {
@@ -28,6 +29,7 @@ import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 type PtyDataCallback = (data: string) => void
 type SessionOutputCallback = (frame: OutputFrame) => void
 type SessionResizeCallback = (cols: number, rows: number) => void
+type SessionExitCallback = (info: ExitInfo) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
@@ -43,6 +45,7 @@ type PendingDataState = {
 type ReadyState = {
   size: PtySize | null
   seq: number
+  archived: boolean
   promise: Promise<PtySize>
   resolve: ((size: PtySize) => void) | null
   reject: ((err: Error) => void) | null
@@ -60,6 +63,7 @@ const pendingData = new Map<string, PendingDataState>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
 const sessionOutputCallbacks = new Map<string, SessionOutputCallback[]>()
 const sessionResizeCallbacks = new Map<string, SessionResizeCallback[]>()
+const sessionExitCallbacks = new Map<string, SessionExitCallback[]>()
 const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
 const ptyExitCallbacks = new Map<string, PtyExitCallback[]>()
 
@@ -69,6 +73,7 @@ function createReadyState(sessionId: string): ReadyState {
   const state: ReadyState = {
     size: null,
     seq: 0,
+    archived: false,
     promise: new Promise<PtySize>((resolve, reject) => {
       resolveReady = resolve
       rejectReady = reject
@@ -111,11 +116,12 @@ function rejectPtyReady(sessionId: string, error: Error) {
   state.reject = null
 }
 
-function resolvePtyReady(sessionId: string, size: PtySize, seq = 0) {
+function resolvePtyReady(sessionId: string, size: PtySize, seq = 0, archived = false) {
   const state = readyStates.get(sessionId)
   if (!state) return
   state.size = size
   state.seq = seq
+  state.archived = archived
   clearReadyTimeout(state)
   state.resolve?.(size)
   state.resolve = null
@@ -186,6 +192,7 @@ function clearSessionState(sessionId: string) {
   ptyDataCallbacks.delete(sessionId)
   sessionOutputCallbacks.delete(sessionId)
   sessionResizeCallbacks.delete(sessionId)
+  sessionExitCallbacks.delete(sessionId)
   ptyErrorCallbacks.delete(sessionId)
   ptyExitCallbacks.delete(sessionId)
 }
@@ -238,7 +245,7 @@ function handleSessionOutput(frame: OutputFrame) {
 function handlePtyMessage(message: PtyServiceMessage) {
   switch (message.type) {
     case 'ready':
-      resolvePtyReady(message.sessionId, message.size, message.seq ?? 0)
+      resolvePtyReady(message.sessionId, message.size, message.seq ?? 0, message.archived ?? false)
       break
     case 'data':
       handleSessionOutput({
@@ -273,6 +280,9 @@ function handlePtyMessage(message: PtyServiceMessage) {
         )
       }
       for (const callback of ptyExitCallbacks.get(message.sessionId) ?? []) {
+        callback(message.info)
+      }
+      for (const callback of sessionExitCallbacks.get(message.sessionId) ?? []) {
         callback(message.info)
       }
       clearSessionState(message.sessionId)
@@ -313,6 +323,7 @@ ipcRenderer.on('pty:service-error', (_event, error: string) => {
     ...ptyDataCallbacks.keys(),
     ...sessionOutputCallbacks.keys(),
     ...sessionResizeCallbacks.keys(),
+    ...sessionExitCallbacks.keys(),
     ...ptyErrorCallbacks.keys(),
     ...ptyExitCallbacks.keys(),
   ])
@@ -372,7 +383,7 @@ const electronAPI = {
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
     })
     const size = state.size ?? (await state.promise)
-    return { sessionId, seq: state.seq, cols: size.cols, rows: size.rows }
+    return { sessionId, seq: state.seq, cols: size.cols, rows: size.rows, archived: state.archived }
   },
 
   detachSession(sessionId: string): Promise<void> {
@@ -429,6 +440,12 @@ const electronAPI = {
     const callbacks = callbacksFor(sessionResizeCallbacks, sessionId)
     callbacks.push(callback)
     return () => removeCallback(sessionResizeCallbacks, sessionId, callback)
+  },
+
+  onSessionExit(sessionId: string, callback: (info: ExitInfo) => void): () => void {
+    const callbacks = callbacksFor(sessionExitCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => removeCallback(sessionExitCallbacks, sessionId, callback)
   },
 
   spawnPty(sessionId: string, cols: number, rows: number, cwd?: string): Promise<PtySize> {

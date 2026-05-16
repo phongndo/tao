@@ -50,6 +50,7 @@ export const PtyServiceMessageSchema = Schema.Union([
     sessionId: SessionIdSchema,
     size: PtySizeSchema,
     seq: Schema.optional(Schema.Number),
+    archived: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal('data'),

@@ -10,6 +10,7 @@ import type {
   AttachSessionResult,
   CreateSessionInput,
   CreateSessionResult,
+  ExitInfo,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
 import type {
@@ -32,6 +33,7 @@ export interface ElectronAPI {
   clearAllSessionHistory(): Promise<void>
   onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void
   onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void
+  onSessionExit(sessionId: string, callback: (info: ExitInfo) => void): () => void
   spawnPty(
     sessionId: string,
     cols: number,

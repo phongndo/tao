@@ -502,6 +502,7 @@ const PaneTile = memo(function PaneTile({
   focusToken,
   onSelect,
   onTitleChange,
+  onRestartSession,
 }: {
   pane: Pane
   terminalCwd?: string
@@ -509,6 +510,7 @@ const PaneTile = memo(function PaneTile({
   focusToken: number
   onSelect(): void
   onTitleChange(title: string): void
+  onRestartSession(): void
 }) {
   const status = pane.status ?? 'idle'
 
@@ -534,6 +536,7 @@ const PaneTile = memo(function PaneTile({
           isActive={isActive}
           focusToken={focusToken}
           onTitleChange={onTitleChange}
+          onRestartSession={onRestartSession}
         />
       ) : (
         <div className="pane-standby" aria-hidden="true">
@@ -553,6 +556,7 @@ const PaneGrid = memo(function PaneGrid({
   onLayoutRelease,
   onSelectPane,
   onPaneTitle,
+  onRestartPaneSession,
 }: {
   tab: Tab
   terminalCwd?: string
@@ -562,6 +566,7 @@ const PaneGrid = memo(function PaneGrid({
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
   onPaneTitle(paneId: string, title: string): void
+  onRestartPaneSession(paneId: string): void
 }) {
   const [draftLayout, setDraftLayout] = useState<MosaicNode<string> | null>(tab.layout)
 
@@ -596,10 +601,19 @@ const PaneGrid = memo(function PaneGrid({
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
           onSelect={() => onSelectPane(pane.id)}
           onTitleChange={(title) => onPaneTitle(pane.id, title)}
+          onRestartSession={() => onRestartPaneSession(pane.id)}
         />
       )
     },
-    [activePaneId, onPaneTitle, onSelectPane, panesById, terminalCwd, terminalFocusTokens],
+    [
+      activePaneId,
+      onPaneTitle,
+      onRestartPaneSession,
+      onSelectPane,
+      panesById,
+      terminalCwd,
+      terminalFocusTokens,
+    ],
   )
 
   return (
@@ -636,6 +650,7 @@ export function App() {
   const setTabLayout = useTaoStore((state) => state.setTabLayout)
   const selectPane = useTaoStore((state) => state.selectPane)
   const selectPaneByDirection = useTaoStore((state) => state.selectPaneByDirection)
+  const restartPaneSession = useTaoStore((state) => state.restartPaneSession)
   const setPaneTitle = useTaoStore((state) => state.setPaneTitle)
   const splitActivePane = useTaoStore((state) => state.splitActivePane)
   const closeActivePane = useTaoStore((state) => state.closeActivePane)
@@ -1029,6 +1044,7 @@ export function App() {
                       onLayoutRelease={setTabLayout}
                       onSelectPane={selectPane}
                       onPaneTitle={setPaneTitle}
+                      onRestartPaneSession={restartPaneSession}
                     />
                   </div>
                 )

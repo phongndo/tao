@@ -59,6 +59,13 @@ export type ReplayEvent =
       readonly rows: number
     }
 
+export type SessionPersistenceSummary = {
+  readonly lastSeq: bigint
+  readonly size: { readonly cols: number; readonly rows: number } | null
+  readonly hasOutput: boolean
+  readonly hasExit: boolean
+}
+
 export type CleanupSessionPersistenceOptions = {
   readonly retainDays: number
   readonly maxSessionBytes: number
@@ -392,6 +399,36 @@ export function readReplayEvents(sessionId: string, maxBytes = MAX_REPLAY_BYTES)
   }
 
   return events
+}
+
+export function readSessionPersistenceSummary(sessionId: string): SessionPersistenceSummary | null {
+  const eventLogPath = join(sessionDir(sessionId), 'events.taoev')
+  const parsed = parseEventLog(eventLogPath)
+  if (!parsed.validHeader || parsed.frames.length === 0) return null
+
+  let size: { cols: number; rows: number } | null = null
+  let hasOutput = false
+  let hasExit = false
+  let lastSeq = 0n
+
+  for (const frame of parsed.frames) {
+    lastSeq = frame.seq
+    if (frame.kind === EventFrameKind.Output && frame.payload.length > 0) {
+      hasOutput = true
+      continue
+    }
+
+    if (frame.kind === EventFrameKind.Resize) {
+      size = decodeResizePayload(frame.payload) ?? size
+      continue
+    }
+
+    if (frame.kind === EventFrameKind.Exit) {
+      hasExit = true
+    }
+  }
+
+  return { lastSeq, size, hasOutput, hasExit }
 }
 
 function directorySize(path: string): number {

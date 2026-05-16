@@ -14,12 +14,14 @@ export function TerminalPane({
   isActive,
   focusToken,
   onTitleChange,
+  onRestartSession,
 }: {
   sessionId: string
   cwd?: string
   isActive: boolean
   focusToken: number
   onTitleChange?(title: string): void
+  onRestartSession?(): void
 }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -27,6 +29,7 @@ export function TerminalPane({
   const cwdRef = useRef(cwd)
   const terminalReadyRef = useRef(false)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
+  const [isArchived, setIsArchived] = useState(false)
 
   useEffect(() => {
     onTitleChangeRef.current = onTitleChange
@@ -53,9 +56,13 @@ export function TerminalPane({
 
       try {
         setTerminalError(null)
+        setIsArchived(false)
         const terminal = await createTerminal(surface, sessionId, {
           cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
+          onArchived: () => {
+            if (!disposed) setIsArchived(true)
+          },
         })
         if (disposed) {
           terminal.dispose()
@@ -114,6 +121,14 @@ export function TerminalPane({
           {terminalError.title ? <h2>{terminalError.title}</h2> : null}
           <pre>{terminalError.message}</pre>
           {terminalError.detail ? <p>{terminalError.detail}</p> : null}
+        </div>
+      ) : null}
+      {isArchived && !terminalError ? (
+        <div className="terminal-archive-banner">
+          <span>Archived session</span>
+          <button type="button" onClick={onRestartSession} disabled={!onRestartSession}>
+            Start fresh shell
+          </button>
         </div>
       ) : null}
     </div>
