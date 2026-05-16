@@ -22,10 +22,12 @@ import {
 } from 'react'
 import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
 import type { AppCommand } from '@tao/shared/app-command'
+import type { PaneLayoutData } from '@tao/shared/session'
 import {
   LOCAL_WORKSPACE_ID,
   type Pane,
   type ReorderPlacement,
+  selectPaneLayoutData,
   type Tab,
   useTaoStore,
   type Workspace,
@@ -43,6 +45,28 @@ const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tao-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
+const LAYOUT_WRITE_DEBOUNCE_MS = 150
+const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
+
+function readLegacyLocalStorageLayout(): unknown | null {
+  try {
+    const raw = window.localStorage?.getItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { state?: unknown }
+    return parsed.state ?? parsed
+  } catch (error) {
+    console.warn('[layout] Failed to read legacy localStorage layout:', error)
+    return null
+  }
+}
+
+function clearLegacyLocalStorageLayout(): void {
+  try {
+    window.localStorage?.removeItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
+  } catch {
+    // Best-effort migration cleanup only.
+  }
+}
 
 // react-mosaic-component ships React 18-era class component types that do not satisfy
 // React 19's JSX constructor check. Keep the runtime component and narrow only the JSX type.
@@ -479,7 +503,7 @@ const PaneTile = memo(function PaneTile({
       )}
       {pane.type === 'terminal' ? (
         <TerminalPane
-          sessionId={pane.id}
+          sessionId={pane.lastSessionId ?? pane.id}
           cwd={pane.cwd ?? terminalCwd}
           isActive={isActive}
           focusToken={focusToken}
@@ -593,7 +617,9 @@ export function App() {
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
+  const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
+  const [layoutLoaded, setLayoutLoaded] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
     () =>
@@ -644,25 +670,77 @@ export function App() {
     () => new Map(Object.entries(terminalFocusCounts)),
     [terminalFocusCounts],
   )
-  const previousPaneIdsRef = useRef(new Set(panes.map((pane) => pane.id)))
+  const previousPaneSessionsRef = useRef(
+    new Map(panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id])),
+  )
 
   useEffect(() => {
+    let cancelled = false
+
+    async function loadLayout() {
+      try {
+        const layout = (await window.electronAPI.readLayout()) ?? readLegacyLocalStorageLayout()
+        if (!cancelled && layout) hydrateLayout(layout as PaneLayoutData)
+        if (!cancelled && layout) clearLegacyLocalStorageLayout()
+      } catch (error) {
+        console.warn('[layout] Failed to read pane layout:', error)
+      } finally {
+        if (!cancelled) setLayoutLoaded(true)
+      }
+    }
+
+    void loadLayout()
+
+    return () => {
+      cancelled = true
+    }
+  }, [hydrateLayout])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = useTaoStore.subscribe((state) => {
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        window.electronAPI.writeLayout(selectPaneLayoutData(state)).catch((error) => {
+          console.warn('[layout] Failed to write pane layout:', error)
+        })
+      }, LAYOUT_WRITE_DEBOUNCE_MS)
+    })
+
+    window.electronAPI.writeLayout(selectPaneLayoutData(useTaoStore.getState())).catch((error) => {
+      console.warn('[layout] Failed to write initial pane layout:', error)
+    })
+
+    return () => {
+      unsubscribe()
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [layoutLoaded])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
     ensureWorkspaceTab(activeWorkspaceKey)
-  }, [activeWorkspaceKey, ensureWorkspaceTab])
+  }, [activeWorkspaceKey, ensureWorkspaceTab, layoutLoaded])
 
   useEffect(() => {
     document.title = activeTab ? `${activeTab.name} — Tao` : 'Tao'
   }, [activeTab])
 
   useEffect(() => {
+    if (!layoutLoaded) return
     const nextPaneIds = new Set(panes.map((pane) => pane.id))
-    for (const paneId of previousPaneIdsRef.current) {
+    for (const [paneId, sessionId] of previousPaneSessionsRef.current) {
       if (!nextPaneIds.has(paneId)) {
-        window.electronAPI.killPty(paneId)
+        window.electronAPI.killPty(sessionId)
       }
     }
-    previousPaneIdsRef.current = nextPaneIds
-  }, [panes])
+    previousPaneSessionsRef.current = new Map(
+      panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id]),
+    )
+  }, [layoutLoaded, panes])
 
   useEffect(() => {
     const focusActiveTerminal = () => {
@@ -766,6 +844,10 @@ export function App() {
   ]
     .filter(Boolean)
     .join(' ')
+
+  if (!layoutLoaded) {
+    return <div className="tao-shell" />
+  }
 
   return (
     <div className={shellClassName}>

@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
 import type { AppCommand } from '@tao/shared/app-command'
+import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
 import {
   WorkspaceError,
   WorkspacePickDirectoryResponseSchema,
@@ -396,6 +397,22 @@ const electronAPI = {
 
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getPullRequestInfo(workspacePath))
+  },
+
+  readLayout(): Promise<PaneLayoutData | null> {
+    return ipcRenderer.invoke('layout:read') as Promise<PaneLayoutData | null>
+  },
+
+  writeLayout(data: PaneLayoutData): Promise<void> {
+    return ipcRenderer.invoke('layout:write', data) as Promise<void>
+  },
+
+  readSettings(): Promise<SettingsData | null> {
+    return ipcRenderer.invoke('settings:read') as Promise<SettingsData | null>
+  },
+
+  writeSettings(data: SettingsData): Promise<void> {
+    return ipcRenderer.invoke('settings:write', data) as Promise<void>
   },
 }
 

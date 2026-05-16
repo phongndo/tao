@@ -4,6 +4,7 @@
  */
 
 import type { AppCommand } from '@tao/shared/app-command'
+import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
 import type {
   WorkspaceGitBranchResponse,
   WorkspaceGitStatusResponse,
@@ -36,6 +37,10 @@ export interface ElectronAPI {
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse>
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>
+  readLayout(): Promise<PaneLayoutData | null>
+  writeLayout(data: PaneLayoutData): Promise<void>
+  readSettings(): Promise<SettingsData | null>
+  writeSettings(data: SettingsData): Promise<void>
 }
 
 declare global {

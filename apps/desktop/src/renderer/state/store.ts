@@ -1,11 +1,10 @@
 import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-component'
 import { Schema } from 'effect'
 import { create } from 'zustand'
-import { createJSONStorage, persist } from 'zustand/middleware'
 import type { PaneFocusDirection } from '@tao/shared/app-command'
+import type { PaneLayoutData } from '@tao/shared/session'
 import { type WorktreeInfo, WorktreeInfoSchema } from '@tao/shared/workspace'
 import { sanitizeTerminalTitle } from '../osc-title'
-import { effectLocalStorage } from '../storage'
 
 export const LOCAL_WORKSPACE_ID = 'tao:local'
 
@@ -18,6 +17,7 @@ export interface TaoState {
   activePaneId: string | null
   sidebarExpanded: boolean
   sidebarWidth: number
+  hydrateLayout(data: PaneLayoutData): void
   addWorkspace(workspace: Workspace): void
   removeWorkspace(workspaceId: string): void
   selectWorkspace(workspaceId: string): void
@@ -69,11 +69,13 @@ export type MosaicLayoutNode = MosaicNode<string>
 
 export interface Pane {
   id: string
+  terminalId: string
   tabId: string
   type: PaneType
   name: string
   cwd?: string
   status?: PaneStatus
+  lastSessionId?: string
 }
 
 export type PaneType = 'terminal' | 'webview'
@@ -107,11 +109,13 @@ const PersistedTabSchema = Schema.Struct({
 
 const PersistedPaneSchema = Schema.Struct({
   id: Schema.String,
+  terminalId: Schema.optional(Schema.String),
   tabId: Schema.String,
   type: PaneTypeSchema,
   name: Schema.String,
   cwd: Schema.optional(Schema.String),
   status: Schema.optional(PaneStatusSchema),
+  lastSessionId: Schema.optional(Schema.String),
 })
 
 const PersistedTaoStateSchema = Schema.Struct({
@@ -147,12 +151,15 @@ function createId(prefix: string): string {
 }
 
 function createTerminalPane(tabId: string, index: number): Pane {
+  const terminalId = createId('term')
   return {
     id: createId('pane'),
+    terminalId,
     tabId,
     type: 'terminal',
     name: `Terminal ${index}`,
     status: 'idle',
+    lastSessionId: createId('session'),
   }
 }
 
@@ -524,8 +531,12 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
     .filter((pane) => isNonEmptyString(pane.id) && isNonEmptyString(pane.tabId))
     .map<Pane>((pane) => ({
       ...pane,
+      terminalId: isNonEmptyString(pane.terminalId ?? '') ? pane.terminalId! : createId('term'),
       name: sanitizeTerminalTitle(pane.name) ?? 'Terminal',
       status: pane.status ?? 'idle',
+      lastSessionId: isNonEmptyString(pane.lastSessionId ?? '')
+        ? pane.lastSessionId
+        : createId('session'),
     }))
   const paneIdsByTab = new Map<string, Set<string>>()
   for (const pane of panes) {
@@ -590,306 +601,317 @@ function repairPersistedState(state: TaoState): TaoState {
   }
 }
 
-export const useTaoStore = create<TaoState>()(
-  persist(
-    (set) => ({
-      workspaces: [],
-      activeWorkspaceId: null,
-      tabs: [initialLocalTab.tab],
-      activeTabId: initialLocalTab.tab.id,
-      panes: [initialLocalTab.pane],
-      activePaneId: initialLocalTab.pane.id,
-      sidebarExpanded: true,
-      sidebarWidth: 240,
-      addWorkspace: (workspace) =>
-        set((state) => {
-          const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)
-          if (existingWorkspace) {
-            return {
-              activeWorkspaceId: existingWorkspace.id,
-              ...ensureWorkspaceTabState(state, existingWorkspace.id),
-            }
-          }
-
-          const orderedWorkspace = {
-            ...workspace,
-            order: state.workspaces.length,
-          }
-          const { tab, pane } = createTerminalTab(orderedWorkspace.id, 0)
-
-          return {
-            workspaces: [...state.workspaces, orderedWorkspace],
-            activeWorkspaceId: orderedWorkspace.id,
-            tabs: [...state.tabs, tab],
-            activeTabId: tab.id,
-            panes: [...state.panes, pane],
-            activePaneId: pane.id,
-          }
-        }),
-      removeWorkspace: (workspaceId) =>
-        set((state) => {
-          const workspaces = state.workspaces
-            .filter(({ id }) => id !== workspaceId)
-            .map((workspace, order) => ({ ...workspace, order }))
-          const removedTabIds = new Set(
-            state.tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => tab.id),
-          )
-          const tabs = state.tabs.filter((tab) => tab.workspaceId !== workspaceId)
-          const panes = state.panes.filter((pane) => !removedTabIds.has(pane.tabId))
-          const activeWorkspaceId =
-            state.activeWorkspaceId === workspaceId
-              ? (workspaces.find(({ order }) => order === 0)?.id ?? null)
-              : state.activeWorkspaceId
-
-          const nextState = { ...state, workspaces, tabs, panes, activeWorkspaceId }
-          const nextTab = activeWorkspaceId
-            ? getWorkspaceTabs(tabs, activeWorkspaceId)[0]
-            : getWorkspaceTabs(tabs, LOCAL_WORKSPACE_ID)[0]
-
-          return {
-            workspaces,
-            activeWorkspaceId,
-            tabs,
-            panes,
-            activeTabId: nextTab?.id ?? null,
-            activePaneId: nextTab ? getFirstPaneId(nextTab.layout) : null,
-            ...(activeWorkspaceId ? ensureWorkspaceTabState(nextState, activeWorkspaceId) : {}),
-          }
-        }),
-      selectWorkspace: (workspaceId) =>
-        set((state) => ({
-          activeWorkspaceId: workspaceId,
-          ...ensureWorkspaceTabState(state, workspaceId),
-        })),
-      selectWorkspaceByIndex: (index) =>
-        set((state) => {
-          const workspace = [...state.workspaces].sort((a, b) => a.order - b.order)[index]
-          if (!workspace) return {}
-
-          return {
-            activeWorkspaceId: workspace.id,
-            ...ensureWorkspaceTabState(state, workspace.id),
-          }
-        }),
-      ensureWorkspaceTab: (workspaceId) =>
-        set((state) =>
-          ensureWorkspaceTabState(
-            state,
-            workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID,
-          ),
-        ),
-      newTab: (workspaceId) =>
-        set((state) => {
-          const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
-          const order = getWorkspaceTabs(state.tabs, targetWorkspaceId).length
-          const { tab, pane } = createTerminalTab(targetWorkspaceId, order)
-
-          return {
-            tabs: [...state.tabs, tab],
-            activeTabId: tab.id,
-            panes: [...state.panes, pane],
-            activePaneId: pane.id,
-          }
-        }),
-      closeTab: (tabId) => set((state) => closeTabState(state, tabId)),
-      closeActiveTab: () =>
-        set((state) => (state.activeTabId ? closeTabState(state, state.activeTabId) : {})),
-      selectTab: (tabId) =>
-        set((state) => {
-          const tab = state.tabs.find((candidate) => candidate.id === tabId)
-          if (!tab) return {}
-
-          return {
-            activeWorkspaceId:
-              tab.workspaceId === LOCAL_WORKSPACE_ID ? state.activeWorkspaceId : tab.workspaceId,
-            activeTabId: tab.id,
-            activePaneId: getFirstPaneId(tab.layout),
-          }
-        }),
-      selectTabByIndex: (index) =>
-        set((state) => {
-          const workspaceId = state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
-          const tab = getWorkspaceTabs(state.tabs, workspaceId)[index]
-          if (!tab) return {}
-
-          return {
-            activeTabId: tab.id,
-            activePaneId: getFirstPaneId(tab.layout),
-          }
-        }),
-      reorderTab: (tabId, targetTabId, placement) =>
-        set((state) => {
-          const tab = state.tabs.find((candidate) => candidate.id === tabId)
-          const targetTab = state.tabs.find((candidate) => candidate.id === targetTabId)
-          if (!tab || !targetTab || tab.workspaceId !== targetTab.workspaceId) return {}
-
-          const workspaceTabs = getWorkspaceTabs(state.tabs, tab.workspaceId)
-          const reorderedTabs = moveRelativeTo(workspaceTabs, tabId, targetTabId, placement)
-          if (reorderedTabs === workspaceTabs) return {}
-
-          const reorderedById = new Map(reorderedTabs.map((candidate) => [candidate.id, candidate]))
-
-          return {
-            tabs: state.tabs.map((candidate) => reorderedById.get(candidate.id) ?? candidate),
-          }
-        }),
-      setTabLayout: (tabId, layout) =>
-        set((state) => {
-          if (!layout) return closeTabState(state, tabId)
-
-          const tab = state.tabs.find((candidate) => candidate.id === tabId)
-          if (!tab) return {}
-
-          const paneIds = new Set(getPaneIdsInLayout(layout))
-          const firstPaneId = paneIds.values().next().value ?? null
-          const activePaneId =
-            state.activeTabId === tabId && (!state.activePaneId || !paneIds.has(state.activePaneId))
-              ? firstPaneId
-              : state.activePaneId
-
-          return {
-            tabs: state.tabs.map((candidate) =>
-              candidate.id === tabId ? { ...candidate, layout } : candidate,
-            ),
-            panes: state.panes.filter((pane) => pane.tabId !== tabId || paneIds.has(pane.id)),
-            activePaneId,
-          }
-        }),
-      selectPane: (paneId) =>
-        set((state) => {
-          const pane = state.panes.find((candidate) => candidate.id === paneId)
-          if (!pane) return {}
-
-          return {
-            activePaneId: pane.id,
-            activeTabId: pane.tabId,
-          }
-        }),
-      selectPaneByDirection: (direction) =>
-        set((state) => {
-          const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
-          const paneId = state.activePaneId ?? (activeTab ? getFirstPaneId(activeTab.layout) : null)
-          if (!activeTab || !paneId) return {}
-
-          const nextPaneId = findPaneInDirection(activeTab.layout, paneId, direction)
-          if (!nextPaneId) return {}
-
-          return {
-            activePaneId: nextPaneId,
-          }
-        }),
-      setPaneTitle: (paneId, title) =>
-        set((state) => {
-          const pane = state.panes.find((candidate) => candidate.id === paneId)
-          if (!pane) return {}
-
-          const name = sanitizeTerminalTitle(title)
-          if (!name) return {}
-
-          const tab = state.tabs.find((candidate) => candidate.id === pane.tabId)
-          const nextPanes =
-            pane.name === name
-              ? state.panes
-              : state.panes.map((candidate) =>
-                  candidate.id === pane.id ? { ...candidate, name } : candidate,
-                )
-          const nextTabs =
-            tab && paneId === state.activePaneId && tab.name !== name
-              ? state.tabs.map((candidate) =>
-                  candidate.id === tab.id ? { ...candidate, name } : candidate,
-                )
-              : state.tabs
-
-          if (nextPanes === state.panes && nextTabs === state.tabs) return {}
-          return { panes: nextPanes, tabs: nextTabs }
-        }),
-      setPaneStatus: (paneId, status) =>
-        set((state) => {
-          const pane = state.panes.find((candidate) => candidate.id === paneId)
-          if (!pane || pane.status === status) return {}
-
-          return {
-            panes: state.panes.map((candidate) =>
-              candidate.id === pane.id ? { ...candidate, status } : candidate,
-            ),
-          }
-        }),
-      splitPane: (paneId, direction) =>
-        set((state) => {
-          const pane = state.panes.find((candidate) => candidate.id === paneId)
-          const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
-          if (!pane || !tab || !layoutContainsPane(tab.layout, pane.id)) return {}
-
-          const paneIndex = state.panes.filter((candidate) => candidate.tabId === tab.id).length + 1
-          const newPane = createTerminalPane(tab.id, paneIndex)
-          const layout = splitLayoutNode(tab.layout, pane.id, newPane.id, direction)
-
-          return {
-            tabs: state.tabs.map((candidate) =>
-              candidate.id === tab.id ? { ...candidate, layout } : candidate,
-            ),
-            panes: [...state.panes, newPane],
-            activeTabId: tab.id,
-            activePaneId: pane.id,
-          }
-        }),
-      splitActivePane: (direction) =>
-        set((state) => {
-          const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
-          const paneId = state.activePaneId ?? (activeTab ? getFirstPaneId(activeTab.layout) : null)
-          if (!paneId) return {}
-
-          const pane = state.panes.find((candidate) => candidate.id === paneId)
-          const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
-          if (!pane || !tab || !layoutContainsPane(tab.layout, pane.id)) return {}
-
-          const paneIndex = state.panes.filter((candidate) => candidate.tabId === tab.id).length + 1
-          const newPane = createTerminalPane(tab.id, paneIndex)
-          const layout = splitLayoutNode(tab.layout, pane.id, newPane.id, direction)
-
-          return {
-            tabs: state.tabs.map((candidate) =>
-              candidate.id === tab.id ? { ...candidate, layout } : candidate,
-            ),
-            panes: [...state.panes, newPane],
-            activeTabId: tab.id,
-            activePaneId: pane.id,
-          }
-        }),
-      closePane: (paneId) => set((state) => closePaneState(state, paneId)),
-      closeActivePane: () =>
-        set((state) => (state.activePaneId ? closePaneState(state, state.activePaneId) : {})),
-      toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
-      setSidebarExpanded: (expanded) => set({ sidebarExpanded: expanded }),
-      setSidebarWidth: (width) => set({ sidebarWidth: width }),
-      reorderWorkspace: (workspaceId, targetWorkspaceId, placement) =>
-        set((state) => {
-          const workspaces = moveRelativeTo(
-            state.workspaces,
-            workspaceId,
-            targetWorkspaceId,
-            placement,
-          )
-          return workspaces === state.workspaces ? {} : { workspaces }
-        }),
+export const useTaoStore = create<TaoState>()((set) => ({
+  workspaces: [],
+  activeWorkspaceId: null,
+  tabs: [initialLocalTab.tab],
+  activeTabId: initialLocalTab.tab.id,
+  panes: [initialLocalTab.pane],
+  activePaneId: initialLocalTab.pane.id,
+  sidebarExpanded: true,
+  sidebarWidth: 240,
+  hydrateLayout: (data) =>
+    set((state) => {
+      const persisted = normalizePersistedState(data)
+      return repairPersistedState({ ...state, ...persisted })
     }),
-    {
-      name: 'tao-workspaces',
-      storage: createJSONStorage(() => effectLocalStorage),
-      partialize: (state) => ({
-        workspaces: state.workspaces,
-        activeWorkspaceId: state.activeWorkspaceId,
-        tabs: state.tabs,
-        activeTabId: state.activeTabId,
-        panes: state.panes,
-        activePaneId: state.activePaneId,
-        sidebarExpanded: state.sidebarExpanded,
-        sidebarWidth: state.sidebarWidth,
-      }),
-      merge: (persistedState, currentState) => {
-        const persisted = normalizePersistedState(persistedState)
-        return repairPersistedState({ ...currentState, ...persisted })
-      },
-    },
-  ),
-)
+  addWorkspace: (workspace) =>
+    set((state) => {
+      const existingWorkspace = state.workspaces.find(({ id }) => id === workspace.id)
+      if (existingWorkspace) {
+        return {
+          activeWorkspaceId: existingWorkspace.id,
+          ...ensureWorkspaceTabState(state, existingWorkspace.id),
+        }
+      }
+
+      const orderedWorkspace = {
+        ...workspace,
+        order: state.workspaces.length,
+      }
+      const { tab, pane } = createTerminalTab(orderedWorkspace.id, 0)
+
+      return {
+        workspaces: [...state.workspaces, orderedWorkspace],
+        activeWorkspaceId: orderedWorkspace.id,
+        tabs: [...state.tabs, tab],
+        activeTabId: tab.id,
+        panes: [...state.panes, pane],
+        activePaneId: pane.id,
+      }
+    }),
+  removeWorkspace: (workspaceId) =>
+    set((state) => {
+      const workspaces = state.workspaces
+        .filter(({ id }) => id !== workspaceId)
+        .map((workspace, order) => ({ ...workspace, order }))
+      const removedTabIds = new Set(
+        state.tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => tab.id),
+      )
+      const tabs = state.tabs.filter((tab) => tab.workspaceId !== workspaceId)
+      const panes = state.panes.filter((pane) => !removedTabIds.has(pane.tabId))
+      const activeWorkspaceId =
+        state.activeWorkspaceId === workspaceId
+          ? (workspaces.find(({ order }) => order === 0)?.id ?? null)
+          : state.activeWorkspaceId
+
+      const nextState = { ...state, workspaces, tabs, panes, activeWorkspaceId }
+      const nextTab = activeWorkspaceId
+        ? getWorkspaceTabs(tabs, activeWorkspaceId)[0]
+        : getWorkspaceTabs(tabs, LOCAL_WORKSPACE_ID)[0]
+
+      return {
+        workspaces,
+        activeWorkspaceId,
+        tabs,
+        panes,
+        activeTabId: nextTab?.id ?? null,
+        activePaneId: nextTab ? getFirstPaneId(nextTab.layout) : null,
+        ...(activeWorkspaceId ? ensureWorkspaceTabState(nextState, activeWorkspaceId) : {}),
+      }
+    }),
+  selectWorkspace: (workspaceId) =>
+    set((state) => ({
+      activeWorkspaceId: workspaceId,
+      ...ensureWorkspaceTabState(state, workspaceId),
+    })),
+  selectWorkspaceByIndex: (index) =>
+    set((state) => {
+      const workspace = [...state.workspaces].sort((a, b) => a.order - b.order)[index]
+      if (!workspace) return {}
+
+      return {
+        activeWorkspaceId: workspace.id,
+        ...ensureWorkspaceTabState(state, workspace.id),
+      }
+    }),
+  ensureWorkspaceTab: (workspaceId) =>
+    set((state) =>
+      ensureWorkspaceTabState(state, workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID),
+    ),
+  newTab: (workspaceId) =>
+    set((state) => {
+      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      const order = getWorkspaceTabs(state.tabs, targetWorkspaceId).length
+      const { tab, pane } = createTerminalTab(targetWorkspaceId, order)
+
+      return {
+        tabs: [...state.tabs, tab],
+        activeTabId: tab.id,
+        panes: [...state.panes, pane],
+        activePaneId: pane.id,
+      }
+    }),
+  closeTab: (tabId) => set((state) => closeTabState(state, tabId)),
+  closeActiveTab: () =>
+    set((state) => (state.activeTabId ? closeTabState(state, state.activeTabId) : {})),
+  selectTab: (tabId) =>
+    set((state) => {
+      const tab = state.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab) return {}
+
+      return {
+        activeWorkspaceId:
+          tab.workspaceId === LOCAL_WORKSPACE_ID ? state.activeWorkspaceId : tab.workspaceId,
+        activeTabId: tab.id,
+        activePaneId: getFirstPaneId(tab.layout),
+      }
+    }),
+  selectTabByIndex: (index) =>
+    set((state) => {
+      const workspaceId = state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      const tab = getWorkspaceTabs(state.tabs, workspaceId)[index]
+      if (!tab) return {}
+
+      return {
+        activeTabId: tab.id,
+        activePaneId: getFirstPaneId(tab.layout),
+      }
+    }),
+  reorderTab: (tabId, targetTabId, placement) =>
+    set((state) => {
+      const tab = state.tabs.find((candidate) => candidate.id === tabId)
+      const targetTab = state.tabs.find((candidate) => candidate.id === targetTabId)
+      if (!tab || !targetTab || tab.workspaceId !== targetTab.workspaceId) return {}
+
+      const workspaceTabs = getWorkspaceTabs(state.tabs, tab.workspaceId)
+      const reorderedTabs = moveRelativeTo(workspaceTabs, tabId, targetTabId, placement)
+      if (reorderedTabs === workspaceTabs) return {}
+
+      const reorderedById = new Map(reorderedTabs.map((candidate) => [candidate.id, candidate]))
+
+      return {
+        tabs: state.tabs.map((candidate) => reorderedById.get(candidate.id) ?? candidate),
+      }
+    }),
+  setTabLayout: (tabId, layout) =>
+    set((state) => {
+      if (!layout) return closeTabState(state, tabId)
+
+      const tab = state.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab) return {}
+
+      const paneIds = new Set(getPaneIdsInLayout(layout))
+      const firstPaneId = paneIds.values().next().value ?? null
+      const activePaneId =
+        state.activeTabId === tabId && (!state.activePaneId || !paneIds.has(state.activePaneId))
+          ? firstPaneId
+          : state.activePaneId
+
+      return {
+        tabs: state.tabs.map((candidate) =>
+          candidate.id === tabId ? { ...candidate, layout } : candidate,
+        ),
+        panes: state.panes.filter((pane) => pane.tabId !== tabId || paneIds.has(pane.id)),
+        activePaneId,
+      }
+    }),
+  selectPane: (paneId) =>
+    set((state) => {
+      const pane = state.panes.find((candidate) => candidate.id === paneId)
+      if (!pane) return {}
+
+      return {
+        activePaneId: pane.id,
+        activeTabId: pane.tabId,
+      }
+    }),
+  selectPaneByDirection: (direction) =>
+    set((state) => {
+      const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
+      const paneId = state.activePaneId ?? (activeTab ? getFirstPaneId(activeTab.layout) : null)
+      if (!activeTab || !paneId) return {}
+
+      const nextPaneId = findPaneInDirection(activeTab.layout, paneId, direction)
+      if (!nextPaneId) return {}
+
+      return {
+        activePaneId: nextPaneId,
+      }
+    }),
+  setPaneTitle: (paneId, title) =>
+    set((state) => {
+      const pane = state.panes.find((candidate) => candidate.id === paneId)
+      if (!pane) return {}
+
+      const name = sanitizeTerminalTitle(title)
+      if (!name) return {}
+
+      const tab = state.tabs.find((candidate) => candidate.id === pane.tabId)
+      const nextPanes =
+        pane.name === name
+          ? state.panes
+          : state.panes.map((candidate) =>
+              candidate.id === pane.id ? { ...candidate, name } : candidate,
+            )
+      const nextTabs =
+        tab && paneId === state.activePaneId && tab.name !== name
+          ? state.tabs.map((candidate) =>
+              candidate.id === tab.id ? { ...candidate, name } : candidate,
+            )
+          : state.tabs
+
+      if (nextPanes === state.panes && nextTabs === state.tabs) return {}
+      return { panes: nextPanes, tabs: nextTabs }
+    }),
+  setPaneStatus: (paneId, status) =>
+    set((state) => {
+      const pane = state.panes.find((candidate) => candidate.id === paneId)
+      if (!pane || pane.status === status) return {}
+
+      return {
+        panes: state.panes.map((candidate) =>
+          candidate.id === pane.id ? { ...candidate, status } : candidate,
+        ),
+      }
+    }),
+  splitPane: (paneId, direction) =>
+    set((state) => {
+      const pane = state.panes.find((candidate) => candidate.id === paneId)
+      const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
+      if (!pane || !tab || !layoutContainsPane(tab.layout, pane.id)) return {}
+
+      const paneIndex = state.panes.filter((candidate) => candidate.tabId === tab.id).length + 1
+      const newPane = createTerminalPane(tab.id, paneIndex)
+      const layout = splitLayoutNode(tab.layout, pane.id, newPane.id, direction)
+
+      return {
+        tabs: state.tabs.map((candidate) =>
+          candidate.id === tab.id ? { ...candidate, layout } : candidate,
+        ),
+        panes: [...state.panes, newPane],
+        activeTabId: tab.id,
+        activePaneId: pane.id,
+      }
+    }),
+  splitActivePane: (direction) =>
+    set((state) => {
+      const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
+      const paneId = state.activePaneId ?? (activeTab ? getFirstPaneId(activeTab.layout) : null)
+      if (!paneId) return {}
+
+      const pane = state.panes.find((candidate) => candidate.id === paneId)
+      const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
+      if (!pane || !tab || !layoutContainsPane(tab.layout, pane.id)) return {}
+
+      const paneIndex = state.panes.filter((candidate) => candidate.tabId === tab.id).length + 1
+      const newPane = createTerminalPane(tab.id, paneIndex)
+      const layout = splitLayoutNode(tab.layout, pane.id, newPane.id, direction)
+
+      return {
+        tabs: state.tabs.map((candidate) =>
+          candidate.id === tab.id ? { ...candidate, layout } : candidate,
+        ),
+        panes: [...state.panes, newPane],
+        activeTabId: tab.id,
+        activePaneId: pane.id,
+      }
+    }),
+  closePane: (paneId) => set((state) => closePaneState(state, paneId)),
+  closeActivePane: () =>
+    set((state) => (state.activePaneId ? closePaneState(state, state.activePaneId) : {})),
+  toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
+  setSidebarExpanded: (expanded) => set({ sidebarExpanded: expanded }),
+  setSidebarWidth: (width) => set({ sidebarWidth: width }),
+  reorderWorkspace: (workspaceId, targetWorkspaceId, placement) =>
+    set((state) => {
+      const workspaces = moveRelativeTo(state.workspaces, workspaceId, targetWorkspaceId, placement)
+      return workspaces === state.workspaces ? {} : { workspaces }
+    }),
+}))
+
+export function selectPaneLayoutData(state: TaoState): PaneLayoutData {
+  return {
+    version: 2,
+    workspaces: state.workspaces.map((workspace) => ({
+      id: workspace.id,
+      name: workspace.name,
+      projectPath: workspace.projectPath,
+      branch: workspace.branch,
+      worktrees: workspace.worktrees,
+      order: workspace.order,
+    })),
+    activeWorkspaceId: state.activeWorkspaceId,
+    tabs: state.tabs.map((tab) => ({
+      id: tab.id,
+      workspaceId: tab.workspaceId,
+      name: tab.name,
+      layout: tab.layout,
+      order: tab.order,
+    })),
+    panes: state.panes.map((pane) => ({
+      id: pane.id,
+      terminalId: pane.terminalId,
+      tabId: pane.tabId,
+      type: pane.type,
+      name: pane.name,
+      cwd: pane.cwd,
+      status: pane.status,
+      lastSessionId: pane.lastSessionId,
+    })),
+    activeTabId: state.activeTabId,
+    activePaneId: state.activePaneId,
+    sidebarExpanded: state.sidebarExpanded,
+    sidebarWidth: state.sidebarWidth,
+  }
+}

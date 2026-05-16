@@ -2,12 +2,21 @@ import { Schema } from 'effect'
 import type { MessagePortMain } from 'electron'
 import { PtyManager } from './pty'
 import {
+  appendExit,
+  appendOutput,
+  appendResize,
+  openPersistentSession,
+  readReplayOutput,
+  type PersistentSession,
+} from './session-persistence'
+import {
   type PtyClientMessage,
   PtyClientMessageSchema,
   type PtyServiceMessage,
 } from './pty-protocol'
 
 type ParentPort = {
+  on(event: 'message', listener: (event: { data: unknown; ports: MessagePortMain[] }) => void): void
   once(
     event: 'message',
     listener: (event: { data: unknown; ports: MessagePortMain[] }) => void,
@@ -22,6 +31,7 @@ const PTY_INTERACTIVE_CHARS = 256
 
 type PtySession = {
   manager: PtyManager
+  persistence: PersistentSession
   chunks: string[]
   bufferedChars: number
   flushTimer: ReturnType<typeof setTimeout> | null
@@ -39,7 +49,11 @@ let port: MessagePortMain | null = null
 const sessions = new Map<string, PtySession>()
 
 function postToClient(message: PtyServiceMessage) {
-  port?.postMessage(message)
+  try {
+    port?.postMessage(message)
+  } catch {
+    port = null
+  }
 }
 
 function clearPtyFlushTimer(session: PtySession) {
@@ -128,6 +142,7 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
   const existingSession = sessions.get(sessionId)
   if (existingSession) {
     existingSession.manager.resize(cols, rows)
+    appendResize(existingSession.persistence, cols, rows)
     postToClient({ type: 'ready', sessionId, size: existingSession.manager.getColsRows() })
     flushPtyBuffer(sessionId)
     return
@@ -137,9 +152,12 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
   console.log(`[pty-service] Spawning PTY ${sessionId} with shell: ${shell}`)
 
   try {
+    const persistence = openPersistentSession(sessionId)
+    const replay = readReplayOutput(sessionId)
     const manager = new PtyManager(shell, { cols, rows, cwd })
     const session: PtySession = {
       manager,
+      persistence,
       chunks: [],
       bufferedChars: 0,
       flushTimer: null,
@@ -147,15 +165,23 @@ function spawnPty(sessionId: string, cols: number, rows: number, cwd?: string) {
       lastInputAt: 0,
     }
     sessions.set(sessionId, session)
+    appendResize(persistence, cols, rows)
 
-    manager.onData((data) => bufferPtyData(sessionId, data))
+    manager.onData((data) => {
+      appendOutput(persistence, data)
+      bufferPtyData(sessionId, data)
+    })
     manager.onExit(({ exitCode, signal }) => {
       flushPtyBuffer(sessionId)
+      appendExit(persistence, exitCode, signal)
       console.log(`[pty-service] PTY ${sessionId} exited with code ${exitCode}, signal ${signal}`)
       sessions.delete(sessionId)
       postToClient({ type: 'exit', sessionId, info: { exitCode, signal } })
     })
     postToClient({ type: 'ready', sessionId, size: manager.getColsRows() })
+    if (replay.length > 0) {
+      sendPtyData(sessionId, replay)
+    }
   } catch (err) {
     console.error(`[pty-service] Failed to spawn PTY ${sessionId}:`, err)
     postToClient({ type: 'error', sessionId, error: String(err) })
@@ -168,6 +194,7 @@ function killPty(sessionId: string) {
 
   flushPtyBuffer(sessionId)
   resetPtyBuffer(session)
+  appendExit(session.persistence, 0, 15)
   session.manager.dispose()
   sessions.delete(sessionId)
 }
@@ -216,7 +243,9 @@ function handleClientMessage(message: PtyClientMessage) {
       ) {
         return
       }
-      sessions.get(message.sessionId)?.manager.resize(message.cols, message.rows)
+      const session = sessions.get(message.sessionId)
+      session?.manager.resize(message.cols, message.rows)
+      if (session) appendResize(session.persistence, message.cols, message.rows)
       break
     }
     case 'kill':
@@ -236,12 +265,13 @@ if (!parentPort) {
   throw new Error('PTY service started without a parentPort')
 }
 
-parentPort.once('message', (event) => {
+parentPort.on('message', (event) => {
   const [receivedPort] = event.ports
   if (!receivedPort) {
     throw new Error('PTY service started without a MessagePort')
   }
 
+  port?.close()
   port = receivedPort
   port.on('message', (messageEvent) => {
     const message = decodeClientMessage(messageEvent.data)

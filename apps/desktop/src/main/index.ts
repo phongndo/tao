@@ -28,7 +28,9 @@ import {
   utilityProcess,
 } from 'electron'
 import ptyServicePath from './pty-service?modulePath'
+import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
+import { defaultSettings, readSettings, writeSettings } from './settings-store'
 import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
 import {
@@ -97,7 +99,6 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 let mainWindow: BrowserWindow | null = null
 let ptyService: Electron.UtilityProcess | null = null
-let rendererPort: Electron.MessagePortMain | null = null
 
 const WINDOW_SHOW_FALLBACK_MS = 5000
 
@@ -245,7 +246,6 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     clearTimeout(showFallbackTimer)
-    disposePtyService()
     mainWindow = null
   })
 }
@@ -258,19 +258,17 @@ function sendAppCommand(command: AppCommand) {
 
 function sendPtyPortToRenderer() {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  if (!rendererPort) {
-    setupPtyService()
-  }
-  if (!rendererPort) return
-
-  mainWindow.webContents.postMessage('pty:port', null, [rendererPort])
-  rendererPort = null
-}
-
-function setupPtyService() {
-  disposePtyService()
+  const service = ensurePtyService()
+  if (!service) return
 
   const { port1, port2 } = new MessageChannelMain()
+  service.postMessage({ type: 'connect' }, [port1])
+  mainWindow.webContents.postMessage('pty:port', null, [port2])
+}
+
+function ensurePtyService(): Electron.UtilityProcess | null {
+  if (ptyService) return ptyService
+
   let service: Electron.UtilityProcess
   try {
     service = utilityProcess.fork(ptyServicePath, [], {
@@ -278,19 +276,13 @@ function setupPtyService() {
       stdio: 'inherit',
     })
   } catch (err) {
-    port1.close()
-    port2.close()
     notifyPtyServiceError(`Failed to start PTY service: ${errorMessageFromUnknown(err)}`)
-    return
+    return null
   }
 
   ptyService = service
-  rendererPort = port2
-  ptyService.postMessage({ type: 'connect' }, [port1])
   ptyService.once('error', (err) => {
     if (ptyService === service) {
-      rendererPort?.close()
-      rendererPort = null
       ptyService = null
     }
     notifyPtyServiceError(`PTY service error: ${errorMessageFromUnknown(err)}`)
@@ -298,20 +290,17 @@ function setupPtyService() {
   ptyService.once('exit', (code) => {
     console.log(`[main] PTY service exited with code ${code}`)
     if (ptyService === service) {
-      rendererPort?.close()
-      rendererPort = null
       ptyService = null
       if (code !== 0) {
         notifyPtyServiceError(`PTY service exited before ready (code=${code})`)
       }
     }
   })
+
+  return service
 }
 
 function disposePtyService() {
-  rendererPort?.close()
-  rendererPort = null
-
   if (!ptyService) return
   ptyService.kill()
   ptyService = null
@@ -421,6 +410,26 @@ ipcMain.on('pty:requestPort', (event) => {
 
 ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
 
+ipcMain.handle('layout:read', async (event) => {
+  if (event.sender !== mainWindow?.webContents) return null
+  return readLayout()
+})
+
+ipcMain.handle('layout:write', async (event, data: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  await writeLayout(data as never)
+})
+
+ipcMain.handle('settings:read', async (event) => {
+  if (event.sender !== mainWindow?.webContents) return null
+  return (await readSettings()) ?? defaultSettings
+})
+
+ipcMain.handle('settings:write', async (event, data: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  await writeSettings(data as never)
+})
+
 ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>
   workspaceServiceRequest(event, workspacePath, (service, path) => service.getGitBranch(path)),
 )
@@ -453,18 +462,17 @@ ipcMain.handle('workspace:getPullRequestInfo', async (event, workspacePath: unkn
 
 app.whenReady().then(() => {
   createWindow()
-  setupPtyService()
+  ensurePtyService()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
-      setupPtyService()
+      ensurePtyService()
     }
   })
 })
 
 app.on('window-all-closed', () => {
-  disposePtyService()
   if (process.platform !== 'darwin') {
     app.quit()
   }
