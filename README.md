@@ -1,8 +1,8 @@
-# Tau
+# Tao
 
 <p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/phongndo/tau/ci.yml?branch=main&label=CI" alt="CI">
-  <img src="https://img.shields.io/github/license/phongndo/tau?label=license" alt="License">
+  <img src="https://img.shields.io/github/actions/workflow/status/phongndo/tao/ci.yml?branch=main&label=CI" alt="CI">
+  <img src="https://img.shields.io/github/license/phongndo/tao?label=license" alt="License">
   <img src="https://img.shields.io/badge/parser-Ghostty%20WASM%20(Zig)-blue" alt="Parser">
 </p>
 
@@ -22,12 +22,12 @@ pnpm build           # Production build
 pnpm start           # Run production build
 ```
 
-Tau is a pnpm workspace. Root scripts delegate to `apps/desktop`, leaving room for future apps such as a website.
+Tao is a pnpm workspace. Root scripts delegate to `apps/desktop`, leaving room for future apps such as a website.
 
 ## Workspace Layout
 
 ```text
-tau/
+tao/
 ├── apps/desktop/   # Electron terminal app
 ├── packages/       # Shared workspace packages
 ├── docs/           # Architecture notes and plans
@@ -38,7 +38,7 @@ tau/
 
 ## Performance
 
-| Metric                      | Tau (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup  |
+| Metric                      | Tao (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup  |
 | --------------------------- | ---------------------- | ---------------------------- | -------- |
 | VT parser throughput (10MB) | 42.8 MB/s              | 22.8 MB/s                    | **1.9×** |
 | Input latency (avg)         | 0.04 ms                | 1.20 ms                      | **30×**  |
@@ -77,7 +77,7 @@ pnpm bench:all          # Run everything
 
 ## Development
 
-Desktop source lives in `apps/desktop`. Run commands from the repository root unless you need to target the package directly with `pnpm --filter @tau/desktop <script>`.
+Desktop source lives in `apps/desktop`. Run commands from the repository root unless you need to target the package directly with `pnpm --filter @tao/desktop <script>`.
 
 ```bash
 pnpm tsc          # Type check

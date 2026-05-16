@@ -59,7 +59,7 @@ jobs:
       - run: pnpm build
       - uses: actions/upload-artifact@v4
         with:
-          name: tau-dist-ubuntu
+          name: tao-dist-ubuntu
           path: apps/desktop/out/
 
   build-macos:
@@ -73,7 +73,7 @@ jobs:
       - run: pnpm build
       - uses: actions/upload-artifact@v4
         with:
-          name: tau-dist-macos
+          name: tao-dist-macos
           path: apps/desktop/out/
 
   build-windows:
@@ -90,7 +90,7 @@ jobs:
       - run: pnpm build
       - uses: actions/upload-artifact@v4
         with:
-          name: tau-dist-windows
+          name: tao-dist-windows
           path: apps/desktop/out/
 
   # ── Parser benchmark (Linux only) ──

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── Tau — Startup Time Comparison ───
+# ─── Tao — Startup Time Comparison ───
 # Measures internal milestones and provides manual comparison commands.
 # Usage: bash bench/startup-bench.sh
 
@@ -14,8 +14,8 @@ echo -e "${BOLD}║   Terminal Startup Time Comparison           ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
-# ─── Tau internal milestones (from dev console instrumentation) ───
-echo -e "${BOLD}─── Tau Internal Milestones (measured from dev logs) ───${NC}"
+# ─── Tao internal milestones (from dev console instrumentation) ───
+echo -e "${BOLD}─── Tao Internal Milestones (measured from dev logs) ───${NC}"
 echo ""
 echo "  Milestone                          Time"
 echo "  ─────────                          ────"
@@ -33,7 +33,7 @@ echo ""
 # ─── Comparison: how to measure other terminals ───
 echo -e "${BOLD}─── How to Compare Manually ───${NC}"
 echo ""
-echo -e "  ${CYAN}Tau (production):${NC}"
+echo -e "  ${CYAN}Tao (production):${NC}"
 echo "    pnpm build && pnpm start"
 echo "    → Window hidden until terminal ready → appears with live shell"
 echo ""
@@ -59,10 +59,10 @@ echo -e "  ${CYAN}Terminal.app:${NC}"
 echo "    → Native macOS, typically <300ms"
 echo ""
 
-# ─── Why Tau's startup feels instant ───
-echo -e "${BOLD}─── Why Tau Feels Instant ───${NC}"
+# ─── Why Tao's startup feels instant ───
+echo -e "${BOLD}─── Why Tao Feels Instant ───${NC}"
 echo ""
-echo "  Tau uses the 'show-on-ready' pattern:"
+echo "  Tao uses the 'show-on-ready' pattern:"
 echo ""
 echo "  1. Electron main process starts (background)"
 echo "  2. BrowserWindow created with show: false (invisible)"
@@ -75,15 +75,15 @@ echo "  8. Window appears WITH a live shell prompt"
 echo ""
 echo "  Other Electron terminals (VS Code, Superset, Hyper) show a"
 echo "  window immediately with a loading spinner, then initialize"
-echo "  xterm.js. Tau hides the window until ready → perceived as instant."
+echo "  xterm.js. Tao hides the window until ready → perceived as instant."
 echo ""
 
 # ─── Cold start comparison ───
 echo -e "${BOLD}─── Raw Cold Start (process launch → ready) ───${NC}"
 echo ""
 
-# Measure Tau cold start more precisely using the existing production build
-echo -ne "  Tau (production build)... "
+# Measure Tao cold start more precisely using the existing production build
+echo -ne "  Tao (production build)... "
 cd "$PROJECT_ROOT"
 
 START=$(python3 -c 'import time; print(int(time.time() * 1000))')
@@ -100,18 +100,18 @@ timeout 15 bash -c "
 " > /dev/null 2>&1
 
 END=$(python3 -c 'import time; print(int(time.time() * 1000))')
-TAU_ELAPSED=$((END - START))
+TAO_ELAPSED=$((END - START))
 
 # Subtract the artificial sleep (1.5s)
-TAU_REAL=$((TAU_ELAPSED - 1500))
-echo -e "${GREEN}~${TAU_REAL} ms${NC} (process launch → ready + 1.5s buffer)"
+TAO_REAL=$((TAO_ELAPSED - 1500))
+echo -e "${GREEN}~${TAO_REAL} ms${NC} (process launch → ready + 1.5s buffer)"
 
 echo ""
 echo -e "${YELLOW}Note: Raw Electron startup includes Chromium process spawn,${NC}"
 echo -e "${YELLOW}which dominates cold-start time (~1-3s). All Electron apps${NC}"
-echo -e "${YELLOW}(VS Code, Superset, Tau) share this overhead.${NC}"
+echo -e "${YELLOW}(VS Code, Superset, Tao) share this overhead.${NC}"
 echo ""
-echo -e "${YELLOW}Tau's advantage is that once Electron is loaded, the terminal${NC}"
+echo -e "${YELLOW}Tao's advantage is that once Electron is loaded, the terminal${NC}"
 echo -e "${YELLOW}initializes in ~50ms vs ~500ms+ for xterm.js-based terminals.${NC}"
 echo ""
 echo -e "${YELLOW}Warm starts (app already open, opening a new tab/window)${NC}"

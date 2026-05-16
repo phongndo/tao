@@ -21,13 +21,13 @@ import {
   useState,
 } from 'react'
 import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
-import type { AppCommand } from '@tau/shared/app-command'
+import type { AppCommand } from '@tao/shared/app-command'
 import {
   LOCAL_WORKSPACE_ID,
   type Pane,
   type ReorderPlacement,
   type Tab,
-  useTauStore,
+  useTaoStore,
   type Workspace,
 } from '../state/store'
 import { useGitBranch } from '../workspaceQueries'
@@ -41,8 +41,8 @@ const SIDEBAR_COMPACT_THRESHOLD = 64
 const SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD = 148
 const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
-const TAB_DRAG_TYPE = 'application/x-tau-tab'
-const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
+const TAB_DRAG_TYPE = 'application/x-tao-tab'
+const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
 
 // react-mosaic-component ships React 18-era class component types that do not satisfy
 // React 19's JSX constructor check. Keep the runtime component and narrow only the JSX type.
@@ -89,9 +89,9 @@ function WorkspaceItem({
     placement: ReorderPlacement,
   ): void
 }) {
-  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
-  const selectWorkspace = useTauStore((state) => state.selectWorkspace)
-  const removeWorkspace = useTauStore((state) => state.removeWorkspace)
+  const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
+  const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
+  const removeWorkspace = useTaoStore((state) => state.removeWorkspace)
   const isActive = activeWorkspaceId === workspace.id
   const branch = useGitBranch(workspace.projectPath, isActive)
   const branchLabel = branch.isError
@@ -278,9 +278,9 @@ function ResizeShell({
   )
 
   const className = [
-    'tau-sidebar',
-    width <= SIDEBAR_COMPACT_THRESHOLD ? 'tau-sidebar-compact' : null,
-    width <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD ? 'tau-sidebar-header-actions-hidden' : null,
+    'tao-sidebar',
+    width <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
+    width <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD ? 'tao-sidebar-header-actions-hidden' : null,
   ]
     .filter(Boolean)
     .join(' ')
@@ -558,7 +558,7 @@ const PaneGrid = memo(function PaneGrid({
       onChange={handleLayoutChange}
       onRelease={handleLayoutRelease}
       renderTile={renderTile}
-      className="tau-mosaic"
+      className="tao-mosaic"
       resize={{ minimumPaneSizePercentage: 18 }}
       zeroStateView={<div className="pane-grid-empty" />}
     />
@@ -566,33 +566,33 @@ const PaneGrid = memo(function PaneGrid({
 })
 
 export function App() {
-  const workspaces = useTauStore((state) => state.workspaces)
-  const tabs = useTauStore((state) => state.tabs)
-  const panes = useTauStore((state) => state.panes)
-  const activeTabId = useTauStore((state) => state.activeTabId)
-  const activePaneId = useTauStore((state) => state.activePaneId)
-  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
-  const sidebarExpanded = useTauStore((state) => state.sidebarExpanded)
-  const sidebarWidth = useTauStore((state) => state.sidebarWidth)
-  const addWorkspace = useTauStore((state) => state.addWorkspace)
-  const ensureWorkspaceTab = useTauStore((state) => state.ensureWorkspaceTab)
-  const selectWorkspaceByIndex = useTauStore((state) => state.selectWorkspaceByIndex)
-  const newTab = useTauStore((state) => state.newTab)
-  const closeTab = useTauStore((state) => state.closeTab)
-  const closeActiveTab = useTauStore((state) => state.closeActiveTab)
-  const selectTab = useTauStore((state) => state.selectTab)
-  const selectTabByIndex = useTauStore((state) => state.selectTabByIndex)
-  const reorderTab = useTauStore((state) => state.reorderTab)
-  const setTabLayout = useTauStore((state) => state.setTabLayout)
-  const selectPane = useTauStore((state) => state.selectPane)
-  const selectPaneByDirection = useTauStore((state) => state.selectPaneByDirection)
-  const setPaneTitle = useTauStore((state) => state.setPaneTitle)
-  const splitActivePane = useTauStore((state) => state.splitActivePane)
-  const closeActivePane = useTauStore((state) => state.closeActivePane)
-  const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
-  const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
-  const toggleSidebar = useTauStore((state) => state.toggleSidebar)
-  const reorderWorkspace = useTauStore((state) => state.reorderWorkspace)
+  const workspaces = useTaoStore((state) => state.workspaces)
+  const tabs = useTaoStore((state) => state.tabs)
+  const panes = useTaoStore((state) => state.panes)
+  const activeTabId = useTaoStore((state) => state.activeTabId)
+  const activePaneId = useTaoStore((state) => state.activePaneId)
+  const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
+  const sidebarExpanded = useTaoStore((state) => state.sidebarExpanded)
+  const sidebarWidth = useTaoStore((state) => state.sidebarWidth)
+  const addWorkspace = useTaoStore((state) => state.addWorkspace)
+  const ensureWorkspaceTab = useTaoStore((state) => state.ensureWorkspaceTab)
+  const selectWorkspaceByIndex = useTaoStore((state) => state.selectWorkspaceByIndex)
+  const newTab = useTaoStore((state) => state.newTab)
+  const closeTab = useTaoStore((state) => state.closeTab)
+  const closeActiveTab = useTaoStore((state) => state.closeActiveTab)
+  const selectTab = useTaoStore((state) => state.selectTab)
+  const selectTabByIndex = useTaoStore((state) => state.selectTabByIndex)
+  const reorderTab = useTaoStore((state) => state.reorderTab)
+  const setTabLayout = useTaoStore((state) => state.setTabLayout)
+  const selectPane = useTaoStore((state) => state.selectPane)
+  const selectPaneByDirection = useTaoStore((state) => state.selectPaneByDirection)
+  const setPaneTitle = useTaoStore((state) => state.setPaneTitle)
+  const splitActivePane = useTaoStore((state) => state.splitActivePane)
+  const closeActivePane = useTaoStore((state) => state.closeActivePane)
+  const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
+  const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
+  const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
+  const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
@@ -651,7 +651,7 @@ export function App() {
   }, [activeWorkspaceKey, ensureWorkspaceTab])
 
   useEffect(() => {
-    document.title = activeTab ? `${activeTab.name} — Tau` : 'Tau'
+    document.title = activeTab ? `${activeTab.name} — Tao` : 'Tao'
   }, [activeTab])
 
   useEffect(() => {
@@ -666,7 +666,7 @@ export function App() {
 
   useEffect(() => {
     const focusActiveTerminal = () => {
-      const paneId = useTauStore.getState().activePaneId
+      const paneId = useTaoStore.getState().activePaneId
       if (!paneId) return
 
       setTerminalFocusCounts((counts) => ({
@@ -744,7 +744,7 @@ export function App() {
   function selectWorkspaceAtIndex(index: number) {
     const workspace = sortedWorkspaces[index]
     if (!workspace) return
-    useTauStore.getState().selectWorkspace(workspace.id)
+    useTaoStore.getState().selectWorkspace(workspace.id)
   }
 
   const handleResizeSidebar = useCallback(
@@ -760,9 +760,9 @@ export function App() {
   )
   const isSidebarCompact = sidebarExpanded && sidebarSize <= SIDEBAR_COMPACT_THRESHOLD
   const shellClassName = [
-    'tau-shell',
-    sidebarExpanded ? null : 'tau-shell-sidebar-hidden',
-    isSidebarCompact ? 'tau-shell-sidebar-compact' : null,
+    'tao-shell',
+    sidebarExpanded ? null : 'tao-shell-sidebar-hidden',
+    isSidebarCompact ? 'tao-shell-sidebar-compact' : null,
   ]
     .filter(Boolean)
     .join(' ')
@@ -807,7 +807,7 @@ export function App() {
           </div>
         </ResizeShell>
       ) : null}
-      <section className="tau-main">
+      <section className="tao-main">
         <main className="main-content">
           <TabBar
             tabs={workspaceTabs}

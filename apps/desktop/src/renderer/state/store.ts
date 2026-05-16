@@ -2,14 +2,14 @@ import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-com
 import { Schema } from 'effect'
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import type { PaneFocusDirection } from '@tau/shared/app-command'
-import { type WorktreeInfo, WorktreeInfoSchema } from '@tau/shared/workspace'
+import type { PaneFocusDirection } from '@tao/shared/app-command'
+import { type WorktreeInfo, WorktreeInfoSchema } from '@tao/shared/workspace'
 import { sanitizeTerminalTitle } from '../osc-title'
 import { effectLocalStorage } from '../storage'
 
-export const LOCAL_WORKSPACE_ID = 'tau:local'
+export const LOCAL_WORKSPACE_ID = 'tao:local'
 
-export interface TauState {
+export interface TaoState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
   tabs: Tab[]
@@ -114,7 +114,7 @@ const PersistedPaneSchema = Schema.Struct({
   status: Schema.optional(PaneStatusSchema),
 })
 
-const PersistedTauStateSchema = Schema.Struct({
+const PersistedTaoStateSchema = Schema.Struct({
   workspaces: Schema.optional(Schema.Array(PersistedWorkspaceSchema)),
   activeWorkspaceId: Schema.optional(Schema.NullOr(Schema.String)),
   tabs: Schema.optional(Schema.Array(PersistedTabSchema)),
@@ -351,7 +351,7 @@ function reorderWorkspaceTabs(tabs: Tab[], workspaceId: string): Tab[] {
   return tabs.map((tab) => (tab.workspaceId === workspaceId ? { ...tab, order: order++ } : tab))
 }
 
-function closeTabState(state: TauState, tabId: string): Partial<TauState> {
+function closeTabState(state: TaoState, tabId: string): Partial<TaoState> {
   const tab = state.tabs.find((candidate) => candidate.id === tabId)
   if (!tab) return {}
 
@@ -376,7 +376,7 @@ function closeTabState(state: TauState, tabId: string): Partial<TauState> {
   }
 }
 
-function closePaneState(state: TauState, paneId: string): Partial<TauState> {
+function closePaneState(state: TaoState, paneId: string): Partial<TaoState> {
   const pane = state.panes.find((candidate) => candidate.id === paneId)
   const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
   if (!pane || !tab) return {}
@@ -402,7 +402,7 @@ function closePaneState(state: TauState, paneId: string): Partial<TauState> {
   }
 }
 
-function ensureWorkspaceTabState(state: TauState, workspaceId: string): Partial<TauState> {
+function ensureWorkspaceTabState(state: TaoState, workspaceId: string): Partial<TaoState> {
   const workspaceTabs = getWorkspaceTabs(state.tabs, workspaceId)
   const existingTab = workspaceTabs.find((tab) => tab.id === state.activeTabId) ?? workspaceTabs[0]
   if (existingTab) {
@@ -428,7 +428,7 @@ function ensureWorkspaceTabState(state: TauState, workspaceId: string): Partial<
 
 const initialLocalTab = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
 
-type PersistedTauState = Schema.Schema.Type<typeof PersistedTauStateSchema>
+type PersistedTaoState = Schema.Schema.Type<typeof PersistedTaoStateSchema>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -503,11 +503,11 @@ function decodePersistedLayout(
   }
 }
 
-function normalizePersistedState(persistedState: unknown): Partial<TauState> {
-  const decoded = Schema.decodeUnknownOption(PersistedTauStateSchema)(persistedState)
+function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
+  const decoded = Schema.decodeUnknownOption(PersistedTaoStateSchema)(persistedState)
   if (decoded._tag === 'None') return {}
 
-  const persisted = decoded.value as PersistedTauState
+  const persisted = decoded.value as PersistedTaoState
   const workspaces = (persisted.workspaces ?? [])
     .filter(
       (workspace) => isNonEmptyString(workspace.id) && isNonEmptyString(workspace.projectPath),
@@ -576,7 +576,7 @@ function workspaceNameFallback(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
 }
 
-function repairPersistedState(state: TauState): TauState {
+function repairPersistedState(state: TaoState): TaoState {
   const hasActiveWorkspace =
     state.activeWorkspaceId !== null &&
     state.workspaces.some((workspace) => workspace.id === state.activeWorkspaceId)
@@ -590,7 +590,7 @@ function repairPersistedState(state: TauState): TauState {
   }
 }
 
-export const useTauStore = create<TauState>()(
+export const useTaoStore = create<TaoState>()(
   persist(
     (set) => ({
       workspaces: [],
@@ -874,7 +874,7 @@ export const useTauStore = create<TauState>()(
         }),
     }),
     {
-      name: 'tau-workspaces',
+      name: 'tao-workspaces',
       storage: createJSONStorage(() => effectLocalStorage),
       partialize: (state) => ({
         workspaces: state.workspaces,

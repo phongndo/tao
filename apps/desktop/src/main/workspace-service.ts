@@ -13,7 +13,7 @@ import {
   type PullRequestInfo,
   type WorktreeInfo,
   WorktreeInfoSchema,
-} from '@tau/shared/workspace'
+} from '@tao/shared/workspace'
 
 const execFileAsync = promisify(execFile)
 
@@ -44,7 +44,7 @@ export class WorkspaceService extends Context.Service<
       workspacePath: string,
     ) => Effect.Effect<PullRequestInfo | null, WorkspaceError>
   }
->()('Tau/WorkspaceService') {}
+>()('Tao/WorkspaceService') {}
 
 function runCommand(
   command: string,

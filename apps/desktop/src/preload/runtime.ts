@@ -15,7 +15,7 @@ import {
   type WorkspacePullRequestResponse,
   decodeWorkspaceIpcResponse,
   errorMessageFromUnknown,
-} from '@tau/shared/workspace'
+} from '@tao/shared/workspace'
 
 export class PreloadWorkspaceIpc extends Context.Service<
   PreloadWorkspaceIpc,
@@ -36,7 +36,7 @@ export class PreloadWorkspaceIpc extends Context.Service<
       workspacePath: string,
     ) => Effect.Effect<WorkspacePullRequestResponse, WorkspaceError>
   }
->()('Tau/PreloadWorkspaceIpc') {}
+>()('Tao/PreloadWorkspaceIpc') {}
 
 function invokeWorkspace<A>(
   channel: string,

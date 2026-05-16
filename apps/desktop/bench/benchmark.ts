@@ -1,5 +1,5 @@
 /**
- * Tau Terminal — VT Parser Benchmark
+ * Tao Terminal — VT Parser Benchmark
  *
  * Compares ghostty-web (Ghostty WASM parser) vs @xterm/xterm (JS parser)
  * by feeding identical terminal data to both and measuring parse throughput.
@@ -160,7 +160,7 @@ async function benchGhostty(data: Buffer, label: string): Promise<Result> {
 
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗')
-  console.log('║     Tau Terminal — VT Parser Performance Benchmark      ║')
+  console.log('║     Tao Terminal — VT Parser Performance Benchmark      ║')
   console.log('╚══════════════════════════════════════════════════════════╝')
   console.log()
   console.log('Engine                    Duration   Throughput   Test')

@@ -1,5 +1,5 @@
 /**
- * Tau — Renderer Benchmark (Baseline: Canvas 2D)
+ * Tao — Renderer Benchmark (Baseline: Canvas 2D)
  *
  * Captures current rendering performance before WebGL migration.
  * Measures frame times during simulated terminal workloads.

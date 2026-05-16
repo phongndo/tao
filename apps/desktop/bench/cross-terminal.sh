@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── Tau Terminal — Cross-Terminal Throughput Benchmark ───
+# ─── Tao Terminal — Cross-Terminal Throughput Benchmark ───
 #
 # Compares real-world throughput by running `cat` on a generated test file
 # in every available terminal emulator on the system.
@@ -175,11 +175,11 @@ detect_and_bench() {
   echo ""
   echo -e "${BOLD}─── $desc ───${NC}"
 
-  # Tau (our app — electron, ghostty-web WASM)
+  # Tao (our app — electron, ghostty-web WASM)
   # Launch via CLI: we need a headless way. For now, we use node-pty directly.
   # This measures PARSER throughput (no rendering), same as bench/benchmark.ts
-  echo -e "  ${YELLOW}Note: 'tau (parser)' measures VT parser only (no canvas render).${NC}"
-  bench_terminal "tau (parser)" \
+  echo -e "  ${YELLOW}Note: 'tao (parser)' measures VT parser only (no canvas render).${NC}"
+  bench_terminal "tao (parser)" \
     "cd '$PROJECT_ROOT' && node --expose-gc -e \"
       const fs = require('fs');
       const data = fs.readFileSync('$filepath');
@@ -279,7 +279,7 @@ detect_and_bench() {
 
 main() {
   echo -e "${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
-  echo -e "${BOLD}║   Tau — Cross-Terminal Throughput Benchmark         ║${NC}"
+  echo -e "${BOLD}║   Tao — Cross-Terminal Throughput Benchmark         ║${NC}"
   echo -e "${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
   echo ""
 

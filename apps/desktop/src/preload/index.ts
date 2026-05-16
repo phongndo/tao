@@ -2,7 +2,7 @@ import { Effect, Schema } from 'effect'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
-import type { AppCommand } from '@tau/shared/app-command'
+import type { AppCommand } from '@tao/shared/app-command'
 import {
   WorkspaceError,
   WorkspacePickDirectoryResponseSchema,
@@ -14,7 +14,7 @@ import {
   type WorkspaceGitWorktreesResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
-} from '@tau/shared/workspace'
+} from '@tao/shared/workspace'
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
 type PtyDataCallback = (data: string) => void

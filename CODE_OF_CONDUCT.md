@@ -3,7 +3,7 @@
 ## Our Pledge
 
 We as contributors and maintainers pledge to make participation in
-Tau Terminal a harassment-free experience for everyone.
+Tao Terminal a harassment-free experience for everyone.
 
 ## Standards
 

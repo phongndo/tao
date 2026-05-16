@@ -1,8 +1,8 @@
 /**
- * Tau — Input Latency Benchmark: ghostty-web (WASM)
+ * Tao — Input Latency Benchmark: ghostty-web (WASM)
  *
  * Measures PTY → WASM parser round-trip latency.
- * Usage: npx tsx bench/latency-tau.ts
+ * Usage: npx tsx bench/latency-tao.ts
  */
 
 import fs from 'node:fs'

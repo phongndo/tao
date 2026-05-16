@@ -19,10 +19,10 @@ function readPositiveIntEnv(name, fallback, max) {
   return parsed
 }
 
-const TOTAL_MB = readPositiveIntEnv('TAU_IPC_BENCH_MB', 64, 4096)
-const CHUNK_KB = readPositiveIntEnv('TAU_IPC_BENCH_CHUNK_KB', 64, 1024)
-const RUNS = readPositiveIntEnv('TAU_IPC_BENCH_RUNS', 3, 100)
-const PING_EVERY_CHUNKS = readPositiveIntEnv('TAU_IPC_BENCH_PING_EVERY_CHUNKS', 4, 1_000_000)
+const TOTAL_MB = readPositiveIntEnv('TAO_IPC_BENCH_MB', 64, 4096)
+const CHUNK_KB = readPositiveIntEnv('TAO_IPC_BENCH_CHUNK_KB', 64, 1024)
+const RUNS = readPositiveIntEnv('TAO_IPC_BENCH_RUNS', 3, 100)
+const PING_EVERY_CHUNKS = readPositiveIntEnv('TAO_IPC_BENCH_PING_EVERY_CHUNKS', 4, 1_000_000)
 
 const totalBytes = TOTAL_MB * 1024 * 1024
 const chunkBytes = CHUNK_KB * 1024
@@ -66,7 +66,7 @@ function summarize(mode, samples) {
 }
 
 function printSummary({ legacy, port }) {
-  console.log('Tau Electron IPC benchmark')
+  console.log('Tao Electron IPC benchmark')
   console.log(
     `payload: ${TOTAL_MB} MiB, chunk: ${CHUNK_KB} KiB, runs: ${RUNS}, control ping: every ${PING_EVERY_CHUNKS} chunks`,
   )

@@ -1,5 +1,5 @@
 /**
- * Tau — Electron Performance Research & Implementation
+ * Tao — Electron Performance Research & Implementation
  *
  * Electron 42 (Chromium ~136) on macOS arm64.
  *
@@ -30,7 +30,7 @@ import {
 import ptyServicePath from './pty-service?modulePath'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { WorkspaceService } from './workspace-service'
-import type { AppCommand, PaneFocusDirection } from '@tau/shared/app-command'
+import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
 import {
   WorkspaceError,
   decodeWorkspacePathFromUnknown,
@@ -38,7 +38,7 @@ import {
   workspaceIpcFailure,
   workspaceIpcSuccess,
   type WorkspaceIpcResponse,
-} from '@tau/shared/workspace'
+} from '@tao/shared/workspace'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
 
@@ -110,7 +110,7 @@ function createWindow() {
     minWidth: 400,
     minHeight: 300,
     backgroundColor: '#151515',
-    title: 'Tau',
+    title: 'Tao',
     show: false, // Show only when terminal is ready
     // Accept first mouse click immediately (no click-through delay)
     acceptFirstMouse: true,
@@ -274,7 +274,7 @@ function setupPtyService() {
   let service: Electron.UtilityProcess
   try {
     service = utilityProcess.fork(ptyServicePath, [], {
-      serviceName: 'Tau PTY Service',
+      serviceName: 'Tao PTY Service',
       stdio: 'inherit',
     })
   } catch (err) {

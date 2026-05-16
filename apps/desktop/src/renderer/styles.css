@@ -29,7 +29,7 @@ body {
   height: 100%;
 }
 
-.tau-shell {
+.tao-shell {
   position: relative;
   display: flex;
   width: 100%;
@@ -38,8 +38,8 @@ body {
   overflow: hidden;
 }
 
-.tau-shell-sidebar-compact::before,
-.tau-shell-sidebar-hidden::before {
+.tao-shell-sidebar-compact::before,
+.tao-shell-sidebar-hidden::before {
   position: absolute;
   top: 0;
   right: 0;
@@ -52,7 +52,7 @@ body {
   pointer-events: none;
 }
 
-.tau-sidebar {
+.tao-sidebar {
   position: relative;
   z-index: 5;
   height: 100%;
@@ -62,7 +62,7 @@ body {
   background: #191919;
 }
 
-.tau-sidebar::before {
+.tao-sidebar::before {
   position: absolute;
   top: 0;
   right: 0;
@@ -282,24 +282,24 @@ body {
   white-space: nowrap;
 }
 
-.tau-sidebar-header-actions-hidden .sidebar-top-actions {
+.tao-sidebar-header-actions-hidden .sidebar-top-actions {
   display: none;
 }
 
-.tau-sidebar-compact .sidebar-content {
+.tao-sidebar-compact .sidebar-content {
   height: 100%;
   gap: 0;
   padding: 0;
   padding-top: 42px;
 }
 
-.tau-sidebar-compact .workspace-list {
+.tao-sidebar-compact .workspace-list {
   width: 100%;
   margin: 0;
   overflow-x: hidden;
 }
 
-.tau-sidebar-compact .workspace-item {
+.tao-sidebar-compact .workspace-item {
   width: 100%;
   min-height: 46px;
   padding: 0;
@@ -307,13 +307,13 @@ body {
   border-radius: 0;
 }
 
-.tau-sidebar-compact .workspace-select-button {
+.tao-sidebar-compact .workspace-select-button {
   width: 100%;
   justify-content: center;
   padding: 0;
 }
 
-.tau-sidebar-compact .workspace-avatar {
+.tao-sidebar-compact .workspace-avatar {
   width: 100%;
   height: 100%;
   display: inline-flex;
@@ -325,12 +325,12 @@ body {
   letter-spacing: -0.04em;
 }
 
-.tau-sidebar-compact .workspace-item-active .workspace-avatar {
+.tao-sidebar-compact .workspace-item-active .workspace-avatar {
   color: #dedff0;
 }
 
-.tau-sidebar-compact .workspace-details,
-.tau-sidebar-compact .workspace-danger-button {
+.tao-sidebar-compact .workspace-details,
+.tao-sidebar-compact .workspace-danger-button {
   display: none;
 }
 
@@ -371,7 +371,7 @@ body {
   user-select: none;
 }
 
-.tau-main,
+.tao-main,
 .main-content {
   position: relative;
   z-index: 3;
@@ -414,21 +414,21 @@ body {
   pointer-events: none;
 }
 
-.tau-shell-sidebar-compact .tau-sidebar {
+.tao-shell-sidebar-compact .tao-sidebar {
   z-index: 1;
 }
 
-.tau-sidebar-compact + .tau-main .tab-bar {
+.tao-sidebar-compact + .tao-main .tab-bar {
   margin-left: -1px;
   padding-left: 44px;
 }
 
-.tau-shell:not(.tau-shell-sidebar-hidden):not(.tau-shell-sidebar-compact) .tab-bar {
+.tao-shell:not(.tao-shell-sidebar-hidden):not(.tao-shell-sidebar-compact) .tab-bar {
   margin-left: -1px;
   padding-left: 0;
 }
 
-.tau-shell-sidebar-hidden .tab-bar {
+.tao-shell-sidebar-hidden .tab-bar {
   padding-left: 92px;
 }
 
@@ -442,7 +442,7 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.tau-sidebar > .titlebar-navigation {
+.tao-sidebar > .titlebar-navigation {
   position: relative;
   z-index: 6;
   padding-left: 92px;
@@ -575,37 +575,37 @@ body {
   pointer-events: auto;
 }
 
-.tau-mosaic {
+.tao-mosaic {
   padding: 0;
   background: #151515;
 }
 
-.tau-mosaic .mosaic-root {
+.tao-mosaic .mosaic-root {
   inset: 0;
 }
 
-.tau-mosaic .mosaic-tile {
+.tao-mosaic .mosaic-tile {
   margin: 0;
 }
 
-.tau-mosaic .mosaic-split,
-.tau-mosaic .mosaic-split:hover {
+.tao-mosaic .mosaic-split,
+.tao-mosaic .mosaic-split:hover {
   background: transparent;
 }
 
-.tau-mosaic .mosaic-split.-row {
+.tao-mosaic .mosaic-split.-row {
   margin-left: -4px;
   width: 8px;
   cursor: ew-resize;
 }
 
-.tau-mosaic .mosaic-split.-column {
+.tao-mosaic .mosaic-split.-column {
   margin-top: -4px;
   height: 8px;
   cursor: ns-resize;
 }
 
-.tau-mosaic .mosaic-split.-row .mosaic-split-line {
+.tao-mosaic .mosaic-split.-row .mosaic-split-line {
   top: 0;
   right: auto;
   bottom: 0;
@@ -614,7 +614,7 @@ body {
   background: var(--pane-divider);
 }
 
-.tau-mosaic .mosaic-split.-column .mosaic-split-line {
+.tao-mosaic .mosaic-split.-column .mosaic-split-line {
   top: 4px;
   right: 0;
   bottom: auto;
@@ -623,7 +623,7 @@ body {
   background: var(--pane-divider);
 }
 
-.tau-mosaic .mosaic-split:hover .mosaic-split-line {
+.tao-mosaic .mosaic-split:hover .mosaic-split-line {
   background: var(--pane-divider-hover);
 }
 

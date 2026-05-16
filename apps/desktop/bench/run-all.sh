@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── Tau — Master Benchmark Runner ───
+# ─── Tao — Master Benchmark Runner ───
 #
 # Runs all benchmarks and prints a comparison summary.
 #
@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║            Tau — Complete Benchmark Suite               ║${NC}"
+echo -e "${BOLD}║            Tao — Complete Benchmark Suite               ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 

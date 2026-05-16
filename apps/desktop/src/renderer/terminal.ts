@@ -7,7 +7,7 @@ type CreateTerminalOptions = {
 }
 
 /**
- * Tau Default — based on Mellow by @kvparik (shipped with Ghostty).
+ * Tao Default — based on Mellow by @kvparik (shipped with Ghostty).
  * https://github.com/ghostty-org/ghostty
  */
 const THEME = {
@@ -36,10 +36,10 @@ const THEME = {
 }
 
 const terminalFontFamily =
-  '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tau Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
+  '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tao Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
 
-const tauSymbolsFontFamily = 'Tau Symbols Nerd Font Mono'
-const tauSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
+const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
+const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 
 let terminalFontsLoad: Promise<void> | null = null
 
@@ -66,26 +66,26 @@ async function loadTerminalFonts(): Promise<void> {
   terminalFontsLoad ??= (async () => {
     const source = new URL('fonts/nerd-fonts/SymbolsNerdFontMono-Regular.ttf', window.location.href)
       .href
-    const descriptor = `14px "${tauSymbolsFontFamily}"`
-    let tauSymbolsFontFace = Array.from(document.fonts).find(
-      (fontFace) => fontFace.family === tauSymbolsFontFamily,
+    const descriptor = `14px "${taoSymbolsFontFamily}"`
+    let taoSymbolsFontFace = Array.from(document.fonts).find(
+      (fontFace) => fontFace.family === taoSymbolsFontFamily,
     )
 
-    if (!tauSymbolsFontFace) {
-      tauSymbolsFontFace = new FontFace(tauSymbolsFontFamily, `url(${source})`, {
+    if (!taoSymbolsFontFace) {
+      taoSymbolsFontFace = new FontFace(taoSymbolsFontFamily, `url(${source})`, {
         style: 'normal',
         weight: '400',
         display: 'block',
       })
 
-      document.fonts.add(tauSymbolsFontFace)
+      document.fonts.add(taoSymbolsFontFace)
     }
 
-    await tauSymbolsFontFace.load()
-    await document.fonts.load(descriptor, tauSymbolsFontProbe)
+    await taoSymbolsFontFace.load()
+    await document.fonts.load(descriptor, taoSymbolsFontProbe)
 
-    if (tauSymbolsFontFace.status !== 'loaded') {
-      console.warn(`[terminal] bundled Nerd Font status: ${tauSymbolsFontFace.status}`)
+    if (taoSymbolsFontFace.status !== 'loaded') {
+      console.warn(`[terminal] bundled Nerd Font status: ${taoSymbolsFontFace.status}`)
     }
   })().catch((error) => {
     terminalFontsLoad = null

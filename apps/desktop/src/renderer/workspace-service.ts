@@ -17,7 +17,7 @@ import {
   type PullRequestInfo,
   type WorkspaceIpcResponse,
   type WorktreeInfo,
-} from '@tau/shared/workspace'
+} from '@tao/shared/workspace'
 
 const WORKSPACE_METADATA_STALE_MS = 5 * 60 * 1000
 const RENDERER_WORKSPACE_IPC_TIMEOUT_MS = WORKSPACE_IPC_TIMEOUT_MS * 2
@@ -60,7 +60,7 @@ export class WorkspaceIpcClient extends Context.Service<
       workspacePath: string,
     ) => Effect.Effect<PullRequestInfo | null, WorkspaceError>
   }
->()('Tau/WorkspaceIpcClient') {}
+>()('Tao/WorkspaceIpcClient') {}
 
 export class WorkspaceMetadataCache extends Context.Service<
   WorkspaceMetadataCache,
@@ -127,7 +127,7 @@ export class WorkspaceMetadataCache extends Context.Service<
 
     readonly invalidateWorkspace: (workspacePath: string) => Effect.Effect<void>
   }
->()('Tau/WorkspaceMetadataCache') {}
+>()('Tao/WorkspaceMetadataCache') {}
 
 const idleSnapshot: WorkspaceResourceSnapshot<never> = {
   status: 'idle',

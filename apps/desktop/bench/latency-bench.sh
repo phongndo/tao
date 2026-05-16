@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── Tau — Latency Benchmark ───
+# ─── Tao — Latency Benchmark ───
 # Measures keystroke-to-echo latency: PTY → parser → output.
 # Usage: bash bench/latency-bench.sh
 set -euo pipefail
@@ -13,9 +13,9 @@ echo -e "${BOLD}║   (PTY → parser → output, ${RUNS} samples)       ║${NC
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
-echo -e "${BOLD}─── Tau (ghostty-web WASM) ───${NC}"
+echo -e "${BOLD}─── Tao (ghostty-web WASM) ───${NC}"
 echo -ne "  Measuring... "
-npx tsx "$SCRIPT_DIR/latency-tau.ts" "$RUNS" 2>/dev/null
+npx tsx "$SCRIPT_DIR/latency-tao.ts" "$RUNS" 2>/dev/null
 
 echo ""
 echo -e "${BOLD}─── xterm.js (JS parser) ───${NC}"

@@ -17,7 +17,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@tau/shared':
+      '@tao/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       effect:
