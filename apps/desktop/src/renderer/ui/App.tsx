@@ -2,7 +2,6 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiArchive,
-  FiDatabase,
   FiFolderPlus,
   FiGitBranch,
   FiMenu,
@@ -89,6 +88,12 @@ function workspaceInitials(name: string): string {
   return initials || name.slice(0, 2).toUpperCase() || '•'
 }
 
+function normalizeSidebarWidth(nextWidth: number): number {
+  return nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
+    ? SIDEBAR_COLLAPSED_WIDTH
+    : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
+}
+
 function getDropPlacement(
   event: DragEvent<HTMLElement>,
   axis: 'horizontal' | 'vertical',
@@ -107,7 +112,6 @@ function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean 
 function WorkspaceItem({
   workspace,
   onReorderWorkspace,
-  onClearWorkspaceHistory,
 }: {
   workspace: Workspace
   onReorderWorkspace(
@@ -115,7 +119,6 @@ function WorkspaceItem({
     targetWorkspaceId: string,
     placement: ReorderPlacement,
   ): void
-  onClearWorkspaceHistory(workspaceId: string): void
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
@@ -169,18 +172,6 @@ function WorkspaceItem({
       </button>
       <button
         type="button"
-        className="icon-button workspace-history-button"
-        aria-label={`Clear persisted terminal history for ${workspace.name}`}
-        title="Clear persisted terminal history"
-        onClick={(event) => {
-          event.stopPropagation()
-          onClearWorkspaceHistory(workspace.id)
-        }}
-      >
-        <FiDatabase size={13} />
-      </button>
-      <button
-        type="button"
         className="icon-button workspace-danger-button"
         aria-label={`Remove ${workspace.name}`}
         title="Remove workspace"
@@ -205,17 +196,26 @@ function ResizeShell({
   onResize(width: number): void
 }) {
   const [isResizing, setIsResizing] = useState(false)
+  const [draftWidth, setDraftWidth] = useState<number | null>(null)
   const startXRef = useRef(0)
   const startWidthRef = useRef(0)
+  const currentWidthRef = useRef(width)
   const pendingWidthRef = useRef<number | null>(null)
   const frameRef = useRef<number | null>(null)
+  const displayWidth = draftWidth ?? width
+
+  useEffect(() => {
+    if (!isResizing) currentWidthRef.current = width
+  }, [isResizing, width])
 
   const flushPendingWidth = useCallback(() => {
     const nextWidth = pendingWidthRef.current
     pendingWidthRef.current = null
     if (nextWidth === null) return
-    onResize(nextWidth)
-  }, [onResize])
+    const clampedWidth = normalizeSidebarWidth(nextWidth)
+    currentWidthRef.current = clampedWidth
+    setDraftWidth(clampedWidth)
+  }, [])
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
@@ -240,8 +240,10 @@ function ResizeShell({
       frameRef.current = null
     }
     flushPendingWidth()
+    onResize(currentWidthRef.current)
+    setDraftWidth(null)
     setIsResizing(false)
-  }, [flushPendingWidth, isResizing])
+  }, [flushPendingWidth, isResizing, onResize])
 
   useEffect(() => {
     if (!isResizing) return
@@ -271,7 +273,7 @@ function ResizeShell({
       aria-orientation="vertical"
       aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
-      aria-valuenow={width}
+      aria-valuenow={displayWidth}
       aria-label="Resize sidebar"
       tabIndex={0}
       className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
@@ -279,22 +281,25 @@ function ResizeShell({
         if (!event.isPrimary || event.button !== 0) return
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
+        const normalizedWidth = normalizeSidebarWidth(width)
         startXRef.current = event.clientX
-        startWidthRef.current = width
+        startWidthRef.current = normalizedWidth
+        currentWidthRef.current = normalizedWidth
+        setDraftWidth(normalizedWidth)
         setIsResizing(true)
       }}
       onKeyDown={(event) => {
         if (event.key === 'ArrowLeft') {
           event.preventDefault()
-          onResize(width - SIDEBAR_KEYBOARD_RESIZE_STEP)
+          onResize(normalizeSidebarWidth(displayWidth - SIDEBAR_KEYBOARD_RESIZE_STEP))
           return
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
           onResize(
-            width <= SIDEBAR_COMPACT_THRESHOLD
+            displayWidth <= SIDEBAR_COMPACT_THRESHOLD
               ? SIDEBAR_EXPANDED_MIN_WIDTH
-              : width + SIDEBAR_KEYBOARD_RESIZE_STEP,
+              : normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP),
           )
           return
         }
@@ -319,14 +324,16 @@ function ResizeShell({
 
   const className = [
     'tao-sidebar',
-    width <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
-    width <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD ? 'tao-sidebar-header-actions-hidden' : null,
+    displayWidth <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
+    displayWidth <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD
+      ? 'tao-sidebar-header-actions-hidden'
+      : null,
   ]
     .filter(Boolean)
     .join(' ')
 
   return (
-    <aside className={className} style={{ width }} aria-label="Workspaces">
+    <aside className={className} style={{ width: displayWidth }} aria-label="Workspaces">
       {children}
       {resizeHandle}
     </aside>
@@ -344,7 +351,6 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace,
   onNextWorkspace,
   onNewTab,
-  onClearActiveHistory,
   onSelectTab,
   onCloseTab,
   onReorderTab,
@@ -360,7 +366,6 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace(): void
   onNextWorkspace(): void
   onNewTab(): void
-  onClearActiveHistory(): void
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
@@ -443,15 +448,6 @@ const TabBar = memo(function TabBar({
           )
         })}
       </div>
-      <button
-        type="button"
-        className="icon-button"
-        aria-label="Clear active persisted terminal history"
-        title="Clear active persisted terminal history"
-        onClick={onClearActiveHistory}
-      >
-        <FiDatabase size={15} />
-      </button>
       <button
         type="button"
         className="icon-button"
@@ -738,10 +734,6 @@ export function App() {
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
   )
-  const activePane = useMemo(
-    () => (activePaneId ? (panes.find((pane) => pane.id === activePaneId) ?? null) : null),
-    [activePaneId, panes],
-  )
   const workspacePathById = useMemo(
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
     [workspaces],
@@ -920,57 +912,6 @@ export function App() {
     useTaoStore.getState().selectWorkspace(workspace.id)
   }
 
-  function getSessionIdsForWorkspace(workspaceId: string): string[] {
-    const tabIds = new Set(
-      tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => tab.id),
-    )
-    return Array.from(
-      new Set(
-        panes
-          .filter((pane) => tabIds.has(pane.tabId) && pane.type === 'terminal')
-          .map((pane) => pane.lastSessionId ?? pane.id),
-      ),
-    )
-  }
-
-  async function clearActiveTerminalHistory() {
-    const sessionId =
-      activePane && activePane.type === 'terminal'
-        ? (activePane.lastSessionId ?? activePane.id)
-        : null
-    if (!sessionId) return
-    if (!window.confirm('Clear persisted terminal history for the active pane?')) return
-
-    try {
-      await window.electronAPI.clearSessionHistory(sessionId)
-    } catch (error) {
-      console.warn('[history] Failed to clear active terminal history:', error)
-    }
-  }
-
-  async function clearWorkspaceHistory(workspaceId: string) {
-    const sessionIds = getSessionIdsForWorkspace(workspaceId)
-    if (sessionIds.length === 0) return
-    if (!window.confirm('Clear persisted terminal history for this workspace?')) return
-
-    try {
-      await window.electronAPI.clearWorkspaceSessionHistory(sessionIds)
-    } catch (error) {
-      console.warn('[history] Failed to clear workspace terminal history:', error)
-    }
-  }
-
-  async function clearAllHistory() {
-    if (!window.confirm('Clear all persisted terminal history? Live shells will keep running.'))
-      return
-
-    try {
-      await window.electronAPI.clearAllSessionHistory()
-    } catch (error) {
-      console.warn('[history] Failed to clear terminal history:', error)
-    }
-  }
-
   const handlePaneArchiveState = useCallback(
     (paneId: string, archived: boolean) => {
       if (archived) {
@@ -986,11 +927,7 @@ export function App() {
 
   const handleResizeSidebar = useCallback(
     (nextWidth: number) => {
-      const clampedWidth =
-        nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
-          ? SIDEBAR_COLLAPSED_WIDTH
-          : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
-      setSidebarWidth(clampedWidth)
+      setSidebarWidth(normalizeSidebarWidth(nextWidth))
       setSidebarExpanded(true)
     },
     [setSidebarExpanded, setSidebarWidth],
@@ -1032,15 +969,6 @@ export function App() {
             >
               <FiFolderPlus size={15} />
             </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Clear all persisted terminal history"
-              title="Clear all persisted terminal history"
-              onClick={clearAllHistory}
-            >
-              <FiDatabase size={15} />
-            </button>
           </div>
           <div className="sidebar-content">
             {workspaces.length > 0 ? (
@@ -1050,7 +978,6 @@ export function App() {
                     key={workspace.id}
                     workspace={workspace}
                     onReorderWorkspace={reorderWorkspace}
-                    onClearWorkspaceHistory={clearWorkspaceHistory}
                   />
                 ))}
               </div>
@@ -1071,7 +998,6 @@ export function App() {
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
             onNewTab={() => newTab(activeWorkspaceKey)}
-            onClearActiveHistory={clearActiveTerminalHistory}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}

@@ -331,7 +331,6 @@ body {
 }
 
 .tao-sidebar-compact .workspace-details,
-.tao-sidebar-compact .workspace-history-button,
 .tao-sidebar-compact .workspace-danger-button {
   display: none;
 }
@@ -806,8 +805,7 @@ body {
   position: relative;
 }
 
-.terminal-surface-restoring,
-.terminal-surface-layout-pending {
+.terminal-surface-restoring {
   opacity: 0;
 }
 

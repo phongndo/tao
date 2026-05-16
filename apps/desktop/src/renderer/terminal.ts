@@ -39,6 +39,7 @@ const THEME = {
 const terminalFontFamily =
   '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tao Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
 
+const SIDEBAR_RESIZE_FIT_DELAY_MS = 80
 const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
 const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 
@@ -134,35 +135,37 @@ function observeTerminalResize(
   fitAddon: FitAddon,
 ): () => void {
   let resizeFrame: number | null = null
-  let resizeEpoch = 0
+  let resizeSettleTimer: ReturnType<typeof setTimeout> | null = null
   let disposed = false
   let lastWidth = container.clientWidth
   let lastHeight = container.clientHeight
 
-  async function revealAfterResize(epoch: number) {
-    await nextAnimationFrame()
-    await nextAnimationFrame()
-    if (!disposed && epoch === resizeEpoch) {
-      container.classList.remove('terminal-surface-layout-pending')
-    }
-  }
-
-  function scheduleFit() {
-    const epoch = ++resizeEpoch
-    container.classList.add('terminal-surface-layout-pending')
-
-    if (resizeFrame !== null) {
-      window.cancelAnimationFrame(resizeFrame)
-    }
-
+  function scheduleAnimationFit() {
+    if (resizeFrame !== null) return
     resizeFrame = window.requestAnimationFrame(() => {
       resizeFrame = null
       if (disposed) return
 
       fitAddon.fit()
       forceTerminalRender(term)
-      void revealAfterResize(epoch)
     })
+  }
+
+  function scheduleFit() {
+    if (resizeSettleTimer !== null) {
+      clearTimeout(resizeSettleTimer)
+      resizeSettleTimer = null
+    }
+
+    if (document.body.classList.contains('sidebar-resizing')) {
+      resizeSettleTimer = setTimeout(() => {
+        resizeSettleTimer = null
+        scheduleAnimationFit()
+      }, SIDEBAR_RESIZE_FIT_DELAY_MS)
+      return
+    }
+
+    scheduleAnimationFit()
   }
 
   const observer = new ResizeObserver((entries) => {
@@ -183,6 +186,10 @@ function observeTerminalResize(
     if (resizeFrame !== null) {
       window.cancelAnimationFrame(resizeFrame)
       resizeFrame = null
+    }
+    if (resizeSettleTimer !== null) {
+      clearTimeout(resizeSettleTimer)
+      resizeSettleTimer = null
     }
     container.classList.remove('terminal-surface-layout-pending')
   }
