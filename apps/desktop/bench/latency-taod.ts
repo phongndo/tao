@@ -57,32 +57,10 @@ function encodeStreamFrame(kind: number, sessionId: string, seq: bigint, payload
   return buf
 }
 
-function parseStreamFrames(
-  data: Buffer,
-): Array<{ kind: number; sessionId: string; seq: bigint; payload: Buffer }> {
-  const frames: Array<{ kind: number; sessionId: string; seq: bigint; payload: Buffer }> = []
-  let offset = 0
-
-  while (offset + HEADER_SIZE <= data.length) {
-    const magic = data.readUInt32BE(offset)
-    if (magic !== MAGIC) break
-
-    const kind = data.readUInt16BE(offset + 6)
-    const sessionId = data
-      .toString('utf8', offset + 8, offset + 8 + SESSION_ID_SIZE)
-      .replace(/\0+$/, '')
-    const seq = data.readBigUInt64BE(offset + 72)
-    const length = data.readUInt32BE(offset + 80)
-    const payload = data.subarray(offset + HEADER_SIZE, offset + HEADER_SIZE + length)
-
-    const expectedCrc = data.readUInt32BE(offset + 84)
-    if (crc32(payload) !== expectedCrc) break
-
-    frames.push({ kind, sessionId, seq, payload: Buffer.from(payload) })
-    offset += HEADER_SIZE + length
-  }
-
-  return frames
+function readPaddedSessionId(buffer: Buffer, offset: number): string {
+  const text = buffer.toString('utf8', offset, offset + SESSION_ID_SIZE)
+  const nulOffset = text.indexOf('\u0000')
+  return nulOffset === -1 ? text : text.slice(0, nulOffset)
 }
 
 function connectSocket(timeoutMs = 3000): Promise<net.Socket> {
@@ -119,7 +97,7 @@ function sendJson(
       socket.off('data', onData)
       try {
         resolve(JSON.parse(buffered.subarray(0, nl).toString('utf8')))
-      } catch (err) {
+      } catch {
         reject(new Error(`Failed to parse taod response`))
       }
     }
@@ -208,7 +186,7 @@ async function runLatencyBenchmark() {
         continue
       }
       const kind = echoBuf.readUInt16BE(6)
-      const sess_id = echoBuf.toString('utf8', 8, 8 + SESSION_ID_SIZE).replace(/\0+$/, '')
+      const sess_id = readPaddedSessionId(echoBuf, 8)
       const length = echoBuf.readUInt32BE(80)
       const frameSize = HEADER_SIZE + length
       if (echoBuf.length < frameSize) break
