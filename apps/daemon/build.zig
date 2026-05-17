@@ -101,6 +101,10 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("test:fmt", "Check Zig formatting");
     fmt_step.dependOn(&fmt_check.step);
 
+    const compile_step = b.step("test:compile", "Compile taod unit tests without running them");
+    compile_step.dependOn(&mod_tests.step);
+    compile_step.dependOn(&exe_tests.step);
+
     const fuzz_step = b.step("test:fuzz", "Run deterministic parser fault tests with fuzz instrumentation; pass -Dfuzz=true");
     fuzz_step.dependOn(&mod_test_run.step);
 
