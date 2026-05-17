@@ -1,4 +1,12 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'node:fs'
 import { basename, resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -77,6 +85,7 @@ function copyTaodBinary() {
       const adaptersSource = resolve(__dirname, '../daemon/adapters')
       const adaptersDest = resolve(outDir, '../adapters')
       if (existsSync(adaptersSource)) {
+        rmSync(adaptersDest, { recursive: true, force: true })
         copyDirectory(adaptersSource, adaptersDest)
         console.log('[copy-taod-binary] Copied taod adapters to', adaptersDest)
       }

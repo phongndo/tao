@@ -1,11 +1,40 @@
-import { app, BrowserWindow, ipcMain, MessageChannelMain } from 'electron'
+import { app, BrowserWindow, ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron'
+
+type BenchMode = 'legacy' | 'messageport'
+
+interface BenchSample {
+  durationMs: number
+  receivedBytes: number
+  p95GapMs: number
+  p99GapMs: number
+  maxGapMs: number
+  stalls16: number
+  stalls32: number
+  p99ControlLatencyMs: number
+  controlStalls16: number
+  controlStalls32: number
+}
+
+interface BenchSummary {
+  mode: BenchMode
+  avgMs: number
+  bestMBps: number
+  avgMBps: number
+  medianStalls16: number
+  medianStalls32: number
+  medianControlStalls16: number
+  medianControlStalls32: number
+  p99ControlLatencyMs: number
+  p99GapMs: number
+  maxGapMs: number
+}
 
 process.once('uncaughtException', (err) => {
   console.error(err)
   app.exit(1)
 })
 
-function readPositiveIntEnv(name, fallback, max) {
+function readPositiveIntEnv(name: string, fallback: number, max: number): number {
   const raw = process.env[name] ?? String(fallback)
   if (!/^[1-9]\d*$/.test(raw)) {
     throw new Error(`${name} must be a positive integer`)
@@ -30,13 +59,13 @@ const chunks = Math.ceil(totalBytes / chunkBytes)
 const controlPings = Math.ceil(chunks / PING_EVERY_CHUNKS)
 const payload = 'x'.repeat(chunkBytes)
 
-function percentile(values, p) {
+function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]
 }
 
-function summarize(mode, samples) {
+function summarize(mode: BenchMode, samples: readonly BenchSample[]): BenchSummary {
   const durations = samples.map((sample) => sample.durationMs)
   const throughput = samples.map((sample) => TOTAL_MB / (sample.durationMs / 1000))
   const stalls16 = samples.map((sample) => sample.stalls16)
@@ -65,7 +94,7 @@ function summarize(mode, samples) {
   }
 }
 
-function printSummary({ legacy, port }) {
+function printSummary({ legacy, port }: { legacy: BenchSummary; port: BenchSummary }): void {
   console.log('Tao Electron IPC benchmark')
   console.log(
     `payload: ${TOTAL_MB} MiB, chunk: ${CHUNK_KB} KiB, runs: ${RUNS}, control ping: every ${PING_EVERY_CHUNKS} chunks`,
@@ -102,7 +131,7 @@ function printSummary({ legacy, port }) {
   }
 }
 
-function rendererHtml() {
+function rendererHtml(): string {
   return `<!doctype html>
 <html>
   <body>
@@ -195,11 +224,11 @@ function rendererHtml() {
 </html>`
 }
 
-function waitFor(channel, timeoutMs = 5000) {
+function waitFor<T = void>(channel: string, timeoutMs = 5000): Promise<T> {
   return new Promise((resolve, reject) => {
-    const onEvent = (_event, result) => {
+    const onEvent = (_event: IpcMainEvent, result?: T) => {
       clearTimeout(timer)
-      resolve(result)
+      resolve(result as T)
     }
 
     const timer = setTimeout(() => {
@@ -211,7 +240,7 @@ function waitFor(channel, timeoutMs = 5000) {
   })
 }
 
-async function runLegacy(win) {
+async function runLegacy(win: BrowserWindow): Promise<BenchSample> {
   win.webContents.send('bench:start', chunks, controlPings)
   await waitFor('bench:ready')
 
@@ -220,11 +249,11 @@ async function runLegacy(win) {
     sendControlPing(win, index)
   }
 
-  const result = await waitFor('bench:done')
+  const result = await waitFor<BenchSample>('bench:done')
   return result
 }
 
-async function runPort(win) {
+async function runPort(win: BrowserWindow): Promise<BenchSample> {
   const { port1, port2 } = new MessageChannelMain()
   win.webContents.postMessage('bench:port', null, [port2])
   port1.start()
@@ -238,18 +267,18 @@ async function runPort(win) {
     sendControlPing(win, index)
   }
 
-  const result = await waitFor('bench:done')
+  const result = await waitFor<BenchSample>('bench:done')
   port1.close()
   return result
 }
 
-function sendControlPing(win, index) {
+function sendControlPing(win: BrowserWindow, index: number): void {
   if (index % PING_EVERY_CHUNKS === 0) {
     win.webContents.send('bench:ping', Date.now())
   }
 }
 
-async function main() {
+async function main(): Promise<void> {
   await app.whenReady()
 
   const win = new BrowserWindow({
@@ -263,8 +292,8 @@ async function main() {
 
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(rendererHtml())}`)
 
-  const legacySamples = []
-  const portSamples = []
+  const legacySamples: BenchSample[] = []
+  const portSamples: BenchSample[] = []
   for (let index = 0; index < RUNS; index++) {
     legacySamples.push(await runLegacy(win))
     portSamples.push(await runPort(win))

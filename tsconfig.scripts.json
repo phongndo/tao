@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["node"]
+  },
+  "include": [
+    "apps/daemon/adapters/**/*.ts",
+    "scripts/**/*.ts",
+    "apps/desktop/bench/benchmark.ts",
+    "apps/desktop/bench/ipc-benchmark.ts",
+    "apps/desktop/bench/renderer-benchmark.ts",
+    "apps/desktop/bench/run-electron.ts"
+  ]
+}

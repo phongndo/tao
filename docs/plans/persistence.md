@@ -79,7 +79,7 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
   Ghostty renders.
 - **Renderer/window reload survival**: closing a BrowserWindow no longer kills PTY ownership because
   `taod` owns sessions outside the renderer and new renderer ports reconnect through the daemon bridge.
-- **Electron install repair**: `scripts/fix-electron-install.mjs` repairs incomplete Electron binary
+- **Electron install repair**: `scripts/electron-install.ts` repairs incomplete Electron binary
   installs before `dev` / `start`.
 - **Initial Zig daemon skeleton**: `apps/daemon` now exists as a pnpm workspace package with
   `build.zig`, `src/main.zig`, module boundaries for daemon/session/RPC/PTY/event-log/snapshot/DB/
@@ -145,7 +145,7 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
   PTY with that command instead of replaying old scrollback. If the restart command cannot be run,
   Electron still falls back to creating a fresh shell.
 - **Agent adapter spawning and built-in scripts**: `taod` now looks for adapter scripts in
-  `TAOD_ADAPTER_DIR` or `~/.tao/adapters`, spawns `pi.js`, `codex.js`, and `claude.js` with the
+  `TAOD_ADAPTER_DIR` or `~/.tao/adapters`, spawns `pi.ts`, `codex.ts`, and `claude.ts` with the
   documented NDJSON-style command contract, captures native session ids from adapter output or argv
   flags, stores `agent_sessions` rows, and prefers stored adapter resume argv when cold-starting a
   previously agent-driven terminal. The desktop build copies bundled adapters next to the bundled
@@ -360,9 +360,9 @@ hand-rolled fallback and system `libghostty-vt` C ABI wrapper have been retired.
 │       ├── current-screen.state   # Optional future live-reattach first-paint state
 │       └── excerpt.txt            # Bounded plain text excerpt for search/debug
 └── adapters/                      # Optional agent adapter scripts
-    ├── pi.js
-    ├── codex.js
-    └── claude.js
+    ├── pi.ts
+    ├── codex.ts
+    └── claude.ts
 ```
 
 Permissions:
@@ -677,13 +677,13 @@ pub const Adapter = struct {
 };
 ```
 
-Adapter scripts live at `~/.tao/adapters/<provider>.js` (or `.ts` compiled to `.js` shared from the
-shared package). Taod communicates with them via stdin/stdout NDJSON.
+Adapter scripts live at `~/.tao/adapters/<provider>.ts`. Taod communicates with them via
+stdin/stdout NDJSON through `tsx` by default, or through `TAOD_ADAPTER_RUNNER` when overridden.
 
 Example adapter interface:
 
 ```typescript
-// ~/.tao/adapters/pi.js
+// ~/.tao/adapters/pi.ts
 import { readFileSync, writeFileSync } from 'fs'
 
 // Called by taod with JSON on stdin

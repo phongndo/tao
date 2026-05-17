@@ -1,20 +1,27 @@
-#!/usr/bin/env node
-const { readFileSync } = require('node:fs')
-const { basename } = require('node:path')
+#!/usr/bin/env tsx
+import { readFileSync } from 'node:fs'
+import { basename } from 'node:path'
 
-function input() {
-  return JSON.parse(process.argv[2] || '{}')
+interface AdapterMessage {
+  command?: string
+  argv?: unknown
+  excerptPath?: unknown
+  nativeSessionId?: unknown
 }
 
-function write(value) {
+function input(): AdapterMessage {
+  return JSON.parse(process.argv[2] || '{}') as AdapterMessage
+}
+
+function write(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
-function exe(argv) {
-  return basename(String(argv?.[0] || ''))
+function exe(argv: readonly unknown[]): string {
+  return basename(String(argv[0] || ''))
 }
 
-function flagValue(argv, flags) {
+function flagValue(argv: readonly unknown[], flags: readonly string[]): string | null {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = String(argv[index])
     for (const flag of flags) {
@@ -30,8 +37,8 @@ function flagValue(argv, flags) {
   return null
 }
 
-function readExcerpt(path) {
-  if (!path) return ''
+function readExcerpt(path: unknown): string {
+  if (typeof path !== 'string' || path.length === 0) return ''
   try {
     return readFileSync(path, 'utf8')
   } catch {
@@ -39,12 +46,12 @@ function readExcerpt(path) {
   }
 }
 
-function discover(msg) {
+function discover(msg: AdapterMessage): string | null {
   const argv = Array.isArray(msg.argv) ? msg.argv : []
   return (
-    flagValue(argv, ['--resume', '--session', '--session-id', '--conversation', '-r']) ||
+    flagValue(argv, ['--session', '--session-id', '--conversation', '--resume', '-r']) ||
     readExcerpt(msg.excerptPath).match(
-      /(?:claude[-_\s]?session|conversation|session(?:\s+id)?)[^A-Za-z0-9._:-]+([A-Za-z0-9][A-Za-z0-9._:-]*)/i,
+      /(?:pi[-_\s]?session|session(?:\s+id)?)[^A-Za-z0-9._:-]+([A-Za-z0-9][A-Za-z0-9._:-]*)/i,
     )?.[1] ||
     null
   )
@@ -52,7 +59,7 @@ function discover(msg) {
 
 const msg = input()
 const argv = Array.isArray(msg.argv) ? msg.argv : []
-const detected = exe(argv) === 'claude'
+const detected = exe(argv) === 'pi'
 
 switch (msg.command) {
   case 'detect':
@@ -63,7 +70,10 @@ switch (msg.command) {
     break
   case 'resume-command':
     write({
-      argv: msg.nativeSessionId ? [argv[0] || 'claude', '--resume', msg.nativeSessionId] : null,
+      argv:
+        typeof msg.nativeSessionId === 'string'
+          ? [argv[0] || 'pi', '--session', msg.nativeSessionId]
+          : null,
     })
     break
   default:

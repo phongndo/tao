@@ -263,7 +263,7 @@ fn argvJsonAlloc(allocator: std.mem.Allocator, argv: []const []const u8) ![]u8 {
 }
 
 fn adapterScriptPathAlloc(allocator: std.mem.Allocator, adapters_dir: []const u8, provider: Provider) ![]u8 {
-    const file_name = try std.fmt.allocPrint(allocator, "{s}.js", .{provider.text()});
+    const file_name = try std.fmt.allocPrint(allocator, "{s}.ts", .{provider.text()});
     defer allocator.free(file_name);
     return try std.fs.path.join(allocator, &.{ adapters_dir, file_name });
 }
@@ -286,7 +286,7 @@ fn runAdapterCommandAlloc(
         else => return err,
     };
     defer if (runner) |value| allocator.free(value);
-    const runner_exe = if (runner) |value| if (value.len > 0) value else "node" else "node";
+    const runner_exe = if (runner) |value| if (value.len > 0) value else "tsx" else "tsx";
 
     const child_argv = [_][]const u8{ runner_exe, script_path, request_json };
     const result = std.process.Child.run(.{
@@ -439,4 +439,36 @@ test "agent adapter external detection falls back to argv heuristics" {
     try std.testing.expectEqual(Provider.claude, detection.provider);
     try std.testing.expectEqualStrings("native-claude", detection.native_session_id.?);
     try std.testing.expectEqualStrings("[\"claude\",\"--resume\",\"native-claude\"]", detection.resume_argv_json.?);
+}
+
+test "agent adapter external detection executes TypeScript adapters" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "pi.ts", .data = 
+        \\const msg = JSON.parse(process.argv[2] || '{}')
+        \\switch (msg.command) {
+        \\  case 'detect':
+        \\    console.log(JSON.stringify({ detected: true, nativeSessionId: 'adapter-native' }))
+        \\    break
+        \\  case 'resume-command':
+        \\    console.log(JSON.stringify({ argv: ['pi', '--session', msg.nativeSessionId] }))
+        \\    break
+        \\  default:
+        \\    console.log(JSON.stringify({ detected: false }))
+        \\}
+    });
+
+    const adapters_dir = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(adapters_dir);
+
+    var detection = (try detectSessionAlloc(std.testing.allocator, adapters_dir, .{
+        .terminal_session_id = "session-1",
+        .argv = &.{"pi"},
+    })).?;
+    defer detection.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(Provider.pi, detection.provider);
+    try std.testing.expectEqualStrings("adapter-native", detection.native_session_id.?);
+    try std.testing.expectEqualStrings("[\"pi\",\"--session\",\"adapter-native\"]", detection.resume_argv_json.?);
 }
