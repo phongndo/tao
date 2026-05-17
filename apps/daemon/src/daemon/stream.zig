@@ -13,6 +13,7 @@ const fd_io = @import("fd_io.zig");
 const protocol = @import("protocol.zig");
 const util = @import("util.zig");
 const types = @import("types.zig");
+const screen_mod = @import("screen.zig");
 
 const AttachKind = protocol.AttachKind;
 const SessionResponseMetadata = protocol.SessionResponseMetadata;
@@ -37,6 +38,17 @@ const missingField = protocol.missingField;
 const notFound = protocol.notFound;
 const sessionResponse = protocol.sessionResponse;
 
+const max_pending_client_bytes = 1024 * 1024;
+
+fn appendPendingClientBytes(self: anytype, pending: *std.ArrayList(u8), bytes: []const u8) !bool {
+    if (bytes.len > max_pending_client_bytes or pending.items.len > max_pending_client_bytes - bytes.len) {
+        std.log.warn("closing taod stream with oversized pending client frame buffer", .{});
+        return false;
+    }
+    try pending.appendSlice(self.allocator, bytes);
+    return true;
+}
+
 fn ClientFrameVisitor(comptime Daemon: type) type {
     return struct {
         daemon: Daemon,
@@ -55,7 +67,7 @@ pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: [
 
     var pending: std.ArrayList(u8) = .empty;
     defer pending.deinit(self.allocator);
-    try pending.appendSlice(self.allocator, initial_tail);
+    if (!try appendPendingClientBytes(self, &pending, initial_tail)) return;
     try self.applyPendingClientFrames(session_id, &pending);
 
     while (true) {
@@ -76,7 +88,7 @@ pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: [
                 }
             }
             if (amount == 0) return;
-            try pending.appendSlice(self.allocator, buffer[0..@intCast(amount)]);
+            if (!try appendPendingClientBytes(self, &pending, buffer[0..@intCast(amount)])) return;
             try self.applyPendingClientFrames(session_id, &pending);
         }
     }
@@ -92,11 +104,13 @@ pub fn applyPendingClientFrames(self: anytype, session_id: []const u8, pending: 
 
 pub fn addSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
     self.lock();
-    defer self.unlock();
+    {
+        defer self.unlock();
 
-    const item = self.sessions.find(session_id) orelse return false;
-    if (!isLiveAttachable(item)) return false;
-    if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+        const item = self.sessions.find(session_id) orelse return false;
+        if (!isLiveAttachable(item)) return false;
+        if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+    }
 
     // Initial reattach hydration must be reliable. Current-screen snapshots for full-screen
     // apps such as nvim/vim can exceed the local socket's immediate non-blocking capacity,
@@ -104,22 +118,53 @@ pub fn addSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_
     // and only resumes it once the renderer is wired. Use blocking writes for the initial
     // snapshot/backlog, then switch the subscriber to non-blocking for live broadcasts so slow
     // clients can still be dropped without stalling the daemon.
-    self.sendCurrentScreenSnapshotToSubscriberLocked(item, socket_fd) catch |err| {
-        std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ item.id, err });
-        _ = self.sessions.removeSubscriber(session_id, socket_fd);
+    screen_mod.sendCurrentScreenSnapshotToSubscriber(self, session_id, socket_fd) catch |err| {
+        std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ session_id, err });
+        _ = self.removeSubscriber(session_id, socket_fd);
         return false;
     };
-    self.flushPendingOutputToSubscriberLocked(item, socket_fd) catch |err| {
-        std.log.warn("failed to flush pending output for {s}: {t}", .{ item.id, err });
-        _ = self.sessions.removeSubscriber(session_id, socket_fd);
+    flushPendingOutputToSubscriber(self, session_id, socket_fd) catch |err| {
+        std.log.warn("failed to flush pending output for {s}: {t}", .{ session_id, err });
+        _ = self.removeSubscriber(session_id, socket_fd);
         return false;
     };
     setNonBlockingFd(socket_fd) catch |err| {
-        std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ item.id, err });
-        _ = self.sessions.removeSubscriber(session_id, socket_fd);
+        std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ session_id, err });
+        _ = self.removeSubscriber(session_id, socket_fd);
         return false;
     };
     return true;
+}
+
+fn flushPendingOutputToSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !void {
+    const frames = frames: {
+        self.lock();
+        defer self.unlock();
+
+        const item = self.sessions.find(session_id) orelse return error.SessionNotFound;
+        if (!self.sessions.hasSubscriber(session_id, socket_fd)) return error.SessionNotAttached;
+        if (item.pending_output.items.len == 0) break :frames null;
+
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+        for (item.pending_output.items) |frame| {
+            const buffer = try self.allocator.alloc(u8, rpc.encodedStreamFrameSize(frame.payload.len));
+            defer self.allocator.free(buffer);
+            const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
+            try out.appendSlice(self.allocator, encoded);
+        }
+        break :frames try out.toOwnedSlice(self.allocator);
+    };
+
+    const encoded_frames = frames orelse return;
+    defer self.allocator.free(encoded_frames);
+    try writeAllFd(socket_fd, encoded_frames);
+
+    self.lock();
+    defer self.unlock();
+    const item = self.sessions.find(session_id) orelse return;
+    if (!self.sessions.hasSubscriber(session_id, socket_fd)) return;
+    item.clearPendingOutput(self.allocator);
 }
 
 pub fn removeSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {

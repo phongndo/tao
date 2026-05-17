@@ -126,3 +126,33 @@ pub fn sendCurrentScreenSnapshotToSubscriberLocked(self: anytype, item: *session
     const encoded = try rpc.encodeStreamFrame(buffer, .snapshot, item.id, item.last_seq, encoded_snapshot);
     try writeAllFd(socket_fd, encoded);
 }
+
+pub fn sendCurrentScreenSnapshotToSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !void {
+    const frame = frame: {
+        self.lock();
+        defer self.unlock();
+
+        const item = self.sessions.find(session_id) orelse return error.SessionNotFound;
+        if (!self.sessions.hasSubscriber(session_id, socket_fd)) return error.SessionNotAttached;
+        const snapshot_payload = (try item.currentScreenSnapshotAlloc(self.allocator)) orelse break :frame null;
+        defer self.allocator.free(snapshot_payload);
+
+        const encoded_snapshot = try snapshot.encodeAlloc(self.allocator, .{
+            .seq = item.last_seq,
+            .cols = item.cols,
+            .rows = item.rows,
+            .backend_name = vt.backend_name,
+            .payload = snapshot_payload,
+        });
+        defer self.allocator.free(encoded_snapshot);
+
+        const buffer = try self.allocator.alloc(u8, rpc.encodedStreamFrameSize(encoded_snapshot.len));
+        errdefer self.allocator.free(buffer);
+        _ = try rpc.encodeStreamFrame(buffer, .snapshot, item.id, item.last_seq, encoded_snapshot);
+        break :frame buffer;
+    };
+
+    const encoded = frame orelse return;
+    defer self.allocator.free(encoded);
+    try writeAllFd(socket_fd, encoded);
+}
