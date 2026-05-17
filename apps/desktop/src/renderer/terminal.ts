@@ -1,4 +1,4 @@
-import { FitAddon, Ghostty, Terminal } from 'ghostty-web'
+import { Ghostty, Terminal } from 'ghostty-web'
 import {
   decodeCurrentScreenSnapshot,
   decodeFallbackCurrentScreenSnapshotPayload,
@@ -60,6 +60,9 @@ const STARTUP_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024
 const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
 const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 const warnedSnapshotBackends = new Set<string>()
+
+const MIN_TERMINAL_COLS = 2
+const MIN_TERMINAL_ROWS = 1
 
 let terminalFontsLoad: Promise<void> | null = null
 
@@ -127,6 +130,34 @@ function renderTerminalError(container: HTMLElement, err: unknown) {
 
 function nextAnimationFrame(): Promise<void> {
   return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+}
+
+function cssPixels(value: string): number {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function getContainerContentSize(container: HTMLElement): { width: number; height: number } {
+  const style = window.getComputedStyle(container)
+  return {
+    width: container.clientWidth - cssPixels(style.paddingLeft) - cssPixels(style.paddingRight),
+    height: container.clientHeight - cssPixels(style.paddingTop) - cssPixels(style.paddingBottom),
+  }
+}
+
+function fitTerminalToContainer(container: HTMLElement, term: Terminal): boolean {
+  const metrics = term.renderer?.getMetrics()
+  if (!metrics || metrics.width <= 0 || metrics.height <= 0) return false
+
+  const { width, height } = getContainerContentSize(container)
+  if (width <= 0 || height <= 0) return false
+
+  const cols = Math.max(MIN_TERMINAL_COLS, Math.floor(width / metrics.width))
+  const rows = Math.max(MIN_TERMINAL_ROWS, Math.floor(height / metrics.height))
+  if (cols === term.cols && rows === term.rows) return false
+
+  term.resize(cols, rows)
+  return true
 }
 
 function base64ToBytes(dataBase64: string): Uint8Array {
@@ -203,11 +234,7 @@ async function revealTerminalAfterStableRender(
   container.classList.remove('terminal-surface-restoring')
 }
 
-function observeTerminalResize(
-  container: HTMLElement,
-  term: Terminal,
-  fitAddon: FitAddon,
-): () => void {
+function observeTerminalResize(container: HTMLElement, term: Terminal): () => void {
   let resizeFrame: number | null = null
   let resizeSettleTimer: ReturnType<typeof setTimeout> | null = null
   let disposed = false
@@ -220,7 +247,7 @@ function observeTerminalResize(
       resizeFrame = null
       if (disposed) return
 
-      fitAddon.fit()
+      fitTerminalToContainer(container, term)
       forceTerminalRender(term)
     })
   }
@@ -253,6 +280,7 @@ function observeTerminalResize(
     scheduleFit()
   })
   observer.observe(container)
+  scheduleAnimationFit()
 
   return () => {
     disposed = true
@@ -344,7 +372,6 @@ export async function createTerminal(
   updateStatus('Wiring IPC...')
 
   const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
-  const fitAddon = new FitAddon()
   let stopResizeObserver: (() => void) | null = null
   let archived = false
   let bufferingStartupOutput = true
@@ -353,9 +380,8 @@ export async function createTerminal(
   let suppressOutputThroughSeq = 0
   const bufferedStartupOutput: OutputFrame[] = []
 
-  term.loadAddon(fitAddon)
   await nextAnimationFrame()
-  fitAddon.fit()
+  fitTerminalToContainer(container, term)
 
   function writePtyData(data: string) {
     if (scanTitle) {
@@ -494,7 +520,7 @@ export async function createTerminal(
     if (initialPtySize.cols !== term.cols || initialPtySize.rows !== term.rows) {
       term.resize(initialPtySize.cols, initialPtySize.rows)
     }
-    fitAddon.fit()
+    fitTerminalToContainer(container, term)
     // Startup output can arrive between attach:ok and the final fit above. Writing it before the
     // final resize makes Ghostty preserve/reflow the early shell prompt at the wrong screen origin,
     // which presents as a blank terminal until the next input-triggered repaint. Flush only after
@@ -512,7 +538,6 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
-    fitAddon.dispose()
     term.dispose()
     void window.electronAPI.killSession(sessionId)
     container.classList.remove('terminal-surface-restoring')
@@ -520,7 +545,7 @@ export async function createTerminal(
     throw err
   }
 
-  stopResizeObserver = observeTerminalResize(container, term, fitAddon)
+  stopResizeObserver = observeTerminalResize(container, term)
 
   // Cleanup
   const originalDispose = term.dispose.bind(term)
@@ -539,7 +564,6 @@ export async function createTerminal(
     stopResizeObserver?.()
     stopResizeObserver = null
     container.classList.remove('terminal-surface-restoring')
-    fitAddon.dispose()
     originalDispose()
   }
 

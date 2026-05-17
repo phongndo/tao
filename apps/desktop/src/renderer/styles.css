@@ -803,6 +803,8 @@ body {
   width: 100%;
   height: 100%;
   position: relative;
+  caret-color: transparent;
+  outline: none;
 }
 
 .terminal-surface-restoring {
@@ -832,6 +834,7 @@ body {
   opacity: 0;
   position: absolute;
   pointer-events: none;
+  caret-color: transparent;
 }
 
 /* ── Selection color overrides ── */
