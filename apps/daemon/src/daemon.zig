@@ -895,8 +895,14 @@ pub const Daemon = struct {
 
         const item = self.sessions.find(session_id) orelse return false;
         if (!isLiveAttachable(item)) return false;
-        try setNonBlockingFd(socket_fd);
         if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+
+        // Initial reattach hydration must be reliable. Current-screen snapshots for full-screen
+        // apps such as nvim/vim can exceed the local socket's immediate non-blocking capacity,
+        // especially because the Electron side pauses the socket after reading the attach response
+        // and only resumes it once the renderer is wired. Use blocking writes for the initial
+        // snapshot/backlog, then switch the subscriber to non-blocking for live broadcasts so slow
+        // clients can still be dropped without stalling the daemon.
         self.sendCurrentScreenSnapshotToSubscriberLocked(item, socket_fd) catch |err| {
             std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ item.id, err });
             _ = self.sessions.removeSubscriber(session_id, socket_fd);
@@ -904,6 +910,11 @@ pub const Daemon = struct {
         };
         self.flushPendingOutputToSubscriberLocked(item, socket_fd) catch |err| {
             std.log.warn("failed to flush pending output for {s}: {t}", .{ item.id, err });
+            _ = self.sessions.removeSubscriber(session_id, socket_fd);
+            return false;
+        };
+        setNonBlockingFd(socket_fd) catch |err| {
+            std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ item.id, err });
             _ = self.sessions.removeSubscriber(session_id, socket_fd);
             return false;
         };
@@ -1501,7 +1512,7 @@ pub const Daemon = struct {
         defer self.allocator.free(buffer);
 
         const encoded = try rpc.encodeStreamFrame(buffer, .snapshot, item.id, item.last_seq, encoded_snapshot);
-        try writeAllFdNonBlocking(socket_fd, encoded);
+        try writeAllFd(socket_fd, encoded);
     }
 
     fn broadcastStreamFrameLocked(
@@ -1543,7 +1554,7 @@ pub const Daemon = struct {
             const buffer = try self.allocator.alloc(u8, encoded_len);
             defer self.allocator.free(buffer);
             const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
-            try writeAllFdNonBlocking(socket_fd, encoded);
+            try writeAllFd(socket_fd, encoded);
         }
 
         item.clearPendingOutput(self.allocator);

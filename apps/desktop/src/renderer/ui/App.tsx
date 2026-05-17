@@ -729,14 +729,19 @@ export function App() {
     activeWorkspaceIndex >= 0 && activeWorkspaceIndex < sortedWorkspaces.length - 1
   const workspaceTabs = useMemo(
     () =>
-      tabs
-        .filter((tab) => tab.workspaceId === activeWorkspaceKey)
-        .sort((a, b) => a.order - b.order),
-    [activeWorkspaceKey, tabs],
+      layoutLoaded
+        ? tabs
+            .filter((tab) => tab.workspaceId === activeWorkspaceKey)
+            .sort((a, b) => a.order - b.order)
+        : [],
+    [activeWorkspaceKey, layoutLoaded, tabs],
   )
   const mountedTabs = useMemo(
-    () => [...tabs].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order),
-    [tabs],
+    () =>
+      layoutLoaded
+        ? [...tabs].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order)
+        : [],
+    [layoutLoaded, tabs],
   )
   const activeTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,

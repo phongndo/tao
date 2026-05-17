@@ -161,6 +161,7 @@ export function TerminalPane({
           terminal.blur()
         }
       } catch (err) {
+        if (disposed) return
         const message = err instanceof Error ? err.message : String(err)
         console.error('[renderer] Failed:', err)
         setTerminalError({
