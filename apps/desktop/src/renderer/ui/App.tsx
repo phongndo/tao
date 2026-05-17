@@ -12,6 +12,7 @@ import {
 } from 'react-icons/fi'
 import {
   type ComponentType,
+  type CSSProperties,
   type DragEvent,
   memo,
   type ReactNode,
@@ -698,9 +699,7 @@ export function App() {
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
-  const [sidebarResizePreviewCompact, setSidebarResizePreviewCompact] = useState<boolean | null>(
-    null,
-  )
+  const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
@@ -938,17 +937,19 @@ export function App() {
     (nextWidth: number) => {
       setSidebarWidth(normalizeSidebarWidth(nextWidth))
       setSidebarExpanded(true)
-      setSidebarResizePreviewCompact(null)
+      setSidebarResizePreviewWidth(null)
     },
     [setSidebarExpanded, setSidebarWidth],
   )
   const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
-    setSidebarResizePreviewCompact(
-      nextWidth === null ? null : nextWidth <= SIDEBAR_COMPACT_THRESHOLD,
-    )
+    setSidebarResizePreviewWidth(nextWidth)
   }, [])
   const isSidebarCompact =
-    sidebarExpanded && (sidebarResizePreviewCompact ?? sidebarSize <= SIDEBAR_COMPACT_THRESHOLD)
+    sidebarExpanded &&
+    (sidebarResizePreviewWidth ?? sidebarSize) <= SIDEBAR_COMPACT_THRESHOLD
+  const shellStyle = {
+    '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
+  } as CSSProperties & Record<'--tao-sidebar-width', string>
   const shellClassName = [
     'tao-shell',
     sidebarExpanded ? null : 'tao-shell-sidebar-hidden',
@@ -962,7 +963,7 @@ export function App() {
   }
 
   return (
-    <div className={shellClassName}>
+    <div className={shellClassName} style={shellStyle}>
       {sidebarExpanded ? (
         <ResizeShell
           width={sidebarSize}

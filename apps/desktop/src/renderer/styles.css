@@ -27,6 +27,9 @@ body {
 #root {
   width: 100%;
   height: 100%;
+  --tao-titlebar-height: 42px;
+  --tao-titlebar-control-spacer: 92px;
+  --tao-sidebar-width: 0px;
 }
 
 .tao-shell {
@@ -45,7 +48,7 @@ body {
   right: 0;
   left: 0;
   z-index: 2;
-  height: 42px;
+  height: var(--tao-titlebar-height);
   border-bottom: 1px solid #242428;
   background: #18181a;
   content: '';
@@ -77,7 +80,7 @@ body {
 .sidebar-content {
   position: relative;
   z-index: 3;
-  height: calc(100% - 42px);
+  height: calc(100% - var(--tao-titlebar-height));
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -86,7 +89,7 @@ body {
 
 .sidebar-top-actions {
   position: absolute;
-  top: 9px;
+  top: calc((var(--tao-titlebar-height) - 24px) / 2);
   right: 8px;
   z-index: 7;
   height: 24px;
@@ -349,10 +352,10 @@ body {
 
 .resize-handle::after {
   position: absolute;
-  top: 42px;
+  top: var(--tao-titlebar-height);
   left: 7px;
   width: 1px;
-  height: calc(100% - 42px);
+  height: calc(100% - var(--tao-titlebar-height));
   background: transparent;
   content: '';
 }
@@ -393,7 +396,7 @@ body {
 .tab-bar {
   position: relative;
   z-index: 4;
-  height: 42px;
+  height: var(--tao-titlebar-height);
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -421,7 +424,10 @@ body {
 
 .tao-sidebar-compact + .tao-main .tab-bar {
   margin-left: -1px;
-  padding-left: 44px;
+  padding-left: max(
+    0px,
+    calc(var(--tao-titlebar-control-spacer) - var(--tao-sidebar-width))
+  );
 }
 
 .tao-shell:not(.tao-shell-sidebar-hidden):not(.tao-shell-sidebar-compact) .tab-bar {
@@ -430,12 +436,12 @@ body {
 }
 
 .tao-shell-sidebar-hidden .tab-bar {
-  padding-left: 92px;
+  padding-left: var(--tao-titlebar-control-spacer);
 }
 
 .titlebar-navigation {
   flex: 0 0 auto;
-  height: 42px;
+  height: var(--tao-titlebar-height);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -446,8 +452,18 @@ body {
 .tao-sidebar > .titlebar-navigation {
   position: relative;
   z-index: 6;
-  padding-left: 92px;
-  border-bottom: 1px solid #242428;
+  padding-left: var(--tao-titlebar-control-spacer);
+}
+
+.tao-sidebar > .titlebar-navigation::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: #242428;
+  content: '';
+  pointer-events: none;
 }
 
 .titlebar-button {
