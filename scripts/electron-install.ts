@@ -93,19 +93,22 @@ async function removePath(path: string): Promise<void> {
   try {
     await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     return
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(
+      `[electron-install] Node rm failed for ${path} on ${platform}; falling back to shell removal: ${message}`,
+    )
     // Electron's macOS .app bundle can occasionally leave nested framework resources behind
     // during recursive removal in fresh worktrees. Fall back to the platform shell remover so
     // predev/setup can repair a partially extracted Electron install instead of failing.
     if (platform === 'win32') {
+      const target = JSON.stringify(path)
       execFileSync(
         'powershell',
         [
           '-NoProfile',
           '-Command',
-          `$ErrorActionPreference = 'Stop'; Remove-Item -LiteralPath ${JSON.stringify(
-            path,
-          )} -Recurse -Force -ErrorAction SilentlyContinue`,
+          `$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath ${target}) { Remove-Item -LiteralPath ${target} -Recurse -Force -ErrorAction Stop }`,
         ],
         { stdio: 'inherit' },
       )
