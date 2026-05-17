@@ -449,3 +449,28 @@ test "terminal session owns VT state for output and resize" {
     try std.testing.expectEqual(@as(u16, 12), created.cols);
     try std.testing.expectEqual(@as(u16, 4), created.rows);
 }
+
+fn sessionCreateForAllocationFailure(allocator: std.mem.Allocator) !void {
+    var manager = Manager.init(allocator);
+    defer manager.deinit();
+
+    const created = try manager.create(.{
+        .session_id = "session-oom",
+        .terminal_id = "term-oom",
+        .cols = 20,
+        .rows = 5,
+        .cwd = "/tmp/tao-session-oom",
+        .argv = &.{},
+    });
+    try created.bufferPendingOutput(allocator, 1, "owned pending output");
+    try created.updateCreateMetadata(allocator, "term-oom-2", "/tmp/next", 24, 6);
+    try std.testing.expect(manager.remove("session-oom"));
+}
+
+test "session creation and owned buffers clean up on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        sessionCreateForAllocationFailure,
+        .{},
+    );
+}

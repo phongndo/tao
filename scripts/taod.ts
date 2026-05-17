@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process'
@@ -8,6 +9,7 @@ import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process'
 type RunOptions = {
   cwd?: string
   stdio?: SpawnSyncOptions['stdio']
+  env?: NodeJS.ProcessEnv
 }
 
 type ZonDependency = {
@@ -43,16 +45,36 @@ function run(
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? daemonRoot,
     stdio: options.stdio ?? 'inherit',
+    env: options.env ?? process.env,
   })
   if (result.error) fail(result.error.message)
   if (result.status !== 0) process.exit(result.status ?? 1)
   return result
 }
 
+function runForStatus(
+  command: string,
+  args: readonly string[],
+  options: RunOptions = {},
+): SpawnSyncReturns<Buffer> {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd ?? daemonRoot,
+    stdio: options.stdio ?? 'inherit',
+    env: options.env ?? process.env,
+  })
+  if (result.error) throw result.error
+  return result
+}
+
+function exitFromRunResult(result: SpawnSyncReturns<Buffer>): void {
+  if (result.status !== 0) process.exit(result.status ?? 1)
+}
+
 function capture(command: string, args: readonly string[], options: RunOptions = {}): Buffer {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? daemonRoot,
     stdio: ['ignore', 'pipe', 'inherit'],
+    env: options.env ?? process.env,
   })
   if (result.error) fail(result.error.message)
   if (result.status !== 0) process.exit(result.status ?? 1)
@@ -411,6 +433,35 @@ function buildDirect(): string {
   return binPath
 }
 
+function withTemporaryHome<T>(callback: (home: string) => T): T {
+  const home = mkdtempSync(resolve(tmpdir(), 'taod-home-'))
+  try {
+    return callback(home)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+function leakCheckEnv(home: string): NodeJS.ProcessEnv {
+  return { ...process.env, HOME: home, TAOD_DEBUG_ALLOC: '1' }
+}
+
+function runLeakCheck(command: string, args: readonly string[], options: RunOptions = {}): void {
+  const result = (() => {
+    try {
+      return withTemporaryHome((home) => {
+        return runForStatus(command, args, {
+          ...options,
+          env: leakCheckEnv(home),
+        })
+      })
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err))
+    }
+  })()
+  exitFromRunResult(result)
+}
+
 function testAndBuildDirect(): void {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
@@ -425,6 +476,7 @@ if (process.env.TAOD_SKIP_NATIVE === '1') {
     case 'build':
     case 'test':
     case 'check':
+    case 'leak-check':
       console.warn(`Skipping taod ${command}; TAOD_SKIP_NATIVE=1`)
       process.exit(0)
     case 'run':
@@ -439,6 +491,7 @@ if (process.platform === 'win32') {
     case 'build':
     case 'test':
     case 'check':
+    case 'leak-check':
       console.warn(`Skipping taod ${command} on Windows; taod is POSIX-only`)
       process.exit(0)
     case 'run':
@@ -462,6 +515,9 @@ if (process.platform !== 'darwin' || process.env.TAOD_USE_ZIG_BUILD === '1') {
     case 'check':
       run('zig', ['build', 'run', '--', '--check'])
       break
+    case 'leak-check':
+      runLeakCheck('zig', ['build', 'run', '--', '--check'])
+      break
     default:
       fail(`Unknown taod zig command: ${command}`)
   }
@@ -483,6 +539,11 @@ switch (command) {
   case 'check': {
     const binaryPath = buildDirect()
     run(binaryPath, ['--check'], { cwd: daemonRoot })
+    break
+  }
+  case 'leak-check': {
+    const binaryPath = buildDirect()
+    runLeakCheck(binaryPath, ['--check'], { cwd: daemonRoot })
     break
   }
   default:

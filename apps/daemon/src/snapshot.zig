@@ -116,7 +116,7 @@ pub fn writeCurrentScreenPath(
     const encoded = try encodeAlloc(allocator, input);
     defer allocator.free(encoded);
 
-    try writeFile(path, encoded, 0o600);
+    try writeFile(allocator, path, encoded, 0o600);
     return metadata(input.seq, encoded);
 }
 
@@ -180,8 +180,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8, limit: usize) !
     return try allocator.realloc(data, offset);
 }
 
-fn writeFile(path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
-    const allocator = std.heap.smp_allocator;
+fn writeFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
 
@@ -277,4 +276,37 @@ test "current-screen snapshot file store reads and deletes state" {
 
     try deleteCurrentScreenPath(path);
     try std.testing.expect((try readCurrentScreenPath(std.testing.allocator, path)) == null);
+}
+
+fn snapshotDecodeForAllocationFailure(allocator: std.mem.Allocator, encoded: []const u8) !void {
+    var decoded = try decodeAlloc(allocator, encoded);
+    defer decoded.deinit(allocator);
+    try std.testing.expectEqualStrings("screen-state", decoded.payload);
+}
+
+test "current-screen snapshot decode frees partial allocations on OOM" {
+    const encoded = try encodeAlloc(std.testing.allocator, .{
+        .seq = 11,
+        .cols = 80,
+        .rows = 24,
+        .backend_name = "ghostty_native",
+        .payload = "screen-state",
+    });
+    defer std.testing.allocator.free(encoded);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        snapshotDecodeForAllocationFailure,
+        .{encoded},
+    );
+}
+
+test "snapshot path allocation reports OOM without retaining memory" {
+    var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(
+        error.OutOfMemory,
+        pathAlloc(failing_allocator.allocator(), "/tmp/tao-session"),
+    );
+    try std.testing.expect(failing_allocator.has_induced_failure);
+    try std.testing.expectEqual(failing_allocator.allocated_bytes, failing_allocator.freed_bytes);
 }

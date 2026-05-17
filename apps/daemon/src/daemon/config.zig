@@ -67,3 +67,16 @@ test "config derives tao paths from home" {
     try std.testing.expectEqualStrings("/tmp/example-home/.tao/adapters", config.adapters_dir);
     try std.testing.expectEqualStrings("/tmp/example-home/.tao/run/taod.sock", config.socket_path);
 }
+
+fn configFromHomeForAllocationFailure(allocator: std.mem.Allocator) !void {
+    var config = try Config.fromHome(allocator, "/tmp/tao-oom-home");
+    defer config.deinit(allocator);
+}
+
+test "config fromHome cleans up every partial allocation on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        configFromHomeForAllocationFailure,
+        .{},
+    );
+}

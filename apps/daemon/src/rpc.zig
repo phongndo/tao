@@ -383,6 +383,34 @@ test "control response formats as newline-delimited JSON" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"session_id\":\"s1\"") != null);
 }
 
+fn responseJsonForAllocationFailure(allocator: std.mem.Allocator) !void {
+    const json = responseJsonAlloc(allocator, .{
+        .id = "oom",
+        .ok = true,
+        .session_id = "session-oom",
+        .stream_id = "session-oom",
+        .pid = 123,
+        .status = "live",
+        .cwd = "/tmp/tao-rpc-oom",
+        .cols = 80,
+        .rows = 24,
+        .last_seq = 9,
+    }) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.endsWith(u8, json, "\n"));
+}
+
+test "control response JSON frees partial writer allocations on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        responseJsonForAllocationFailure,
+        .{},
+    );
+}
+
 test "stream frames encode and parse binary payloads" {
     var buffer: [128]u8 = undefined;
     const encoded = try encodeStreamFrame(&buffer, .output, "session-1", 7, "hello");
