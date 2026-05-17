@@ -318,10 +318,19 @@ pub const Daemon = struct {
         const argv_json = try argvJsonAlloc(self.allocator, request.argv orelse &.{});
         defer if (argv_json) |json| self.allocator.free(json);
         self.recordTerminalSessionLocked(created, argv_json);
-        self.recordAgentSessionLocked(created, request.argv orelse &.{}, argv_json, "running");
+        var agent_snapshot = self.agentDetectionSnapshotFromArgvLocked(created, request.argv orelse &.{}, argv_json, "running") catch |err| blk: {
+            std.log.warn("failed to prepare agent metadata for {s}: {t}", .{ created.id, err });
+            break :blk null;
+        };
         try self.startSessionReaderLocked(created);
+        const response = try sessionResponse(allocator, request, created, .{});
 
-        return sessionResponse(allocator, request, created, .{});
+        self.unlock();
+        defer if (agent_snapshot) |*value| value.deinit(self.allocator);
+        if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
+        self.lock();
+
+        return response;
     }
 
     fn handleAttachLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -637,8 +646,16 @@ pub const Daemon = struct {
         const current_argv_json = try argvJsonAlloc(self.allocator, argv);
         defer if (current_argv_json) |json| self.allocator.free(json);
         self.recordTerminalSessionLocked(restored, current_argv_json);
-        self.recordAgentSessionLocked(restored, argv, current_argv_json, agent_status);
+        var agent_snapshot = self.agentDetectionSnapshotFromArgvLocked(restored, argv, current_argv_json, agent_status) catch |err| blk: {
+            std.log.warn("failed to prepare restored agent metadata for {s}: {t}", .{ restored.id, err });
+            break :blk null;
+        };
         try self.startSessionReaderLocked(restored);
+
+        self.unlock();
+        defer if (agent_snapshot) |*value| value.deinit(self.allocator);
+        if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
+        self.lock();
 
         restore_committed = true;
         return restored;
@@ -1110,7 +1127,21 @@ pub const Daemon = struct {
         const parsed_items = parsed_argv.items();
         if (parsed_items.len == 0) return null;
 
-        const argv = try self.allocator.alloc([]const u8, parsed_items.len);
+        return self.agentDetectionSnapshotFromArgvLocked(item, parsed_items, argv_json, status);
+    }
+
+    fn agentDetectionSnapshotFromArgvLocked(
+        self: *Daemon,
+        item: *const session.TerminalSession,
+        argv_items: []const []const u8,
+        original_argv_json: ?[]const u8,
+        status: []const u8,
+    ) !?AgentDetectionSnapshot {
+        if (!self.persistence.enabled) return null;
+        if (self.database == null) return null;
+        if (argv_items.len == 0) return null;
+
+        const argv = try self.allocator.alloc([]const u8, argv_items.len);
         var argv_count: usize = 0;
         var argv_owned_by_result = false;
         errdefer {
@@ -1119,7 +1150,7 @@ pub const Daemon = struct {
                 self.allocator.free(argv);
             }
         }
-        for (parsed_items, 0..) |arg, index| {
+        for (argv_items, 0..) |arg, index| {
             argv[index] = try self.allocator.dupe(u8, arg);
             argv_count += 1;
         }
@@ -1141,7 +1172,7 @@ pub const Daemon = struct {
         result.event_log_path = if (item.event_log_path) |value| try self.allocator.dupe(u8, value) else null;
         result.excerpt_path = if (item.excerpt_path) |value| try self.allocator.dupe(u8, value) else null;
         result.cwd = if (item.cwd) |value| try self.allocator.dupe(u8, value) else null;
-        result.original_argv_json = try self.allocator.dupe(u8, argv_json);
+        result.original_argv_json = if (original_argv_json) |value| try self.allocator.dupe(u8, value) else null;
 
         return result;
     }
