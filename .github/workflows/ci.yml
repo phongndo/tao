@@ -10,24 +10,24 @@ on:
     branches: [main]
 
 jobs:
-  # ── Required Zig daemon memory-safety gate ──
-  zig-daemon-memory-safety:
-    runs-on: ubuntu-latest
+  # ── Required memory-safety gate ──
+  memory-safety:
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          version: ${{ env.ZIG_VERSION }}
+      - run: pnpm install --frozen-lockfile
       - run: |
-          nix develop --command bash -lc '
-            pnpm install --frozen-lockfile
-            pnpm zig:check
-            export TAOD_CI_HOME="$(mktemp -d)"
-            trap "rm -rf \"$TAOD_CI_HOME\"" EXIT
-            HOME="$TAOD_CI_HOME" pnpm --filter @tao/daemon check
-            pnpm zig:leak-check
-          '
+          pnpm zig:check
+          export TAOD_CI_HOME="$(mktemp -d)"
+          trap 'rm -rf "$TAOD_CI_HOME"' EXIT
+          HOME="$TAOD_CI_HOME" pnpm --filter @tao/daemon check
+          pnpm zig:leak-check
 
   # ── Type check + lint + format ──
   check-ubuntu:
