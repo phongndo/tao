@@ -14,7 +14,7 @@ import {
   isFallbackCurrentScreenSnapshot,
   isGhosttyNativeCurrentScreenSnapshot,
 } from '@tao/shared/current-screen-snapshot'
-import { TaodStreamFrameKind } from '@tao/shared/taod-protocol'
+import { TAOD_STREAM_MAX_PAYLOAD_BYTES, TaodStreamFrameKind } from '@tao/shared/taod-protocol'
 import {
   decodeTaodExitPayload,
   decodeTaodResizePayload,
@@ -208,4 +208,38 @@ test('taod stream parser accepts snapshot frames with current-screen envelopes',
   const frames = new TaodStreamFrameParser().push(encoded)
   assert.equal(frames[0]?.kind, TaodStreamFrameKind.Snapshot)
   assert.equal(decodeCurrentScreenSnapshot(frames[0]!.payload).seq, 3)
+})
+
+test('taod stream parser handles bursty output frames in order', () => {
+  const encodedFrames: Buffer[] = []
+  for (let seq = 1; seq <= 4096; seq++) {
+    encodedFrames.push(
+      encodeTaodStreamFrame({
+        kind: TaodStreamFrameKind.Output,
+        sessionId: 'stress-session',
+        seq,
+        payload: `line ${seq}\n`,
+      }),
+    )
+  }
+
+  const parser = new TaodStreamFrameParser()
+  const frames = parser.push(Buffer.concat(encodedFrames))
+
+  assert.equal(frames.length, encodedFrames.length)
+  assert.equal(frames[0]?.seq, 1)
+  assert.equal(frames.at(-1)?.seq, encodedFrames.length)
+  assert.equal(frames.at(-1)?.payload.toString('utf8'), `line ${encodedFrames.length}\n`)
+})
+
+test('taod stream parser rejects oversized payload headers before buffering bodies', () => {
+  const encoded = encodeTaodStreamFrame({
+    kind: TaodStreamFrameKind.Output,
+    sessionId: 'stress-session',
+    seq: 1,
+    payload: 'small',
+  })
+  encoded.writeUInt32BE(TAOD_STREAM_MAX_PAYLOAD_BYTES + 1, 80)
+
+  assert.throws(() => new TaodStreamFrameParser().push(encoded), /header/u)
 })

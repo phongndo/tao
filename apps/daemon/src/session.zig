@@ -136,7 +136,11 @@ pub const TerminalSession = struct {
     pub fn bufferPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator, seq: u64, payload: []const u8) !void {
         if (payload.len == 0) return;
 
-        const owned = try allocator.dupe(u8, payload);
+        const bounded_payload = if (payload.len > max_pending_output_bytes)
+            payload[payload.len - max_pending_output_bytes ..]
+        else
+            payload;
+        const owned = try allocator.dupe(u8, bounded_payload);
         errdefer allocator.free(owned);
         try self.pending_output.append(allocator, .{ .seq = seq, .payload = owned });
         self.pending_output_bytes += owned.len;
@@ -392,6 +396,33 @@ test "terminal session keeps bounded pending output for first live attach" {
     created.clearPendingOutput(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 0), created.pending_output.items.len);
     try std.testing.expectEqual(@as(usize, 0), created.pending_output_bytes);
+}
+
+test "terminal session bounds a single oversized pending-output frame" {
+    var manager = Manager.init(std.testing.allocator);
+    defer manager.deinit();
+
+    const created = try manager.create(.{
+        .session_id = "session-big-pending",
+        .terminal_id = "term-big-pending",
+        .cols = 80,
+        .rows = 24,
+        .cwd = null,
+        .argv = &.{},
+    });
+
+    const oversized_len = max_pending_output_bytes + 257;
+    const oversized = try std.testing.allocator.alloc(u8, oversized_len);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized[0 .. oversized.len - 1], 'a');
+    oversized[oversized.len - 1] = 'z';
+
+    try created.bufferPendingOutput(std.testing.allocator, 42, oversized);
+
+    try std.testing.expectEqual(@as(usize, 1), created.pending_output.items.len);
+    try std.testing.expectEqual(@as(usize, max_pending_output_bytes), created.pending_output_bytes);
+    try std.testing.expectEqual(@as(u64, 42), created.pending_output.items[0].seq);
+    try std.testing.expectEqual(@as(u8, 'z'), created.pending_output.items[0].payload[created.pending_output.items[0].payload.len - 1]);
 }
 
 test "terminal session owns VT state for output and resize" {

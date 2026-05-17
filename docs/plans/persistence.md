@@ -1,6 +1,6 @@
 # Persistence Plan
 
-**Status**: Incremental implementation started  
+**Status**: Phase 12 complete; target architecture implemented  
 **Last updated**: 2026-05-17
 
 ## Overview
@@ -175,6 +175,10 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
   stops daemon event-log, excerpt, snapshot, SQLite metadata, search, and agent-resume writes before
   terminal output is persisted. Optional input-frame logging remains off by default and is gated by
   `persistInput`.
+- **Phase 12 stress/fault coverage**: persistence tests now cover oversized daemon control payloads,
+  attach-stream tails, failed/slow subscriber dropping, bounded large pending-output frames, bursty
+  stream parsing, oversized stream headers, and corrupt agent-resume metadata falling back to saved
+  command metadata instead of failing cold resume.
 
 ### Important limitations of the current slice
 
@@ -202,12 +206,11 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 
 ### Next recommended work
 
-1. **Stress testing (Phase 12)**: crash/restart, daemon fail, large logs, agent resume edge cases.
-2. **Harden and expand agent adapters** so third-party providers can add richer discovery/resume
+1. **Harden and expand agent adapters** so third-party providers can add richer discovery/resume
    logic, adapter timeouts, and transcript parsing without recompiling `taod`.
-3. **Harden/package native VT snapshots** by fuzzing the Ghostty-native snapshot decoder, bounding
+2. **Harden/package native VT snapshots** by fuzzing the Ghostty-native snapshot decoder, bounding
    renderer apply failures, and documenting compatibility for older fallback snapshot payloads.
-4. **Harden privacy controls** with more granular policies for metadata-only, excerpts-only, and
+3. **Harden privacy controls** with more granular policies for metadata-only, excerpts-only, and
    provider-specific agent transcript discovery.
 
 ---
@@ -1007,10 +1010,10 @@ pnpm zig:check
 | **9**  | Done for built-in adapters      | Add agent adapter spawning + pi/codex/claude adapter scripts. `taod` now spawns provider scripts from `TAOD_ADAPTER_DIR`/`~/.tao/adapters`, falls back to argv/session-id heuristics, seeds `agent_sessions`, stores resume argv metadata, and desktop builds bundle/pass the adapter directory. Broader third-party adapter hardening remains future work.                                                                                                                                                                                                                                                              | Done      |
 | **10** | **Done for Electron slice**     | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Done      |
 | **11** | Done                            | Search excerpts / FTS, daemon cleanup/retention, and daemon-side persistence privacy controls. The daemon-side implementation (indexing, retention, reaping, and settings-driven output/excerpt/snapshot/metadata write gating) is complete. By design, there is no search UI, no session history panel, no clear-history buttons — persistence is invisible. Retention settings auto-clean old sessions; the user sees their terminals, not session metadata.                                                                                                                                                           | Done      |
-| **12** | Started                         | Stress testing: crash/restart supervision, daemon fail, large logs, agent resume. Lifecycle health checks and slow-client drop policy are implemented; broader soak/fault-injection coverage remains.                                                                                                                                                                                                                                                                                                                                                                                                                    | 1-2 weeks |
+| **12** | Done                            | Stress/fault-injection hardening for crash/restart supervision, daemon failure boundaries, large stream/log behavior, and agent resume edge cases. Coverage now exercises control-payload oversize rejection, attach-tail preservation, failed/slow subscriber drops without blocking PTY draining, bounded single-frame pending output, bursty stream parsing, oversized stream-header rejection, and fallback to saved command metadata when agent resume metadata is corrupt.                                                                                                                                         | Done      |
 
-**Total**: dominated by stress testing, adapter hardening, privacy hardening, and VT snapshot
-hardening. Persistence is intentionally invisible — no user-facing search, history, or retention UI.
+**Total**: dominated by adapter hardening, privacy hardening, and VT snapshot hardening. Persistence
+is intentionally invisible — no user-facing search, history, or retention UI.
 
 ---
 

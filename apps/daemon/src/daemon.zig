@@ -491,20 +491,54 @@ pub const Daemon = struct {
         var mutable_resume_lookup = resume_lookup;
         defer if (mutable_resume_lookup) |*lookup| lookup.deinit(self.allocator);
 
-        const restart_argv_json = if (mutable_resume_lookup) |lookup| lookup.resume_argv_json else record.argv_json orelse return null;
-        var parsed_argv = parseArgvJson(self.allocator, restart_argv_json) catch |err| {
-            std.log.warn("failed to parse restart argv for {s}: {t}", .{ record.id, err });
+        const cols = request.cols orelse record.cols;
+        const rows = request.rows orelse record.rows;
+        const cwd = request.cwd orelse record.cwd;
+        const terminal_id = request.requestTerminalId() orelse record.terminal_id;
+
+        if (mutable_resume_lookup) |lookup| {
+            if (try self.restoreSessionWithArgvJsonLocked(session_id, terminal_id, cwd, cols, rows, lookup.resume_argv_json, "resumed")) |restored| {
+                std.log.info("restored persisted session {s} with native agent resume", .{restored.id});
+                var result: RestoreResult = .{
+                    .item = restored,
+                    .attach_kind = .agent_resume,
+                    .agent_provider = try self.allocator.dupe(u8, lookup.provider),
+                    .native_session_id = try self.allocator.dupe(u8, lookup.native_session_id),
+                };
+                errdefer result.deinit(self.allocator);
+                return result;
+            }
+
+            std.log.warn("agent resume argv for {s} was unusable; falling back to saved command", .{record.id});
+        }
+
+        const restart_argv_json = record.argv_json orelse return null;
+        const restored = (try self.restoreSessionWithArgvJsonLocked(session_id, terminal_id, cwd, cols, rows, restart_argv_json, "running")) orelse return null;
+        std.log.info("restored persisted session {s} with saved command", .{restored.id});
+        return .{
+            .item = restored,
+            .attach_kind = .command_resume,
+        };
+    }
+
+    fn restoreSessionWithArgvJsonLocked(
+        self: *Daemon,
+        session_id: []const u8,
+        terminal_id: []const u8,
+        cwd: ?[]const u8,
+        cols: u16,
+        rows: u16,
+        argv_json: []const u8,
+        agent_status: []const u8,
+    ) !?*session.TerminalSession {
+        var parsed_argv = parseArgvJson(self.allocator, argv_json) catch |err| {
+            std.log.warn("failed to parse restart argv for {s}: {t}", .{ session_id, err });
             return null;
         };
         defer parsed_argv.deinit();
 
         const argv = parsed_argv.items();
         if (argv.len == 0) return null;
-
-        const cols = request.cols orelse record.cols;
-        const rows = request.rows orelse record.rows;
-        const cwd = request.cwd orelse record.cwd;
-        const terminal_id = request.requestTerminalId() orelse record.terminal_id;
 
         const restored = try self.sessions.create(.{
             .session_id = session_id,
@@ -522,7 +556,7 @@ pub const Daemon = struct {
 
         try self.ensureSessionPersistence(restored);
         self.ensureSessionProcess(restored, argv) catch |err| {
-            std.log.warn("failed to restore session process for {s}: {t}", .{ record.id, err });
+            std.log.warn("failed to restore session process for {s}: {t}", .{ session_id, err });
             _ = self.sessions.remove(session_id);
             return null;
         };
@@ -540,23 +574,11 @@ pub const Daemon = struct {
         const current_argv_json = try argvJsonAlloc(self.allocator, argv);
         defer if (current_argv_json) |json| self.allocator.free(json);
         self.recordTerminalSessionLocked(restored, current_argv_json);
-        self.recordAgentSessionLocked(restored, argv, current_argv_json, if (mutable_resume_lookup != null) "resumed" else "running");
+        self.recordAgentSessionLocked(restored, argv, current_argv_json, agent_status);
         try self.startSessionReaderLocked(restored);
 
-        std.log.info("restored persisted session {s} with native command/agent resume", .{restored.id});
-        var result: RestoreResult = .{
-            .item = restored,
-            .attach_kind = if (mutable_resume_lookup != null) .agent_resume else .command_resume,
-        };
-        errdefer result.deinit(self.allocator);
-
-        if (mutable_resume_lookup) |lookup| {
-            result.agent_provider = try self.allocator.dupe(u8, lookup.provider);
-            result.native_session_id = try self.allocator.dupe(u8, lookup.native_session_id);
-        }
-
         restore_committed = true;
-        return result;
+        return restored;
     }
 
     fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
@@ -1426,7 +1448,7 @@ fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !ControlPayl
     var tail: std.ArrayList(u8) = .empty;
     errdefer tail.deinit(allocator);
 
-    while (payload.items.len < control_payload_max) {
+    while (true) {
         var buffer: [4096]u8 = undefined;
         const amount = std.c.read(fd, &buffer, buffer.len);
         if (amount < 0) {
@@ -1439,6 +1461,7 @@ fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !ControlPayl
 
         const bytes = buffer[0..@intCast(amount)];
         if (std.mem.indexOfScalar(u8, bytes, '\n')) |newline_index| {
+            if (payload.items.len + newline_index > control_payload_max) return error.ControlPayloadTooLarge;
             try payload.appendSlice(allocator, bytes[0..newline_index]);
             if (newline_index + 1 < bytes.len) try tail.appendSlice(allocator, bytes[newline_index + 1 ..]);
             return .{
@@ -1447,6 +1470,7 @@ fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !ControlPayl
             };
         }
 
+        if (payload.items.len + bytes.len > control_payload_max) return error.ControlPayloadTooLarge;
         try payload.appendSlice(allocator, bytes);
     }
 
@@ -1563,6 +1587,106 @@ test "daemon persistence privacy toggle avoids session log creation" {
     try std.testing.expect(item.event_log_path == null);
     try std.testing.expect(item.excerpt_path == null);
     try std.testing.expect((try event_log.openExistingSession(std.testing.allocator, daemon.config.sessions_dir, "private-session")) == null);
+}
+
+test "daemon control payload reader preserves attach tails and rejects oversize lines" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "with-tail", .data = "{\"type\":\"attach\"}\nstream-tail" });
+    var with_tail = try tmp.dir.openFile("with-tail", .{});
+    defer with_tail.close();
+
+    var control = try readControlPayload(std.testing.allocator, with_tail.handle);
+    defer control.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("{\"type\":\"attach\"}", control.payload);
+    try std.testing.expectEqualStrings("stream-tail", control.tail);
+
+    const oversized = try std.testing.allocator.alloc(u8, control_payload_max + 1);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized, 'x');
+    try tmp.dir.writeFile(.{ .sub_path = "oversized", .data = oversized });
+    var oversized_file = try tmp.dir.openFile("oversized", .{});
+    defer oversized_file.close();
+
+    try std.testing.expectError(error.ControlPayloadTooLarge, readControlPayload(std.testing.allocator, oversized_file.handle));
+}
+
+test "daemon drops failed stream subscribers without blocking pending output" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const created = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"1","method":"create","session_id":"stream-session","terminal_id":"stream-terminal","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(created);
+
+    const item = daemon.sessions.find("stream-session").?;
+    try item.subscribers.append(std.testing.allocator, -1);
+
+    try daemon.broadcastStreamFrameLocked(item, .output, 1, "live output");
+    try std.testing.expectEqual(@as(usize, 0), item.subscribers.items.len);
+    try std.testing.expectEqual(@as(usize, 0), item.pending_output.items.len);
+
+    try daemon.broadcastStreamFrameLocked(item, .output, 2, "detached output");
+    try std.testing.expectEqual(@as(usize, 1), item.pending_output.items.len);
+    try std.testing.expectEqualStrings("detached output", item.pending_output.items[0].payload);
+}
+
+test "daemon falls back to saved command when agent resume metadata is corrupt" {
+    if (!fileExists("/bin/sh")) return;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+    try daemon.prepareStorage();
+
+    if (daemon.database) |*database| {
+        try database.recordTerminalSession(.{
+            .id = "resume-session",
+            .terminal_id = "resume-terminal",
+            .argv_json = "[\"/bin/sh\",\"-c\",\"sleep 2\"]",
+            .status = "exited",
+            .cols = 80,
+            .rows = 24,
+            .event_log_path = "/tmp/tao-resume-session/events.taoev",
+            .last_seq = 0,
+        });
+        try database.recordAgentSession(.{
+            .id = "agent-resume-session-pi",
+            .terminal_session_id = "resume-session",
+            .provider = "pi",
+            .native_session_id = "native-123",
+            .resume_argv_json = "[",
+            .status = "resumable",
+        });
+    } else unreachable;
+
+    const attached = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"attach","type":"attach","sessionId":"resume-session","terminalId":"resume-terminal","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(attached);
+
+    try std.testing.expect(std.mem.indexOf(u8, attached, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, attached, "\"attach_kind\":\"command-resume\"") != null);
+    try std.testing.expect(daemon.sessions.find("resume-session") != null);
+
+    const killed = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"kill","type":"kill","sessionId":"resume-session"}
+    );
+    defer std.testing.allocator.free(killed);
+    try std.testing.expect(std.mem.indexOf(u8, killed, "\"ok\":true") != null);
 }
 
 test "daemon detach checkpoints current-screen snapshot" {
