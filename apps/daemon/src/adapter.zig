@@ -286,7 +286,7 @@ fn runAdapterCommandAlloc(
         else => return err,
     };
     defer if (runner) |value| allocator.free(value);
-    const runner_exe = if (runner) |value| if (value.len > 0) value else "tsx" else "tsx";
+    const runner_exe = if (runner) |value| if (value.len > 0) value else "node" else "node";
 
     const child_argv = [_][]const u8{ runner_exe, script_path, request_json };
     const result = std.process.Child.run(.{
