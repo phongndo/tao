@@ -62,6 +62,7 @@ pub fn checkpointCurrentScreenLocked(self: anytype, item: *session.TerminalSessi
     const current = self.sessions.find(checkpoint.session_id) orelse return;
     const current_snapshot_path = current.snapshot_path orelse return;
     if (!std.mem.eql(u8, current_snapshot_path, checkpoint.snapshot_path)) return;
+    if (meta.seq < current.snapshot_seq) return;
 
     current.snapshot_seq = meta.seq;
     current.snapshot_crc32 = meta.crc32;
@@ -128,6 +129,11 @@ pub fn sendCurrentScreenSnapshotToSubscriberLocked(self: anytype, item: *session
 }
 
 pub fn sendCurrentScreenSnapshotToSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !void {
+    const SnapshotFrame = struct {
+        fd: std.posix.fd_t,
+        encoded: []u8,
+    };
+
     const frame = frame: {
         self.lock();
         defer self.unlock();
@@ -136,6 +142,9 @@ pub fn sendCurrentScreenSnapshotToSubscriber(self: anytype, session_id: []const 
         if (!self.sessions.hasSubscriber(session_id, socket_fd)) return error.SessionNotAttached;
         const snapshot_payload = (try item.currentScreenSnapshotAlloc(self.allocator)) orelse break :frame null;
         defer self.allocator.free(snapshot_payload);
+
+        const duplicated_fd = try std.posix.dup(socket_fd);
+        errdefer std.posix.close(duplicated_fd);
 
         const encoded_snapshot = try snapshot.encodeAlloc(self.allocator, .{
             .seq = item.last_seq,
@@ -149,10 +158,11 @@ pub fn sendCurrentScreenSnapshotToSubscriber(self: anytype, session_id: []const 
         const buffer = try self.allocator.alloc(u8, rpc.encodedStreamFrameSize(encoded_snapshot.len));
         errdefer self.allocator.free(buffer);
         _ = try rpc.encodeStreamFrame(buffer, .snapshot, item.id, item.last_seq, encoded_snapshot);
-        break :frame buffer;
+        break :frame SnapshotFrame{ .fd = duplicated_fd, .encoded = buffer };
     };
 
     const encoded = frame orelse return;
-    defer self.allocator.free(encoded);
-    try writeAllFd(socket_fd, encoded);
+    defer std.posix.close(encoded.fd);
+    defer self.allocator.free(encoded.encoded);
+    try writeAllFd(encoded.fd, encoded.encoded);
 }
