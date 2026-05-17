@@ -59,6 +59,29 @@ const SessionResponseMetadata = struct {
     native_session_id: ?[]const u8 = null,
 };
 
+const AgentDetectionSnapshot = struct {
+    terminal_session_id: []u8,
+    session_dir: ?[]u8,
+    event_log_path: ?[]u8,
+    excerpt_path: ?[]u8,
+    cwd: ?[]u8,
+    argv: []const []const u8,
+    original_argv_json: ?[]u8,
+    status: []const u8,
+
+    fn deinit(self: *AgentDetectionSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.terminal_session_id);
+        if (self.session_dir) |value| allocator.free(value);
+        if (self.event_log_path) |value| allocator.free(value);
+        if (self.excerpt_path) |value| allocator.free(value);
+        if (self.cwd) |value| allocator.free(value);
+        for (self.argv) |arg| allocator.free(arg);
+        allocator.free(self.argv);
+        if (self.original_argv_json) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
 pub const Config = struct {
     root_dir: []const u8,
     database_path: []const u8,
@@ -387,10 +410,13 @@ pub const Daemon = struct {
                     continue;
                 }
 
+                self.unlock();
                 const removed = cleanup.deleteSessionDir(self.allocator, self.config.sessions_dir, session_id) catch |err| {
+                    self.lock();
                     std.log.warn("failed to clear persisted session {s}: {t}", .{ session_id, err });
                     continue;
                 };
+                self.lock();
                 result.add(removed);
                 if (removed.removed_sessions > 0) {
                     if (self.database) |*database| database.deleteTerminalSessionMetadata(session_id) catch |err| {
@@ -400,22 +426,39 @@ pub const Daemon = struct {
             }
         } else {
             var active_ids: std.ArrayList([]const u8) = .empty;
-            defer active_ids.deinit(self.allocator);
+            defer {
+                for (active_ids.items) |active_id| self.allocator.free(active_id);
+                active_ids.deinit(self.allocator);
+            }
 
             for (self.sessions.sessions.items) |*item| {
-                try self.resetSessionHistoryLocked(item);
-                try active_ids.append(self.allocator, item.id);
+                const active_id = try self.allocator.dupe(u8, item.id);
+                active_ids.append(self.allocator, active_id) catch |err| {
+                    self.allocator.free(active_id);
+                    return err;
+                };
+            }
+
+            for (active_ids.items) |active_id| {
+                if (self.sessions.find(active_id)) |item| {
+                    try self.resetSessionHistoryLocked(item);
+                }
                 result.removed_sessions += 1;
             }
 
+            self.unlock();
+            var locked_after_delete = false;
             const removed = cleanup.deleteInactiveSessionDirs(
                 self.allocator,
                 self.config.sessions_dir,
                 active_ids.items,
             ) catch |err| blk: {
+                self.lock();
+                locked_after_delete = true;
                 std.log.warn("failed to clear inactive session history: {t}", .{err});
                 break :blk cleanup.MaintenanceResult{};
             };
+            if (!locked_after_delete) self.lock();
             result.add(removed);
             self.pruneMissingEventLogMetadataLocked();
         }
@@ -656,41 +699,67 @@ pub const Daemon = struct {
     }
 
     fn resetSessionHistoryLocked(self: *Daemon, item: *session.TerminalSession) !void {
+        const item_id = try self.allocator.dupe(u8, item.id);
+        defer self.allocator.free(item_id);
+        const snapshot_path = if (item.snapshot_path) |path| try self.allocator.dupe(u8, path) else null;
+        defer if (snapshot_path) |path| self.allocator.free(path);
+
         if (!self.persistence.enabled) {
-            self.clearSnapshotFileLocked(item);
-            item.disablePersistence(self.allocator);
-            item.clearPendingOutput(self.allocator);
-            _ = cleanup.deleteSessionDir(self.allocator, self.config.sessions_dir, item.id) catch |err| {
-                std.log.warn("failed to delete disabled-persistence history for {s}: {t}", .{ item.id, err });
+            self.unlock();
+            if (snapshot_path) |path| {
+                snapshot.deleteCurrentScreenPath(path) catch |err| {
+                    std.log.warn("failed to delete current-screen snapshot for {s}: {t}", .{ item_id, err });
+                };
+            }
+            _ = cleanup.deleteSessionDir(self.allocator, self.config.sessions_dir, item_id) catch |err| {
+                std.log.warn("failed to delete disabled-persistence history for {s}: {t}", .{ item_id, err });
             };
+            self.lock();
+            const current = self.sessions.find(item_id) orelse return;
+            current.disablePersistence(self.allocator);
+            current.clearPendingOutput(self.allocator);
             if (self.database) |*database| {
-                database.deleteTerminalSessionMetadata(item.id) catch |err| {
-                    std.log.warn("failed to delete disabled-persistence metadata for {s}: {t}", .{ item.id, err });
+                database.deleteTerminalSessionMetadata(item_id) catch |err| {
+                    std.log.warn("failed to delete disabled-persistence metadata for {s}: {t}", .{ item_id, err });
                 };
             }
             return;
         }
-        var files = try event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item.id);
+        self.unlock();
+        if (snapshot_path) |path| {
+            snapshot.deleteCurrentScreenPath(path) catch |err| {
+                std.log.warn("failed to delete current-screen snapshot for {s}: {t}", .{ item_id, err });
+            };
+        }
+        var files = event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item_id) catch |err| {
+            self.lock();
+            return err;
+        };
+        self.lock();
         errdefer files.deinit(self.allocator);
-        try item.installPersistence(self.allocator, files);
-        item.clearPendingOutput(self.allocator);
-        self.clearSnapshotFileLocked(item);
+        const current = self.sessions.find(item_id) orelse {
+            files.deinit(self.allocator);
+            return;
+        };
+        try current.installPersistence(self.allocator, files);
+        current.clearPendingOutput(self.allocator);
+        current.clearSnapshotMetadata();
 
         if (self.database) |*database| {
-            database.clearTerminalHistoryMetadata(item.id) catch |err| {
-                std.log.warn("failed to clear metadata history for {s}: {t}", .{ item.id, err });
+            database.clearTerminalHistoryMetadata(current.id) catch |err| {
+                std.log.warn("failed to clear metadata history for {s}: {t}", .{ current.id, err });
             };
         }
 
-        if (isLiveAttachable(item)) {
-            if (item.event_log_path) |path| {
-                _ = event_log.appendResize(self.allocator, path, &item.last_seq, item.cols, item.rows) catch |err| {
-                    std.log.warn("failed to append reset resize frame for {s}: {t}", .{ item.id, err });
+        if (isLiveAttachable(current)) {
+            if (current.event_log_path) |path| {
+                _ = event_log.appendResize(self.allocator, path, &current.last_seq, current.cols, current.rows) catch |err| {
+                    std.log.warn("failed to append reset resize frame for {s}: {t}", .{ current.id, err });
                 };
             }
         }
 
-        self.recordTerminalSessionLocked(item, null);
+        self.recordTerminalSessionLocked(current, null);
     }
 
     fn ensureSessionProcess(self: *Daemon, item: *session.TerminalSession, argv: []const []const u8) !void {
@@ -908,11 +977,20 @@ pub const Daemon = struct {
 
     fn reapExitedChild(self: *Daemon, session_id: []const u8) !bool {
         self.lock();
-        defer self.unlock();
+        errdefer self.unlock();
 
-        const item = self.sessions.find(session_id) orelse return true;
-        const child = if (item.pty_child) |*child| child else return false;
-        const status = try self.pty_driver.tryWait(child) orelse return false;
+        const item = self.sessions.find(session_id) orelse {
+            self.unlock();
+            return true;
+        };
+        const child = if (item.pty_child) |*child| child else {
+            self.unlock();
+            return false;
+        };
+        const status = try self.pty_driver.tryWait(child) orelse {
+            self.unlock();
+            return false;
+        };
         item.status = .exited;
         if (item.event_log_path) |path| {
             _ = event_log.appendExit(self.allocator, path, &item.last_seq, status.exit_code, status.signal) catch |err| {
@@ -924,15 +1002,28 @@ pub const Daemon = struct {
         item.reader_started = false;
         try self.broadcastExitFrameLocked(item, item.last_seq, status.exit_code, status.signal);
         self.recordTerminalEndedLocked(item, status.exit_code, status.signal);
+        var agent_snapshot = self.agentDetectionSnapshotFromStoredArgvLocked(item, "ended") catch |err| blk: {
+            std.log.warn("failed to prepare agent metadata refresh for {s}: {t}", .{ item.id, err });
+            break :blk null;
+        };
+        self.unlock();
+        defer if (agent_snapshot) |*value| value.deinit(self.allocator);
+        if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
         return true;
     }
 
     fn markExitedAndBroadcast(self: *Daemon, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
         self.lock();
-        defer self.unlock();
+        errdefer self.unlock();
 
-        const item = self.sessions.find(session_id) orelse return true;
-        if (item.status == .killed) return true;
+        const item = self.sessions.find(session_id) orelse {
+            self.unlock();
+            return true;
+        };
+        if (item.status == .killed) {
+            self.unlock();
+            return true;
+        }
         item.status = .exited;
         if (item.pty_child) |*child| child.close();
         item.pty_child = null;
@@ -944,6 +1035,13 @@ pub const Daemon = struct {
         }
         try self.broadcastExitFrameLocked(item, item.last_seq, exit_code, signal_value);
         self.recordTerminalEndedLocked(item, exit_code, signal_value);
+        var agent_snapshot = self.agentDetectionSnapshotFromStoredArgvLocked(item, "ended") catch |err| blk: {
+            std.log.warn("failed to prepare agent metadata refresh for {s}: {t}", .{ item.id, err });
+            break :blk null;
+        };
+        self.unlock();
+        defer if (agent_snapshot) |*value| value.deinit(self.allocator);
+        if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
         return true;
     }
 
@@ -991,7 +1089,103 @@ pub const Daemon = struct {
         };
 
         self.indexSearchExcerptLocked(item);
-        self.refreshAgentSessionMetadataFromStoredArgvLocked(item, "ended");
+    }
+
+    fn agentDetectionSnapshotFromStoredArgvLocked(self: *Daemon, item: *const session.TerminalSession, status: []const u8) !?AgentDetectionSnapshot {
+        if (!self.persistence.enabled) return null;
+        const database = if (self.database) |*database| database else return null;
+        var record = (database.findTerminalSessionById(self.allocator, item.id) catch |err| {
+            std.log.warn("failed to load terminal argv for agent refresh {s}: {t}", .{ item.id, err });
+            return null;
+        }) orelse return null;
+        defer record.deinit(self.allocator);
+
+        const argv_json = record.argv_json orelse return null;
+        var parsed_argv = parseArgvJson(self.allocator, argv_json) catch |err| {
+            std.log.warn("failed to parse terminal argv for agent refresh {s}: {t}", .{ item.id, err });
+            return null;
+        };
+        defer parsed_argv.deinit();
+
+        const parsed_items = parsed_argv.items();
+        if (parsed_items.len == 0) return null;
+
+        const argv = try self.allocator.alloc([]const u8, parsed_items.len);
+        var argv_count: usize = 0;
+        var argv_owned_by_result = false;
+        errdefer {
+            if (!argv_owned_by_result) {
+                for (argv[0..argv_count]) |arg| self.allocator.free(arg);
+                self.allocator.free(argv);
+            }
+        }
+        for (parsed_items, 0..) |arg, index| {
+            argv[index] = try self.allocator.dupe(u8, arg);
+            argv_count += 1;
+        }
+
+        var result: AgentDetectionSnapshot = .{
+            .terminal_session_id = try self.allocator.dupe(u8, item.id),
+            .session_dir = null,
+            .event_log_path = null,
+            .excerpt_path = null,
+            .cwd = null,
+            .argv = argv,
+            .original_argv_json = null,
+            .status = status,
+        };
+        argv_owned_by_result = true;
+        errdefer result.deinit(self.allocator);
+
+        result.session_dir = if (item.session_dir) |value| try self.allocator.dupe(u8, value) else null;
+        result.event_log_path = if (item.event_log_path) |value| try self.allocator.dupe(u8, value) else null;
+        result.excerpt_path = if (item.excerpt_path) |value| try self.allocator.dupe(u8, value) else null;
+        result.cwd = if (item.cwd) |value| try self.allocator.dupe(u8, value) else null;
+        result.original_argv_json = try self.allocator.dupe(u8, argv_json);
+
+        return result;
+    }
+
+    fn recordAgentSessionFromSnapshot(self: *Daemon, snapshot_input: *const AgentDetectionSnapshot) void {
+        var detected = (adapter.detectSessionAlloc(self.allocator, self.config.adapters_dir, .{
+            .terminal_session_id = snapshot_input.terminal_session_id,
+            .session_dir = snapshot_input.session_dir,
+            .event_log_path = snapshot_input.event_log_path,
+            .excerpt_path = snapshot_input.excerpt_path,
+            .cwd = snapshot_input.cwd,
+            .argv = snapshot_input.argv,
+        }) catch |err| blk: {
+            std.log.warn("failed to inspect agent adapter metadata for {s}: {t}", .{ snapshot_input.terminal_session_id, err });
+            break :blk null;
+        }) orelse return;
+        defer detected.deinit(self.allocator);
+
+        const provider = detected.provider;
+        if (provider == .unknown) return;
+
+        const agent_id = std.fmt.allocPrint(self.allocator, "agent-{s}-{s}", .{ snapshot_input.terminal_session_id, provider.text() }) catch |err| {
+            std.log.warn("failed to allocate agent id for {s}: {t}", .{ snapshot_input.terminal_session_id, err });
+            return;
+        };
+        defer self.allocator.free(agent_id);
+
+        self.lock();
+        defer self.unlock();
+        if (!self.persistence.enabled) return;
+        const database = if (self.database) |*database| database else return;
+        database.recordAgentSession(.{
+            .id = agent_id,
+            .terminal_session_id = snapshot_input.terminal_session_id,
+            .provider = provider.text(),
+            .native_session_id = detected.native_session_id,
+            .original_argv_json = snapshot_input.original_argv_json,
+            .resume_argv_json = detected.resume_argv_json,
+            .cwd = snapshot_input.cwd,
+            .transcript_path = snapshot_input.excerpt_path,
+            .status = if (detected.native_session_id != null and detected.resume_argv_json != null and isResumableAgentStatus(snapshot_input.status)) "resumable" else snapshot_input.status,
+        }) catch |err| {
+            std.log.warn("failed to record agent session {s}: {t}", .{ snapshot_input.terminal_session_id, err });
+        };
     }
 
     fn refreshAgentSessionMetadataFromStoredArgvLocked(self: *Daemon, item: *const session.TerminalSession, status: []const u8) void {
@@ -1094,10 +1288,22 @@ pub const Daemon = struct {
             self.allocator.free(refs);
         }
 
+        var missing_ids: std.ArrayList([]const u8) = .empty;
+        defer missing_ids.deinit(self.allocator);
+
+        self.unlock();
         for (refs) |ref| {
             if (fileExists(ref.event_log_path)) continue;
-            database.deleteTerminalSessionMetadata(ref.id) catch |err| {
-                std.log.warn("failed to prune missing session metadata {s}: {t}", .{ ref.id, err });
+            missing_ids.append(self.allocator, ref.id) catch |err| {
+                std.log.warn("failed to track missing session metadata {s}: {t}", .{ ref.id, err });
+            };
+        }
+        self.lock();
+
+        const pruning_database = if (self.database) |*value| value else return;
+        for (missing_ids.items) |id| {
+            pruning_database.deleteTerminalSessionMetadata(id) catch |err| {
+                std.log.warn("failed to prune missing session metadata {s}: {t}", .{ id, err });
             };
         }
     }
