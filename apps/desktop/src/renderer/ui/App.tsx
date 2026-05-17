@@ -945,8 +945,7 @@ export function App() {
     setSidebarResizePreviewWidth(nextWidth)
   }, [])
   const isSidebarCompact =
-    sidebarExpanded &&
-    (sidebarResizePreviewWidth ?? sidebarSize) <= SIDEBAR_COMPACT_THRESHOLD
+    sidebarExpanded && (sidebarResizePreviewWidth ?? sidebarSize) <= SIDEBAR_COMPACT_THRESHOLD
   const shellStyle = {
     '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
   } as CSSProperties & Record<'--tao-sidebar-width', string>

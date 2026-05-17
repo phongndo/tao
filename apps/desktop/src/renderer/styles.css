@@ -424,10 +424,7 @@ body {
 
 .tao-sidebar-compact + .tao-main .tab-bar {
   margin-left: -1px;
-  padding-left: max(
-    0px,
-    calc(var(--tao-titlebar-control-spacer) - var(--tao-sidebar-width))
-  );
+  padding-left: max(0px, calc(var(--tao-titlebar-control-spacer) - var(--tao-sidebar-width)));
 }
 
 .tao-shell:not(.tao-shell-sidebar-hidden):not(.tao-shell-sidebar-compact) .tab-bar {
