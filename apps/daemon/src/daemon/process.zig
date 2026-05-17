@@ -1,41 +1,7 @@
 const std = @import("std");
-const adapter = @import("../adapter.zig");
-const cleanup = @import("../cleanup.zig");
-const db = @import("../db.zig");
 const event_log = @import("../event_log.zig");
 const pty = @import("../pty.zig");
-const rpc = @import("../rpc.zig");
 const session = @import("../session.zig");
-const snapshot = @import("../snapshot.zig");
-const vt = @import("../vt.zig");
-
-const fd_io = @import("fd_io.zig");
-const protocol = @import("protocol.zig");
-const util = @import("util.zig");
-const types = @import("types.zig");
-
-const AttachKind = protocol.AttachKind;
-const SessionResponseMetadata = protocol.SessionResponseMetadata;
-const RestoreResult = types.RestoreResult;
-const AgentDetectionSnapshot = types.AgentDetectionSnapshot;
-const SearchExcerptSnapshot = types.SearchExcerptSnapshot;
-const CurrentScreenCheckpoint = types.CurrentScreenCheckpoint;
-const SettingsJson = types.SettingsJson;
-
-const readControlPayload = fd_io.readControlPayload;
-const setNonBlockingFd = fd_io.setNonBlockingFd;
-const writeAllFd = fd_io.writeAllFd;
-const writeAllFdNonBlocking = fd_io.writeAllFdNonBlocking;
-const fileExists = util.fileExists;
-const readSmallFileAlloc = util.readSmallFileAlloc;
-const generateSessionId = util.generateSessionId;
-const argvJsonAlloc = util.argvJsonAlloc;
-const parseArgvJson = util.parseArgvJson;
-const isLiveAttachable = util.isLiveAttachable;
-const isResumableAgentStatus = util.isResumableAgentStatus;
-const missingField = protocol.missingField;
-const notFound = protocol.notFound;
-const sessionResponse = protocol.sessionResponse;
 
 fn sessionReaderThread(daemon: anytype, session_id: []u8) void {
     defer std.heap.smp_allocator.free(session_id);
