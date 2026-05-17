@@ -201,8 +201,8 @@ pub fn resetPersistentSession(
 
     var header: [file_header_size]u8 = undefined;
     const encoded = try encodeFileHeader(&header, session_id, nowMs());
-    try writeFile(event_log_path, encoded, 0o600);
-    try writeFile(excerpt_path, &.{}, 0o600);
+    try writeFile(allocator, event_log_path, encoded, 0o600);
+    try writeFile(allocator, excerpt_path, &.{}, 0o600);
 
     return .{
         .dir = dir,
@@ -255,7 +255,7 @@ pub fn appendFramePath(
     defer allocator.free(frame);
 
     const encoded = try encodeFrame(frame, kind, seq, nowMs(), payload);
-    try appendFile(path, encoded, 0o600);
+    try appendFile(allocator, path, encoded, 0o600);
 }
 
 pub fn appendOutput(
@@ -353,7 +353,7 @@ pub fn readReplayOutputFrames(
     max_bytes: usize,
 ) ![]OwnedFrame {
     const frames = try readOwnedFrames(allocator, path);
-    errdefer deinitOwnedFrames(allocator, frames);
+    defer deinitOwnedFrames(allocator, frames);
 
     var total: usize = 0;
     var output_count: usize = 0;
@@ -378,19 +378,18 @@ pub fn readReplayOutputFrames(
         replay.deinit(allocator);
     }
 
-    for (frames, 0..) |*frame, index| {
-        if (frame.kind != .output or frame.payload.len == 0) {
-            frame.deinit(allocator);
-            continue;
-        }
-        if (index < keep_start) {
-            frame.deinit(allocator);
-            continue;
-        }
-        try replay.append(allocator, frame.*);
-        frame.* = undefined;
+    for (frames, 0..) |frame, index| {
+        if (frame.kind != .output or frame.payload.len == 0) continue;
+        if (index < keep_start) continue;
+
+        const payload = try allocator.dupe(u8, frame.payload);
+        errdefer allocator.free(payload);
+        try replay.append(allocator, .{
+            .kind = frame.kind,
+            .seq = frame.seq,
+            .payload = payload,
+        });
     }
-    allocator.free(frames);
 
     return replay.toOwnedSlice(allocator);
 }
@@ -423,7 +422,7 @@ fn repairEventLog(allocator: std.mem.Allocator, path: []const u8, session_id: []
     if (data == null or !hasValidHeader(data.?)) {
         var header: [file_header_size]u8 = undefined;
         const encoded = try encodeFileHeader(&header, session_id, nowMs());
-        try writeFile(path, encoded, 0o600);
+        try writeFile(allocator, path, encoded, 0o600);
         return;
     }
 
@@ -431,7 +430,7 @@ fn repairEventLog(allocator: std.mem.Allocator, path: []const u8, session_id: []
         pub fn visit(_: *@This(), _: Frame) !void {}
     }{};
     const result = try parseEventLog(data.?, &visitor);
-    if (result.valid_bytes < data.?.len) try truncateFile(path, result.valid_bytes);
+    if (result.valid_bytes < data.?.len) try truncateFile(allocator, path, result.valid_bytes);
 }
 
 const OwnedFrameRecorder = struct {
@@ -457,13 +456,13 @@ const OwnedFrameRecorder = struct {
 fn appendBoundedExcerpt(allocator: std.mem.Allocator, path: []const u8, payload: []const u8) !void {
     if (payload.len == 0) return;
 
-    try appendFile(path, payload, 0o600);
+    try appendFile(allocator, path, payload, 0o600);
 
     const data = (try readFileAlloc(allocator, path, max_excerpt_bytes + payload.len)) orelse return;
     defer allocator.free(data);
     if (data.len <= max_excerpt_bytes) return;
 
-    try writeFile(path, data[data.len - max_excerpt_bytes ..], 0o600);
+    try writeFile(allocator, path, data[data.len - max_excerpt_bytes ..], 0o600);
 }
 
 fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8, limit: usize) !?[]u8 {
@@ -505,8 +504,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8, limit: usize) !
     return try allocator.realloc(data, offset);
 }
 
-fn writeFile(path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
-    const allocator = std.heap.smp_allocator;
+fn writeFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
 
@@ -523,8 +521,7 @@ fn writeFile(path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
     try writeAllFd(fd, data);
 }
 
-fn appendFile(path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
-    const allocator = std.heap.smp_allocator;
+fn appendFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
 
@@ -541,8 +538,7 @@ fn appendFile(path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
     try writeAllFd(fd, data);
 }
 
-fn truncateFile(path: []const u8, size: usize) !void {
-    const allocator = std.heap.smp_allocator;
+fn truncateFile(allocator: std.mem.Allocator, path: []const u8, size: usize) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
 
@@ -674,4 +670,32 @@ test "event log rejects corrupt CRC payloads without treating tails as valid" {
     const result = try parseFrames(encoded, &recorder);
     try std.testing.expectEqual(@as(usize, 0), recorder.count);
     try std.testing.expectEqual(encoded.len, result.valid_bytes);
+}
+
+fn persistentSessionFilesForAllocationFailure(allocator: std.mem.Allocator, sessions_dir: []const u8) !void {
+    var files = try resetPersistentSession(allocator, sessions_dir, "session:oom/test");
+    defer files.deinit(allocator);
+
+    try appendFramePath(allocator, files.event_log_path, .output, 1, "hello");
+    const frames = try readReplayOutputFrames(allocator, files.event_log_path, max_replay_bytes);
+    defer deinitOwnedFrames(allocator, frames);
+    try std.testing.expectEqual(@as(usize, 1), frames.len);
+}
+
+test "event log session file ownership cleans up on OOM" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const sessions_dir = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/sessions",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(sessions_dir);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        persistentSessionFilesForAllocationFailure,
+        .{sessions_dir},
+    );
 }
