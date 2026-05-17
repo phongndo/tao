@@ -395,7 +395,7 @@ if (process.platform === 'win32') {
   }
 }
 
-if (process.env.TAOD_USE_ZIG_BUILD === '1') {
+if (process.platform !== 'darwin' || process.env.TAOD_USE_ZIG_BUILD === '1') {
   switch (command) {
     case 'build':
       run('zig', ['build'])
