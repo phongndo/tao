@@ -1,8 +1,25 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+const required_zig_version = std.SemanticVersion{ .major = 0, .minor = 15, .patch = 2 };
+
+comptime {
+    if (builtin.zig_version.order(required_zig_version) != .eq) {
+        @compileError(std.fmt.comptimePrint(
+            "unsupported zig version: expected {}, found {}",
+            .{ required_zig_version, builtin.zig_version },
+        ));
+    }
+}
 
 pub fn build(b: *std.Build) void {
+    // Keep build diagnostics useful in CI without affecting the emitted daemon.
+    b.reference_trace = 10;
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const sanitize_thread = b.option(bool, "sanitize-thread", "Build taod tests with ThreadSanitizer") orelse false;
+    const fuzz = b.option(bool, "fuzz", "Build taod tests with Zig fuzz instrumentation") orelse false;
 
     const options = b.addOptions();
     options.addOption([]const u8, "vt_backend", "ghostty_native");
@@ -30,6 +47,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = sanitize_thread,
+        .fuzz = fuzz,
     });
     mod.addOptions("build_options", options);
     mod.addImport("sqlite", sqlite_module);
@@ -40,6 +59,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = sanitize_thread,
+        .fuzz = fuzz,
         .imports = &.{.{ .name = "taod", .module = mod }},
     });
     exe_mod.addOptions("build_options", options);
@@ -72,4 +93,23 @@ pub fn build(b: *std.Build) void {
 
     test_step.dependOn(&mod_test_run.step);
     test_step.dependOn(&exe_test_run.step);
+
+    const fmt_check = b.addFmt(.{
+        .paths = &.{ "build.zig", "build.zig.zon", "src" },
+        .check = true,
+    });
+    const fmt_step = b.step("test:fmt", "Check Zig formatting");
+    fmt_step.dependOn(&fmt_check.step);
+
+    const fuzz_step = b.step("test:fuzz", "Run deterministic parser fault tests with fuzz instrumentation; pass -Dfuzz=true");
+    fuzz_step.dependOn(&mod_test_run.step);
+
+    const sanitizer_step = b.step("test:sanitize-thread", "Run tests with ThreadSanitizer; pass -Dsanitize-thread=true");
+    sanitizer_step.dependOn(&mod_test_run.step);
+
+    const check_step = b.step("check", "Compile and format-check taod without running tests");
+    check_step.dependOn(&exe.step);
+    check_step.dependOn(&mod_tests.step);
+    check_step.dependOn(&exe_tests.step);
+    check_step.dependOn(&fmt_check.step);
 }
