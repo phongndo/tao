@@ -429,7 +429,15 @@ export class TaodClient {
     }
 
     socket.write(`${JSON.stringify(request)}\n`)
-    const { response, tail } = await readNdjsonResponse(socket, this.connectTimeoutMs)
+    let response: TaodControlResponse
+    let tail: Buffer
+    try {
+      ;({ response, tail } = await readNdjsonResponse(socket, this.connectTimeoutMs))
+    } catch (error) {
+      socket.end()
+      socket.destroy()
+      throw error
+    }
     if (!response.ok) {
       socket.destroy()
       throw responseError(response)
