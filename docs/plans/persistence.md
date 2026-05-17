@@ -1,7 +1,7 @@
 # Persistence Plan
 
 **Status**: Incremental implementation started  
-**Last updated**: 2026-05-16
+**Last updated**: 2026-05-17
 
 ## Overview
 
@@ -138,9 +138,12 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
   in-memory daemon registry, `taod` reads the saved `argv_json`/cwd/size metadata and starts a new
   PTY with that command instead of replaying old scrollback. If the restart command cannot be run,
   Electron still falls back to creating a fresh shell.
-- **Initial agent resume metadata**: `taod` detects `pi`, `codex`, and `claude` argv executables,
-  captures native session ids from common resume/session flags, stores `agent_sessions` rows, and
-  prefers stored adapter-style resume argv when cold-starting a previously agent-driven terminal.
+- **Agent adapter spawning and built-in scripts**: `taod` now looks for adapter scripts in
+  `TAOD_ADAPTER_DIR` or `~/.tao/adapters`, spawns `pi.js`, `codex.js`, and `claude.js` with the
+  documented NDJSON-style command contract, captures native session ids from adapter output or argv
+  flags, stores `agent_sessions` rows, and prefers stored adapter resume argv when cold-starting a
+  previously agent-driven terminal. The desktop build copies bundled adapters next to the bundled
+  daemon and passes the adapter directory to `taod`.
 - **Electron main `taod` bridge**: the desktop main process now has a `TaodClient` that launches or
   connects to `taod`, translates the existing MessagePort session protocol to daemon JSON control
   RPC plus binary stream frames, creates shell sessions through the daemon, streams output/resize/exit
@@ -186,8 +189,9 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
 - There is an **expanded SQLite metadata layer**. `terminal_sessions`, basic `agent_sessions`, and
   FTS excerpt indexing now exist, but richer UI/query surfaces, transcript re-index scheduling, and
   cross-daemon recovery policies still need hardening.
-- There are **initial built-in agent detection/resume heuristics**, but no external adapter-script
-  runtime yet. Provider-specific native session discovery should still move into adapter scripts.
+- There is an **external adapter-script runtime** with built-in `pi`/`codex`/`claude` scripts and a
+  built-in argv heuristic fallback. Adapter execution is intentionally small and optional; richer
+  provider-specific transcript discovery and third-party adapter hardening are still future work.
 - There is **no search UI or daemon-side persistence privacy toggle yet**.
 
 ### Next recommended work
@@ -196,8 +200,8 @@ an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime wor
    user-facing command/agent resume status surfaces on top of the daemon metadata APIs.
 2. **Harden daemon maintenance** with more cleanup tests, transcript re-index scheduling, and visible UX for
    daemon-side retention/clear-history results.
-3. **Replace built-in agent heuristics with external adapters** so `pi`, `codex`, `claude`, and future
-   agents can discover native ids and resume commands without recompiling `taod`.
+3. **Harden and expand agent adapters** so third-party providers can add richer discovery/resume
+   logic, adapter timeouts, and transcript parsing without recompiling `taod`.
 4. **Harden/package native VT snapshots** by fuzzing the Ghostty-native snapshot decoder, bounding
    renderer apply failures, and documenting compatibility for older fallback snapshot payloads.
 5. **Add a persistence privacy toggle in the daemon path** so settings can disable or narrow terminal
@@ -997,12 +1001,12 @@ pnpm zig:check
 | **6**  | **Done**                        | Write SQLite layer (migrations, query functions). `taod` now opens SQLite through `vrischmann/zig-sqlite`, runs migrations, mirrors terminal session lifecycle metadata, records initial agent-session resume rows, indexes bounded search excerpts, and uses restart lookup queries for cold command/agent relaunch. Richer query UI and re-index scheduling are tracked in Phase 11.                                                                                                                                                                                                                                   | Done      |
 | **7**  | Done for production readiness   | Integrate daemon with Electron main (launch, socket client, IPC bridge). A `TaodClient`/MessagePort bridge now launches or connects to `taod`, maps the renderer session protocol to control RPC + binary stream frames, bundles `taod` into desktop production output, health-checks it, restarts after exit/crash, and daemon stream writes drop slow subscribers instead of blocking PTY draining.                                                                                                                                                                                                                    | Done      |
 | **8**  | Done for daemon path            | Renderer attach to live stream and native command/agent resume results. The renderer now uses explicit session APIs, attach results report live/fresh/command-resume/agent-resume, command/agent resume is surfaced in UI, and Electron main no longer falls back to the utility-process PTY service.                                                                                                                                                                                                                                                                                                                    | Done      |
-| **9**  | Initial heuristics done         | Add agent adapter spawning + pi/codex/claude adapter scripts. Built-in argv/session-id heuristics now seed `agent_sessions` and resume argv metadata; external adapter process spawning remains.                                                                                                                                                                                                                                                                                                                                                                                                                         | 1-2 weeks |
+| **9**  | Done for built-in adapters      | Add agent adapter spawning + pi/codex/claude adapter scripts. `taod` now spawns provider scripts from `TAOD_ADAPTER_DIR`/`~/.tao/adapters`, falls back to argv/session-id heuristics, seeds `agent_sessions`, stores resume argv metadata, and desktop builds bundle/pass the adapter directory. Broader third-party adapter hardening remains future work.                                                                                                                                                                                                                                                              | Done      |
 | **10** | **Done for Electron slice**     | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Done      |
 | **11** | Partial                         | Search excerpts / FTS and daemon cleanup/retention. Daemon-side clear-history and retention RPCs now reset live logs, delete inactive session directories, clear stale search rows, prune metadata for missing logs, and index bounded excerpts on exit. Search UI and scheduled background re-indexing remain.                                                                                                                                                                                                                                                                                                          | 1 week    |
 | **12** | Started                         | Stress testing: crash/restart supervision, daemon fail, large logs, agent resume. Lifecycle health checks and slow-client drop policy are implemented; broader soak/fault-injection coverage remains.                                                                                                                                                                                                                                                                                                                                                                                                                    | 1-2 weeks |
 
-**Total**: now dominated by UI/search surfaces, external adapters, privacy controls, and broader
+**Total**: now dominated by UI/search surfaces, adapter hardening, privacy controls, and broader
 soak/fault-injection coverage. The old libghostty-vt scrollback/snapshot cold-restore work is no
 longer the critical path.
 

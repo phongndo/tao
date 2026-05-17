@@ -48,6 +48,7 @@ pub const Config = struct {
     database_path: []const u8,
     run_dir: []const u8,
     sessions_dir: []const u8,
+    adapters_dir: []const u8,
     socket_path: []const u8,
     pid_path: []const u8,
 
@@ -60,6 +61,8 @@ pub const Config = struct {
         errdefer allocator.free(run_dir);
         const sessions_dir = try std.fs.path.join(allocator, &.{ root_dir, "sessions" });
         errdefer allocator.free(sessions_dir);
+        const adapters_dir = try adapterDirFromEnvOrDefault(allocator, root_dir);
+        errdefer allocator.free(adapters_dir);
         const socket_path = try std.fs.path.join(allocator, &.{ run_dir, "taod.sock" });
         errdefer allocator.free(socket_path);
         const pid_path = try std.fs.path.join(allocator, &.{ run_dir, "taod.pid" });
@@ -69,6 +72,7 @@ pub const Config = struct {
             .database_path = database_path,
             .run_dir = run_dir,
             .sessions_dir = sessions_dir,
+            .adapters_dir = adapters_dir,
             .socket_path = socket_path,
             .pid_path = pid_path,
         };
@@ -79,6 +83,7 @@ pub const Config = struct {
         allocator.free(self.database_path);
         allocator.free(self.run_dir);
         allocator.free(self.sessions_dir);
+        allocator.free(self.adapters_dir);
         allocator.free(self.socket_path);
         allocator.free(self.pid_path);
         self.* = undefined;
@@ -111,18 +116,20 @@ pub const Daemon = struct {
     pub fn prepareStorage(self: *Daemon) !void {
         try std.fs.cwd().makePath(self.config.run_dir);
         try std.fs.cwd().makePath(self.config.sessions_dir);
+        try std.fs.cwd().makePath(self.config.adapters_dir);
         if (self.database == null) self.database = try db.Database.open(self.allocator, self.config.database_path);
         try self.writePidFile();
     }
 
     pub fn printConfig(self: *Daemon) void {
         std.debug.print(
-            "root={s}\ndatabase={s}\nrun={s}\nsessions={s}\nsocket={s}\npid={s}\n",
+            "root={s}\ndatabase={s}\nrun={s}\nsessions={s}\nadapters={s}\nsocket={s}\npid={s}\n",
             .{
                 self.config.root_dir,
                 self.config.database_path,
                 self.config.run_dir,
                 self.config.sessions_dir,
+                self.config.adapters_dir,
                 self.config.socket_path,
                 self.config.pid_path,
             },
@@ -837,6 +844,27 @@ pub const Daemon = struct {
         };
 
         self.indexSearchExcerptLocked(item);
+        self.refreshAgentSessionMetadataFromStoredArgvLocked(item, "ended");
+    }
+
+    fn refreshAgentSessionMetadataFromStoredArgvLocked(self: *Daemon, item: *const session.TerminalSession, status: []const u8) void {
+        const database = if (self.database) |*database| database else return;
+        var record = (database.findTerminalSessionById(self.allocator, item.id) catch |err| {
+            std.log.warn("failed to load terminal argv for agent refresh {s}: {t}", .{ item.id, err });
+            return;
+        }) orelse return;
+        defer record.deinit(self.allocator);
+
+        const argv_json = record.argv_json orelse return;
+        var parsed_argv = parseArgvJson(self.allocator, argv_json) catch |err| {
+            std.log.warn("failed to parse terminal argv for agent refresh {s}: {t}", .{ item.id, err });
+            return;
+        };
+        defer parsed_argv.deinit();
+
+        const argv = parsed_argv.items();
+        if (argv.len == 0) return;
+        self.recordAgentSessionLocked(item, argv, argv_json, status);
     }
 
     fn recordAgentSessionLocked(
@@ -847,7 +875,20 @@ pub const Daemon = struct {
         status: []const u8,
     ) void {
         const database = if (self.database) |*database| database else return;
-        const provider = adapter.Provider.detectArgv(argv);
+        var detected = (adapter.detectSessionAlloc(self.allocator, self.config.adapters_dir, .{
+            .terminal_session_id = item.id,
+            .session_dir = item.session_dir,
+            .event_log_path = item.event_log_path,
+            .excerpt_path = item.excerpt_path,
+            .cwd = item.cwd,
+            .argv = argv,
+        }) catch |err| blk: {
+            std.log.warn("failed to inspect agent adapter metadata for {s}: {t}", .{ item.id, err });
+            break :blk null;
+        }) orelse return;
+        defer detected.deinit(self.allocator);
+
+        const provider = detected.provider;
         if (provider == .unknown) return;
 
         const agent_id = std.fmt.allocPrint(self.allocator, "agent-{s}-{s}", .{ item.id, provider.text() }) catch |err| {
@@ -856,26 +897,16 @@ pub const Daemon = struct {
         };
         defer self.allocator.free(agent_id);
 
-        const native_session_id = adapter.discoverNativeSessionIdArgv(argv);
-        const resume_argv_json = if (native_session_id) |native_id|
-            adapter.resumeArgvJsonAlloc(self.allocator, provider, argv[0], native_id) catch |err| blk: {
-                std.log.warn("failed to build {s} resume argv for {s}: {t}", .{ provider.text(), item.id, err });
-                break :blk null;
-            }
-        else
-            null;
-        defer if (resume_argv_json) |json| self.allocator.free(json);
-
         database.recordAgentSession(.{
             .id = agent_id,
             .terminal_session_id = item.id,
             .provider = provider.text(),
-            .native_session_id = native_session_id,
+            .native_session_id = detected.native_session_id,
             .original_argv_json = original_argv_json,
-            .resume_argv_json = resume_argv_json,
+            .resume_argv_json = detected.resume_argv_json,
             .cwd = item.cwd,
             .transcript_path = item.excerpt_path,
-            .status = if (native_session_id != null and std.mem.eql(u8, status, "running")) "resumable" else status,
+            .status = if (detected.native_session_id != null and detected.resume_argv_json != null and isResumableAgentStatus(status)) "resumable" else status,
         }) catch |err| {
             std.log.warn("failed to record agent session {s}: {t}", .{ item.id, err });
         };
@@ -1101,6 +1132,24 @@ fn isLiveAttachable(item: *const session.TerminalSession) bool {
     };
 }
 
+fn isResumableAgentStatus(status: []const u8) bool {
+    return std.mem.eql(u8, status, "running") or
+        std.mem.eql(u8, status, "detected") or
+        std.mem.eql(u8, status, "ended");
+}
+
+fn adapterDirFromEnvOrDefault(allocator: std.mem.Allocator, root_dir: []const u8) ![]u8 {
+    const env_value = std.process.getEnvVarOwned(allocator, "TAOD_ADAPTER_DIR") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (env_value) |value| {
+        if (value.len > 0) return value;
+        allocator.free(value);
+    }
+    return try std.fs.path.join(allocator, &.{ root_dir, "adapters" });
+}
+
 fn sessionResponse(
     allocator: std.mem.Allocator,
     request: rpc.ControlRequestJson,
@@ -1316,6 +1365,7 @@ test "config derives tao paths from home" {
     defer config.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("/tmp/example-home/.tao", config.root_dir);
+    try std.testing.expectEqualStrings("/tmp/example-home/.tao/adapters", config.adapters_dir);
     try std.testing.expectEqualStrings("/tmp/example-home/.tao/run/taod.sock", config.socket_path);
 }
 

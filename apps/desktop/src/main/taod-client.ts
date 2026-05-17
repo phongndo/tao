@@ -135,6 +135,32 @@ function candidateTaodPaths(): string[] {
   )
 }
 
+function candidateTaodAdapterDirs(): string[] {
+  const envPath = process.env.TAOD_ADAPTER_DIR?.trim()
+  const appPath = safeAppPath()
+  const cwd = process.cwd()
+
+  return Array.from(
+    new Set(
+      [
+        envPath,
+        join(cwd, 'apps/daemon/adapters'),
+        join(cwd, '../daemon/adapters'),
+        join(cwd, '../../apps/daemon/adapters'),
+        appPath ? join(appPath, '../daemon/adapters') : null,
+        appPath ? join(appPath, '../../daemon/adapters') : null,
+        appPath ? join(appPath, 'adapters') : null,
+        typeof __dirname === 'string' ? join(__dirname, '../adapters') : null,
+        typeof __dirname === 'string' ? join(__dirname, '../../../daemon/adapters') : null,
+        typeof __dirname === 'string' ? join(__dirname, '../../../../apps/daemon/adapters') : null,
+        process.resourcesPath ? join(process.resourcesPath, 'adapters') : null,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .map((value) => resolve(value)),
+    ),
+  )
+}
+
 function safeAppPath(): string | null {
   try {
     return app.getAppPath()
@@ -145,6 +171,13 @@ function safeAppPath(): string | null {
 
 function findTaodBinary(): string | null {
   for (const candidate of candidateTaodPaths()) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+function findTaodAdapterDir(): string | null {
+  for (const candidate of candidateTaodAdapterDirs()) {
     if (existsSync(candidate)) return candidate
   }
   return null
@@ -470,10 +503,14 @@ export class TaodClient {
       this.spawnedProcess.exitCode !== null ||
       this.spawnedProcess.killed
     ) {
+      const adapterDir = findTaodAdapterDir()
       const child = spawn(binaryPath, [], {
         detached: true,
         stdio: 'ignore',
-        env: process.env,
+        env: {
+          ...process.env,
+          ...(adapterDir ? { TAOD_ADAPTER_DIR: adapterDir } : {}),
+        },
         cwd: dirname(binaryPath),
       })
       this.spawnedProcess = child

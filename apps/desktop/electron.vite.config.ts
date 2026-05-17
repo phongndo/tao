@@ -1,5 +1,5 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { basename, resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
@@ -63,7 +63,30 @@ function copyTaodBinary() {
       copyFileSync(taodSource, taodDest)
       if (process.platform !== 'win32') chmodSync(taodDest, 0o755)
       console.log('[copy-taod-binary] Copied taod to', taodDest)
+
+      const adaptersSource = resolve(__dirname, '../daemon/adapters')
+      const adaptersDest = resolve(outDir, '../adapters')
+      if (existsSync(adaptersSource)) {
+        copyDirectory(adaptersSource, adaptersDest)
+        console.log('[copy-taod-binary] Copied taod adapters to', adaptersDest)
+      }
     },
+  }
+}
+
+function copyDirectory(source: string, destination: string) {
+  mkdirSync(destination, { recursive: true })
+  for (const entry of readdirSync(source)) {
+    const sourcePath = resolve(source, entry)
+    const destinationPath = resolve(destination, basename(entry))
+    const stats = statSync(sourcePath)
+    if (stats.isDirectory()) {
+      copyDirectory(sourcePath, destinationPath)
+      continue
+    }
+    if (!stats.isFile()) continue
+    copyFileSync(sourcePath, destinationPath)
+    if (process.platform !== 'win32') chmodSync(destinationPath, stats.mode | 0o755)
   }
 }
 
