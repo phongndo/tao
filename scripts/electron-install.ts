@@ -16,6 +16,7 @@ const electronPackage = JSON.parse(readFileSync(electronPackageJsonPath, 'utf8')
 
 const platform =
   process.env.ELECTRON_INSTALL_PLATFORM || process.env.npm_config_platform || process.platform
+const hostPlatform = process.platform
 const arch = process.env.ELECTRON_INSTALL_ARCH || process.env.npm_config_arch || process.arch
 const platformPath = getPlatformPath(platform)
 const distPath = process.env.ELECTRON_OVERRIDE_DIST_PATH || join(electronDir, 'dist')
@@ -96,12 +97,12 @@ async function removePath(path: string): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.warn(
-      `[electron-install] Node rm failed for ${path} on ${platform}; falling back to shell removal: ${message}`,
+      `[electron-install] Node rm failed for ${path} on host ${hostPlatform} while installing for ${platform}; falling back to shell removal: ${message}`,
     )
     // Electron's macOS .app bundle can occasionally leave nested framework resources behind
     // during recursive removal in fresh worktrees. Fall back to the platform shell remover so
     // predev/setup can repair a partially extracted Electron install instead of failing.
-    if (platform === 'win32') {
+    if (hostPlatform === 'win32') {
       const target = JSON.stringify(path)
       execFileSync(
         'powershell',
