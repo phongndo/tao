@@ -375,6 +375,7 @@ pub const Daemon = struct {
             return rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
                 .ok = false,
+                .error_code = "session_not_found",
                 .error_message = "session is not live",
             });
         }
@@ -1915,7 +1916,27 @@ test "daemon control RPC reports missing sessions" {
     defer std.testing.allocator.free(response);
 
     try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error_code\":\"session_not_found\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "session not found") != null);
+
+    const exited = try daemon.sessions.create(.{
+        .session_id = "exited",
+        .terminal_id = "terminal-exited",
+        .cols = 80,
+        .rows = 24,
+        .cwd = null,
+        .argv = &.{},
+    });
+    exited.status = .exited;
+
+    const non_live_response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"2","method":"attach","session_id":"exited"}
+    );
+    defer std.testing.allocator.free(non_live_response);
+
+    try std.testing.expect(std.mem.indexOf(u8, non_live_response, "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, non_live_response, "\"error_code\":\"session_not_found\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, non_live_response, "session is not live") != null);
 }
 
 test "daemon persistence privacy toggle avoids session log creation" {
