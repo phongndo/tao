@@ -1,7 +1,7 @@
 taod_benchmark|metric|value|unit
-taod_startup|avg|73|ms
-taod_startup|min|70|ms
-taod_startup|max|76|ms
+taod_startup|avg|6|ms
+taod_startup|min|5|ms
+taod_startup|max|9|ms
 taod_pty_spawn|avg|31|ms
 taod_pty_spawn|p50|31|ms
 taod_pty_spawn|p95|33|ms

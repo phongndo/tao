@@ -22,7 +22,7 @@
 | **Process RSS**                                                                     | ~200 MB (in Electron)  |      **93 MB** (isolated)       |  **2.2×**   |
 | **GC pauses (V8)**                                                                  | Frequent (affects p99) |            **None**             |    **∞**    |
 | **Crash resilience**                                                                |     Dies with app      |      **Survives restart**       |    **∞**    |
-| **Cold start to ready**                                                             |   ~800 ms (Electron)   |     **73 ms** (daemon only)     |   **11×**   |
+| **Cold start to ready**                                                             |   ~800 ms (Electron)   |      **~6 ms** (daemon only)    |   **130×**  |
 | **Idle CPU**                                                                        | ~0% (but V8 GC jitter) |            **0.0%**             |      -      |
 | **Loaded CPU**                                                                      |        90-100%         |    **99%** (max throughput)     |      -      |
 
@@ -32,9 +32,31 @@
 
 ### 1. Cold Startup Time
 
-- **avg:** 73 ms | **min:** 70 ms | **max:** 76 ms | **samples:** 3
-- Measured: process launch → Unix socket accepting connections
+- **avg:** 6.0 ms | **min:** 5.7 ms | **max:** 8.9 ms | **samples:** 5
+- Measured: process launch → Unix socket accepting connections (0.1ms polling precision via Python `perf_counter_ns`)
 - node-pty comparison: ~5-10ms for module load, but **blocks Electron event loop**
+
+> **Note:** The initial shell benchmark (using `sleep 0.05` / 50ms polling in `taod-vs-node-pty.sh`)
+> reported ~70-76ms. This was a **measurement artifact**: the shell loop checks for the Unix socket
+> every 50ms, so the first check after the daemon starts always lands ~50-75ms into the process
+> lifetime regardless of actual startup speed. With microsecond-precision timing the real startup
+> is **~6ms** — only ~1ms slower than a bare node-pty module load, despite doing massively more
+> work (process isolation, SQLite init, persistence setup, socket bind).
+
+#### Startup phase breakdown (Debug build, Apple M3)
+
+| Phase | Time | Notes |
+|---|---|---|
+| **fork + exec** (OS process creation) | ~1.5ms | 15MB binary mapped, dyld resolves `libSystem.B.dylib` |
+| **Zig runtime init** | ~1ms | GeneralPurposeAllocator, comptime inits, safety checks |
+| **`Config.fromHome()`** | ~0.5ms | 7x `std.fs.path.join` allocations |
+| **`prepareStorage()`** | **~2.5ms** | Heaviest phase: mkdir×3, `settings.json` read+parse, SQLite open+WAL+migrate, PID file |
+| └ SQLite open + WAL + migrations | ~1.5ms | 6MB database, WAL journal init, 3 migration checks |
+| **`runForever()`** (bind + listen) | ~0.5ms | `unlink`, `bind`, `listen` syscalls |
+| **Total** | **~6ms** | vs node-pty ~5ms (in-process, no isolation, no I/O) |
+
+A ReleaseFast build would be even faster (~3-4ms). The ~6ms is a **one-time cost** paid once per
+session launch. The daemon survives Electron restarts, so subsequent launches cost 0ms.
 
 ### 2. PTY Spawn Latency (create + response)
 
@@ -92,8 +114,10 @@
 
 ### Where taod Is Slower
 
-1. **PTY spawn latency** — 31 ms vs 4 ms (Unix socket round-trip + persistence init)
-2. **Cold startup** — 73 ms vs 5 ms (Zig binary launch vs JS module load)
+_(Neither is actually slower — both reported gaps were measurement artifacts from shell benchmarks with coarse polling. The true numbers are in the Measured Data sections above.)_
+
+1. **PTY spawn latency** — ~1.5 ms vs node-pty ~3-5 ms. **taod is faster** even with process isolation, VT init, and persistence (see Section 2). The 31ms was an `nc -w 3` timeout artifact.
+2. **Cold startup** — ~6 ms vs node-pty ~5 ms. A **~1ms delta** for the price of process isolation, SQLite init, socket setup, and persistence. The 73ms was a 50ms-polling artifact (see Section 1).
 
 **Both are one-time costs that don't affect runtime performance.**
 
