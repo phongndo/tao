@@ -59,3 +59,25 @@ test "vt wrapper round-trips current-screen snapshots when supported" {
     try std.testing.expect(std.mem.indexOf(u8, text, "hello") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "  VT") != null);
 }
+
+fn vtLifecycleForAllocationFailure(allocator: std.mem.Allocator) !void {
+    var terminal = try Terminal.init(allocator, 12, 4);
+    defer terminal.deinit(allocator);
+
+    try terminal.write("hello\r\n\x1b[2;3HVT");
+    try terminal.resize(allocator, 14, 5);
+    const text = terminal.plainTextAlloc(allocator) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    defer allocator.free(text);
+    try std.testing.expect(std.mem.indexOf(u8, text, "hello") != null);
+}
+
+test "vt wrapper cleans up partial construction and output allocations on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        vtLifecycleForAllocationFailure,
+        .{},
+    );
+}

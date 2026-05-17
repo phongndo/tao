@@ -451,6 +451,44 @@ test "agent adapter external detection falls back to argv heuristics" {
     try std.testing.expectEqualStrings("[\"claude\",\"--resume\",\"native-claude\"]", detection.resume_argv_json.?);
 }
 
+fn adapterRequestForAllocationFailure(allocator: std.mem.Allocator) !void {
+    const request = adapterRequestJsonAlloc(allocator, "resume-command", .pi, .{
+        .terminal_session_id = "session-oom",
+        .session_dir = "/tmp/session-oom",
+        .event_log_path = "/tmp/session-oom/events.taoev",
+        .excerpt_path = "/tmp/session-oom/excerpt.txt",
+        .cwd = "/project",
+        .argv = &.{ "pi", "--session", "native-oom" },
+    }, "native-oom") catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    defer allocator.free(request);
+    try std.testing.expect(std.mem.indexOf(u8, request, "\"nativeSessionId\":\"native-oom\"") != null);
+}
+
+fn heuristicDetectionForAllocationFailure(allocator: std.mem.Allocator) !void {
+    var detection = (detectSessionHeuristicAlloc(allocator, &.{ "codex", "resume", "native-oom" }) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    }).?;
+    defer detection.deinit(allocator);
+    try std.testing.expectEqual(Provider.codex, detection.provider);
+}
+
+test "agent adapter allocation-heavy helpers clean up on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        adapterRequestForAllocationFailure,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        heuristicDetectionForAllocationFailure,
+        .{},
+    );
+}
+
 test "agent adapter external detection executes TypeScript adapters" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
