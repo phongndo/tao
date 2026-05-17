@@ -13,11 +13,3 @@ setup:
 electron:
     pnpm exec tsx scripts/electron-install.ts
 
-# Remove dependencies and generated outputs from this worktree.
-cleanup:
-    rm -rf node_modules out dist .zig-cache zig-cache zig-out
-    find apps packages -name node_modules -type d -prune -exec rm -rf {} +
-    rm -rf apps/desktop/out apps/desktop/dist apps/desktop/.vite
-    rm -rf apps/daemon/zig-out apps/daemon/zig-cache apps/daemon/.zig-cache apps/daemon/zig-pkg
-
-clean: cleanup
