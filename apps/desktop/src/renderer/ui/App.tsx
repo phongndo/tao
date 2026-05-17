@@ -74,6 +74,94 @@ function clearLegacyLocalStorageLayout(): void {
 // React 19's JSX constructor check. Keep the runtime component and narrow only the JSX type.
 const MosaicView = Mosaic as unknown as ComponentType<MosaicProps<string>>
 
+type PaneRect = {
+  id: string
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+type ActivePaneBorderLine = {
+  key: string
+  className: string
+  style: CSSProperties
+}
+
+const PANE_BORDER_EPSILON = 0.0001
+
+function getPaneRects(
+  layout: MosaicNode<string>,
+  bounds: Omit<PaneRect, 'id'> = { left: 0, top: 0, right: 100, bottom: 100 },
+): PaneRect[] {
+  if (typeof layout === 'string') return [{ id: layout, ...bounds }]
+
+  const split = (layout.splitPercentage ?? 50) / 100
+  if (layout.direction === 'row') {
+    const splitX = bounds.left + (bounds.right - bounds.left) * split
+    return [
+      ...getPaneRects(layout.first, { ...bounds, right: splitX }),
+      ...getPaneRects(layout.second, { ...bounds, left: splitX }),
+    ]
+  }
+
+  const splitY = bounds.top + (bounds.bottom - bounds.top) * split
+  return [
+    ...getPaneRects(layout.first, { ...bounds, bottom: splitY }),
+    ...getPaneRects(layout.second, { ...bounds, top: splitY }),
+  ]
+}
+
+function getActivePaneBorderLines(
+  layout: MosaicNode<string> | null,
+  activePaneId: string | null,
+): ActivePaneBorderLine[] {
+  if (!layout || !activePaneId) return []
+
+  const rect = getPaneRects(layout).find((candidate) => candidate.id === activePaneId)
+  if (!rect) return []
+
+  const lines: ActivePaneBorderLine[] = []
+  const top = `${rect.top}%`
+  const left = `${rect.left}%`
+  const width = `${rect.right - rect.left}%`
+  const height = `${rect.bottom - rect.top}%`
+
+  if (rect.left > PANE_BORDER_EPSILON) {
+    lines.push({
+      key: 'left',
+      className: 'active-pane-border-line active-pane-border-line-vertical',
+      style: { top, left, height },
+    })
+  }
+
+  if (rect.right < 100 - PANE_BORDER_EPSILON) {
+    lines.push({
+      key: 'right',
+      className: 'active-pane-border-line active-pane-border-line-vertical',
+      style: { top, left: `${rect.right}%`, height },
+    })
+  }
+
+  if (rect.top > PANE_BORDER_EPSILON) {
+    lines.push({
+      key: 'top',
+      className: 'active-pane-border-line active-pane-border-line-horizontal',
+      style: { top, left, width },
+    })
+  }
+
+  if (rect.bottom < 100 - PANE_BORDER_EPSILON) {
+    lines.push({
+      key: 'bottom',
+      className: 'active-pane-border-line active-pane-border-line-horizontal',
+      style: { top: `${rect.bottom}%`, left, width },
+    })
+  }
+
+  return lines
+}
+
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
 }
@@ -622,6 +710,11 @@ const PaneGrid = memo(function PaneGrid({
     [onLayoutRelease, tab.id],
   )
 
+  const activePaneBorderLines = useMemo(
+    () => getActivePaneBorderLines(draftLayout, activePaneId),
+    [activePaneId, draftLayout],
+  )
+
   const renderTile = useCallback(
     (paneId: string) => {
       const pane = panesById.get(paneId)
@@ -655,15 +748,24 @@ const PaneGrid = memo(function PaneGrid({
   )
 
   return (
-    <MosaicView
-      value={draftLayout}
-      onChange={handleLayoutChange}
-      onRelease={handleLayoutRelease}
-      renderTile={renderTile}
-      className="tao-mosaic"
-      resize={{ minimumPaneSizePercentage: 18 }}
-      zeroStateView={<div className="pane-grid-empty" />}
-    />
+    <div className="pane-mosaic-shell">
+      <MosaicView
+        value={draftLayout}
+        onChange={handleLayoutChange}
+        onRelease={handleLayoutRelease}
+        renderTile={renderTile}
+        className="tao-mosaic"
+        resize={{ minimumPaneSizePercentage: 18 }}
+        zeroStateView={<div className="pane-grid-empty" />}
+      />
+      {activePaneBorderLines.length > 0 ? (
+        <div className="active-pane-border-lines" aria-hidden="true">
+          {activePaneBorderLines.map((line) => (
+            <span key={line.key} className={line.className} style={line.style} />
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 })
 

@@ -593,6 +593,8 @@ body {
 .pane-grid {
   --pane-divider: #28282c;
   --pane-divider-hover: #4a4a50;
+  --pane-divider-active: #aca1cf;
+  --pane-divider-active-glow: rgb(172 161 207 / 24%);
 
   min-height: 0;
   flex: 1 1 auto;
@@ -614,8 +616,17 @@ body {
 }
 
 .tao-mosaic {
+  position: absolute;
+  inset: 0;
   padding: 0;
   background: #151515;
+}
+
+.pane-mosaic-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 .tao-mosaic .mosaic-root {
@@ -720,6 +731,30 @@ body {
 
 .pane-tile-active {
   box-shadow: none;
+}
+
+.active-pane-border-lines {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.active-pane-border-line {
+  position: absolute;
+  display: block;
+  background: var(--pane-divider-active);
+  box-shadow: 0 0 8px var(--pane-divider-active-glow);
+}
+
+.active-pane-border-line-vertical {
+  width: 2px;
+  transform: translateX(-1px);
+}
+
+.active-pane-border-line-horizontal {
+  height: 2px;
+  transform: translateY(-1px);
 }
 
 .pane-tile-archived::after {
