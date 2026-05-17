@@ -1,4 +1,5 @@
 const std = @import("std");
+const limits = @import("limits.zig");
 
 const assert = std.debug.assert;
 
@@ -7,9 +8,28 @@ pub const session_id_header_size: usize = 36;
 pub const file_header_size: usize = file_magic.len + session_id_header_size + 8;
 pub const frame_magic: u32 = 0x54414546; // TAEF
 pub const frame_header_size: usize = 32;
-pub const max_payload_bytes: u32 = 64 * 1024 * 1024;
-pub const max_replay_bytes: usize = 1024 * 1024;
-pub const max_excerpt_bytes: usize = 1024 * 1024;
+pub const max_payload_bytes: u32 = limits.event_log_payload_bytes_max;
+pub const max_replay_bytes: usize = limits.event_log_replay_bytes_max;
+pub const max_excerpt_bytes: usize = limits.event_log_excerpt_bytes_max;
+
+/// Event-log files are append-only recovery streams:
+///
+/// * file header: 8-byte magic, 36-byte padded session id, 8-byte created-at ms.
+/// * frame header: 4-byte magic, 2-byte version, 2-byte kind, 8-byte sequence,
+///   8-byte monotonic timestamp, 4-byte payload length, 4-byte payload CRC32.
+/// * payload: kind-specific bytes. Parsers accept only strictly increasing
+///   sequences and stop at the first invalid tail so repair can truncate safely.
+pub const EventLogError = error{
+    InvalidSessionId,
+    InvalidFrameKind,
+    InvalidSequence,
+    InvalidSize,
+    PayloadTooLarge,
+    SequenceOverflow,
+    NoSpaceLeft,
+    FileSyncFailed,
+    OutOfMemory,
+};
 
 comptime {
     assert(file_magic.len == 8);
@@ -286,13 +306,38 @@ pub fn appendFramePath(
     seq: u64,
     payload: []const u8,
 ) !void {
+    return appendFramePathOptions(allocator, path, kind, seq, payload, .{});
+}
+
+pub fn appendFramePathDurable(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    kind: FrameKind,
+    seq: u64,
+    payload: []const u8,
+) !void {
+    return appendFramePathOptions(allocator, path, kind, seq, payload, .{ .sync = true });
+}
+
+const AppendFrameOptions = struct {
+    sync: bool = false,
+};
+
+fn appendFramePathOptions(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    kind: FrameKind,
+    seq: u64,
+    payload: []const u8,
+    options: AppendFrameOptions,
+) !void {
     if (payload.len > max_payload_bytes) return error.PayloadTooLarge;
 
     const frame = try allocator.alloc(u8, encodedFrameSize(payload.len));
     defer allocator.free(frame);
 
     const encoded = try encodeFrame(frame, kind, seq, nowMs(), payload);
-    try appendFile(allocator, path, encoded, 0o600);
+    try appendFile(allocator, path, encoded, 0o600, options.sync);
 }
 
 pub fn appendOutput(
@@ -500,7 +545,7 @@ const OwnedFrameRecorder = struct {
 fn appendBoundedExcerpt(allocator: std.mem.Allocator, path: []const u8, payload: []const u8) !void {
     if (payload.len == 0) return;
 
-    try appendFile(allocator, path, payload, 0o600);
+    try appendFile(allocator, path, payload, 0o600, false);
 
     const data = (try readFileAlloc(allocator, path, max_excerpt_bytes + payload.len)) orelse return;
     defer allocator.free(data);
@@ -565,7 +610,7 @@ fn writeFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, m
     try writeAllFd(fd, data);
 }
 
-fn appendFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
+fn appendFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, mode: std.c.mode_t, sync: bool) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
 
@@ -580,6 +625,7 @@ fn appendFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, 
     _ = std.c.fchmod(fd, mode);
 
     try writeAllFd(fd, data);
+    if (sync and std.c.fsync(fd) != 0) return error.FileSyncFailed;
 }
 
 fn truncateFile(allocator: std.mem.Allocator, path: []const u8, size: usize) !void {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const event_log = @import("../event_log.zig");
+const limits = @import("../limits.zig");
 const rpc = @import("../rpc.zig");
 const session = @import("../session.zig");
 const snapshot = @import("../snapshot.zig");
@@ -14,7 +15,56 @@ const writeAllFdNonBlocking = fd_io.writeAllFdNonBlocking;
 const isLiveAttachable = util.isLiveAttachable;
 
 const assert = std.debug.assert;
-const max_pending_client_bytes = 1024 * 1024;
+const max_pending_client_bytes = limits.pending_client_bytes_max;
+const stack_stream_frame_bytes = 8 * 1024;
+
+pub fn Context(comptime Daemon: type) type {
+    return struct {
+        daemon: Daemon,
+
+        const Self = @This();
+
+        pub fn init(daemon: Daemon) Self {
+            return .{ .daemon = daemon };
+        }
+
+        pub fn streamAttachedSession(self: Self, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
+            return streamAttachedSessionImpl(self.daemon, socket_fd, session_id, initial_tail);
+        }
+
+        pub fn applyPendingClientFrames(self: Self, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
+            return applyPendingClientFramesImpl(self.daemon, session_id, pending);
+        }
+
+        pub fn addSubscriber(self: Self, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
+            return addSubscriberImpl(self.daemon, session_id, socket_fd);
+        }
+
+        pub fn removeSubscriber(self: Self, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+            return removeSubscriberImpl(self.daemon, session_id, socket_fd);
+        }
+
+        pub fn sessionCanContinueStreaming(self: Self, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+            return sessionCanContinueStreamingImpl(self.daemon, session_id, socket_fd);
+        }
+
+        pub fn applyClientFrame(self: Self, frame: rpc.StreamFrame) !void {
+            return applyClientFrameImpl(self.daemon, frame);
+        }
+
+        pub fn broadcastExitFrameLocked(self: Self, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
+            return broadcastExitFrameLockedImpl(self.daemon, item, seq, exit_code, signal_value);
+        }
+
+        pub fn broadcastStreamFrameLocked(self: Self, item: *session.TerminalSession, kind: rpc.StreamKind, seq: u64, payload: []const u8) !void {
+            return broadcastStreamFrameLockedImpl(self.daemon, item, kind, seq, payload);
+        }
+
+        pub fn flushPendingOutputToSubscriberLocked(self: Self, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
+            return flushPendingOutputToSubscriberLockedImpl(self.daemon, item, socket_fd);
+        }
+    };
+}
 
 fn appendPendingClientBytes(self: anytype, pending: *std.ArrayList(u8), bytes: []const u8) !bool {
     assert(pending.items.len <= max_pending_client_bytes);
@@ -39,7 +89,7 @@ fn ClientFrameVisitor(comptime Daemon: type) type {
     };
 }
 
-pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
+fn streamAttachedSessionImpl(self: anytype, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
     assert(socket_fd >= 0);
     assert(session_id.len > 0);
 
@@ -75,7 +125,7 @@ pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: [
     }
 }
 
-pub fn applyPendingClientFrames(self: anytype, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
+fn applyPendingClientFramesImpl(self: anytype, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
     assert(session_id.len > 0);
     assert(pending.items.len <= max_pending_client_bytes);
     if (pending.items.len == 0) return;
@@ -85,7 +135,7 @@ pub fn applyPendingClientFrames(self: anytype, session_id: []const u8, pending: 
     if (result.valid_bytes > 0) try pending.replaceRange(self.allocator, 0, result.valid_bytes, &.{});
 }
 
-pub fn addSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
+fn addSubscriberImpl(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
     assert(session_id.len > 0);
     assert(socket_fd >= 0);
 
@@ -140,8 +190,16 @@ fn flushPendingOutputToSubscriber(self: anytype, session_id: []const u8, socket_
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.allocator);
         for (item.pending_output.items) |frame| {
-            const buffer = try self.allocator.alloc(u8, rpc.encodedStreamFrameSize(frame.payload.len));
-            defer self.allocator.free(buffer);
+            const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
+            var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
+            var heap_buffer: ?[]u8 = null;
+            defer if (heap_buffer) |buffer| self.allocator.free(buffer);
+            const buffer = if (encoded_len <= stack_buffer.len)
+                stack_buffer[0..encoded_len]
+            else blk: {
+                heap_buffer = try self.allocator.alloc(u8, encoded_len);
+                break :blk heap_buffer.?;
+            };
             const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
             try out.appendSlice(self.allocator, encoded);
         }
@@ -160,7 +218,7 @@ fn flushPendingOutputToSubscriber(self: anytype, session_id: []const u8, socket_
     item.clearPendingOutput(self.allocator);
 }
 
-pub fn removeSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+fn removeSubscriberImpl(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
     assert(session_id.len > 0);
     assert(socket_fd >= 0);
 
@@ -177,7 +235,7 @@ pub fn removeSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.
     return removed;
 }
 
-pub fn sessionCanContinueStreaming(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+fn sessionCanContinueStreamingImpl(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
     assert(session_id.len > 0);
     assert(socket_fd >= 0);
 
@@ -189,7 +247,7 @@ pub fn sessionCanContinueStreaming(self: anytype, session_id: []const u8, socket
     return self.sessions.hasSubscriber(session_id, socket_fd);
 }
 
-pub fn applyClientFrame(self: anytype, frame: rpc.StreamFrame) !void {
+fn applyClientFrameImpl(self: anytype, frame: rpc.StreamFrame) !void {
     assert(frame.session_id.len > 0);
 
     self.lock();
@@ -227,13 +285,13 @@ pub fn applyClientFrame(self: anytype, frame: rpc.StreamFrame) !void {
     }
 }
 
-pub fn broadcastExitFrameLocked(self: anytype, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
+fn broadcastExitFrameLockedImpl(self: anytype, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
     var payload: [8]u8 = undefined;
     const encoded_payload = try rpc.encodeExitPayload(&payload, exit_code, signal_value);
     try self.broadcastStreamFrameLocked(item, .exit, seq, encoded_payload);
 }
 
-pub fn broadcastStreamFrameLocked(
+fn broadcastStreamFrameLockedImpl(
     self: anytype,
     item: *session.TerminalSession,
     kind: rpc.StreamKind,
@@ -250,8 +308,15 @@ pub fn broadcastStreamFrameLocked(
     }
 
     const encoded_len = rpc.encodedStreamFrameSize(payload.len);
-    const buffer = try self.allocator.alloc(u8, encoded_len);
-    defer self.allocator.free(buffer);
+    var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
+    var heap_buffer: ?[]u8 = null;
+    defer if (heap_buffer) |buffer| self.allocator.free(buffer);
+    const buffer = if (encoded_len <= stack_buffer.len)
+        stack_buffer[0..encoded_len]
+    else blk: {
+        heap_buffer = try self.allocator.alloc(u8, encoded_len);
+        break :blk heap_buffer.?;
+    };
     const encoded = try rpc.encodeStreamFrame(buffer, kind, item.id, seq, payload);
 
     var index: usize = 0;
@@ -267,15 +332,22 @@ pub fn broadcastStreamFrameLocked(
     item.assertInvariants();
 }
 
-pub fn flushPendingOutputToSubscriberLocked(self: anytype, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
+fn flushPendingOutputToSubscriberLockedImpl(self: anytype, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
     item.assertInvariants();
     assert(socket_fd >= 0);
     if (item.pending_output.items.len == 0) return;
 
     for (item.pending_output.items) |frame| {
         const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
-        const buffer = try self.allocator.alloc(u8, encoded_len);
-        defer self.allocator.free(buffer);
+        var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
+        var heap_buffer: ?[]u8 = null;
+        defer if (heap_buffer) |buffer| self.allocator.free(buffer);
+        const buffer = if (encoded_len <= stack_buffer.len)
+            stack_buffer[0..encoded_len]
+        else blk: {
+            heap_buffer = try self.allocator.alloc(u8, encoded_len);
+            break :blk heap_buffer.?;
+        };
         const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
         try writeAllFd(socket_fd, encoded);
     }

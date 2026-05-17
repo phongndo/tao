@@ -164,55 +164,55 @@ pub const Daemon = struct {
     }
 
     pub fn ensureSessionProcess(self: *Daemon, item: *session.TerminalSession, argv: []const []const u8) !void {
-        return process.ensureSessionProcess(self, item, argv);
+        return process.Context(*Daemon).init(self).ensureSessionProcess(item, argv);
     }
 
     pub fn startSessionReaderLocked(self: *Daemon, item: *session.TerminalSession) !void {
-        return process.startSessionReaderLocked(self, item);
+        return process.Context(*Daemon).init(self).startSessionReaderLocked(item);
     }
 
     pub fn streamAttachedSession(self: *Daemon, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
-        return stream_mod.streamAttachedSession(self, socket_fd, session_id, initial_tail);
+        return stream_mod.Context(*Daemon).init(self).streamAttachedSession(socket_fd, session_id, initial_tail);
     }
 
     pub fn applyPendingClientFrames(self: *Daemon, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
-        return stream_mod.applyPendingClientFrames(self, session_id, pending);
+        return stream_mod.Context(*Daemon).init(self).applyPendingClientFrames(session_id, pending);
     }
 
     pub fn addSubscriber(self: *Daemon, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
-        return stream_mod.addSubscriber(self, session_id, socket_fd);
+        return stream_mod.Context(*Daemon).init(self).addSubscriber(session_id, socket_fd);
     }
 
     pub fn removeSubscriber(self: *Daemon, session_id: []const u8, socket_fd: std.c.fd_t) bool {
-        return stream_mod.removeSubscriber(self, session_id, socket_fd);
+        return stream_mod.Context(*Daemon).init(self).removeSubscriber(session_id, socket_fd);
     }
 
     pub fn sessionCanContinueStreaming(self: *Daemon, session_id: []const u8, socket_fd: std.c.fd_t) bool {
-        return stream_mod.sessionCanContinueStreaming(self, session_id, socket_fd);
+        return stream_mod.Context(*Daemon).init(self).sessionCanContinueStreaming(session_id, socket_fd);
     }
 
     pub fn runSessionReader(self: *Daemon, session_id: []const u8) !void {
-        return process.runSessionReader(self, session_id);
+        return process.Context(*Daemon).init(self).runSessionReader(session_id);
     }
 
     pub fn liveChildFd(self: *Daemon, session_id: []const u8) ?std.c.fd_t {
-        return process.liveChildFd(self, session_id);
+        return process.Context(*Daemon).init(self).liveChildFd(session_id);
     }
 
     pub fn readPtyAndBroadcast(self: *Daemon, session_id: []const u8) !void {
-        return process.readPtyAndBroadcast(self, session_id);
+        return process.Context(*Daemon).init(self).readPtyAndBroadcast(session_id);
     }
 
     pub fn applyClientFrame(self: *Daemon, frame: rpc.StreamFrame) !void {
-        return stream_mod.applyClientFrame(self, frame);
+        return stream_mod.Context(*Daemon).init(self).applyClientFrame(frame);
     }
 
     pub fn reapExitedChild(self: *Daemon, session_id: []const u8) !bool {
-        return process.reapExitedChild(self, session_id);
+        return process.Context(*Daemon).init(self).reapExitedChild(session_id);
     }
 
     pub fn markExitedAndBroadcast(self: *Daemon, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
-        return process.markExitedAndBroadcast(self, session_id, exit_code, signal_value);
+        return process.Context(*Daemon).init(self).markExitedAndBroadcast(session_id, exit_code, signal_value);
     }
 
     pub fn recordTerminalSessionLocked(self: *Daemon, item: *const session.TerminalSession, argv_json: ?[]const u8) void {
@@ -268,7 +268,7 @@ pub const Daemon = struct {
     }
 
     pub fn broadcastExitFrameLocked(self: *Daemon, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
-        return stream_mod.broadcastExitFrameLocked(self, item, seq, exit_code, signal_value);
+        return stream_mod.Context(*Daemon).init(self).broadcastExitFrameLocked(item, seq, exit_code, signal_value);
     }
 
     pub fn checkpointCurrentScreenLocked(self: *Daemon, item: *session.TerminalSession) void {
@@ -294,11 +294,11 @@ pub const Daemon = struct {
         seq: u64,
         payload: []const u8,
     ) !void {
-        return stream_mod.broadcastStreamFrameLocked(self, item, kind, seq, payload);
+        return stream_mod.Context(*Daemon).init(self).broadcastStreamFrameLocked(item, kind, seq, payload);
     }
 
     pub fn flushPendingOutputToSubscriberLocked(self: *Daemon, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
-        return stream_mod.flushPendingOutputToSubscriberLocked(self, item, socket_fd);
+        return stream_mod.Context(*Daemon).init(self).flushPendingOutputToSubscriberLocked(item, socket_fd);
     }
 
     /// Guarded daemon mutex ownership. Most daemon methods still expose the
@@ -319,6 +319,19 @@ pub const Daemon = struct {
             std.debug.assert(!self.held);
             self.daemon.lock();
             self.held = true;
+        }
+
+        pub const UnlockedPhase = struct {
+            guard: *LockGuard,
+
+            pub fn deinit(self: *UnlockedPhase) void {
+                self.guard.reacquire();
+            }
+        };
+
+        pub fn unlocked(self: *LockGuard) UnlockedPhase {
+            self.release();
+            return .{ .guard = self };
         }
 
         pub fn deinit(self: *LockGuard) void {

@@ -5,6 +5,46 @@ const session = @import("../session.zig");
 
 const assert = std.debug.assert;
 
+pub fn Context(comptime Daemon: type) type {
+    return struct {
+        daemon: Daemon,
+
+        const Self = @This();
+
+        pub fn init(daemon: Daemon) Self {
+            return .{ .daemon = daemon };
+        }
+
+        pub fn ensureSessionProcess(self: Self, item: *session.TerminalSession, argv: []const []const u8) !void {
+            return ensureSessionProcessImpl(self.daemon, item, argv);
+        }
+
+        pub fn startSessionReaderLocked(self: Self, item: *session.TerminalSession) !void {
+            return startSessionReaderLockedImpl(self.daemon, item);
+        }
+
+        pub fn runSessionReader(self: Self, session_id: []const u8) !void {
+            return runSessionReaderImpl(self.daemon, session_id);
+        }
+
+        pub fn liveChildFd(self: Self, session_id: []const u8) ?std.c.fd_t {
+            return liveChildFdImpl(self.daemon, session_id);
+        }
+
+        pub fn readPtyAndBroadcast(self: Self, session_id: []const u8) !void {
+            return readPtyAndBroadcastImpl(self.daemon, session_id);
+        }
+
+        pub fn reapExitedChild(self: Self, session_id: []const u8) !bool {
+            return reapExitedChildImpl(self.daemon, session_id);
+        }
+
+        pub fn markExitedAndBroadcast(self: Self, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
+            return markExitedAndBroadcastImpl(self.daemon, session_id, exit_code, signal_value);
+        }
+    };
+}
+
 fn sessionReaderThread(daemon: anytype, session_id: []u8) void {
     defer std.heap.smp_allocator.free(session_id);
 
@@ -14,7 +54,7 @@ fn sessionReaderThread(daemon: anytype, session_id: []u8) void {
     };
 }
 
-pub fn ensureSessionProcess(self: anytype, item: *session.TerminalSession, argv: []const []const u8) !void {
+fn ensureSessionProcessImpl(self: anytype, item: *session.TerminalSession, argv: []const []const u8) !void {
     item.assertInvariants();
     if (item.pty_child) |child| {
         if (child.master_fd >= 0) return;
@@ -33,7 +73,7 @@ pub fn ensureSessionProcess(self: anytype, item: *session.TerminalSession, argv:
     item.assertInvariants();
 }
 
-pub fn startSessionReaderLocked(self: anytype, item: *session.TerminalSession) !void {
+fn startSessionReaderLockedImpl(self: anytype, item: *session.TerminalSession) !void {
     item.assertInvariants();
     if (item.reader_started) return;
     const child = item.pty_child orelse return;
@@ -48,7 +88,7 @@ pub fn startSessionReaderLocked(self: anytype, item: *session.TerminalSession) !
     thread.detach();
 }
 
-pub fn runSessionReader(self: anytype, session_id: []const u8) !void {
+fn runSessionReaderImpl(self: anytype, session_id: []const u8) !void {
     assert(session_id.len > 0);
 
     while (true) {
@@ -64,7 +104,7 @@ pub fn runSessionReader(self: anytype, session_id: []const u8) !void {
     }
 }
 
-pub fn liveChildFd(self: anytype, session_id: []const u8) ?std.c.fd_t {
+fn liveChildFdImpl(self: anytype, session_id: []const u8) ?std.c.fd_t {
     assert(session_id.len > 0);
 
     self.lock();
@@ -77,7 +117,7 @@ pub fn liveChildFd(self: anytype, session_id: []const u8) ?std.c.fd_t {
     return child.master_fd;
 }
 
-pub fn readPtyAndBroadcast(self: anytype, session_id: []const u8) !void {
+fn readPtyAndBroadcastImpl(self: anytype, session_id: []const u8) !void {
     assert(session_id.len > 0);
 
     var child_copy: pty.Child = blk: {
@@ -121,7 +161,7 @@ pub fn readPtyAndBroadcast(self: anytype, session_id: []const u8) !void {
     item.assertInvariants();
 }
 
-pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
+fn reapExitedChildImpl(self: anytype, session_id: []const u8) !bool {
     assert(session_id.len > 0);
 
     self.lock();
@@ -168,7 +208,7 @@ pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
     return true;
 }
 
-pub fn markExitedAndBroadcast(self: anytype, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
+fn markExitedAndBroadcastImpl(self: anytype, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
     assert(session_id.len > 0);
 
     self.lock();

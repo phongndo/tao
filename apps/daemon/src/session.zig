@@ -1,5 +1,6 @@
 const std = @import("std");
 const event_log = @import("event_log.zig");
+const limits = @import("limits.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
 const snapshot = @import("snapshot.zig");
@@ -7,10 +8,10 @@ const vt = @import("vt.zig");
 
 const assert = std.debug.assert;
 
-pub const sessions_max = 16 * 1024;
-pub const subscribers_per_session_max = 1024;
-pub const pending_output_frames_max = 4096;
-pub const max_pending_output_bytes = 1024 * 1024;
+pub const sessions_max = limits.sessions_max;
+pub const subscribers_per_session_max = limits.subscribers_per_session_max;
+pub const pending_output_frames_max = limits.pending_output_frames_max;
+pub const max_pending_output_bytes = limits.pending_output_bytes_max;
 
 comptime {
     assert(sessions_max > 0);
@@ -446,6 +447,40 @@ test "session manager creates and updates sessions" {
     try std.testing.expectEqualStrings("killed", manager.find("session-1").?.status.text());
     try std.testing.expect(manager.remove("session-1"));
     try std.testing.expect(manager.find("session-1") == null);
+}
+
+test "terminal session lifecycle transition table is explicit" {
+    const allowed = [_]struct { from: Status, to: Status }{
+        .{ .from = .live, .to = .detached },
+        .{ .from = .live, .to = .exited },
+        .{ .from = .live, .to = .crashed },
+        .{ .from = .live, .to = .killed },
+        .{ .from = .detached, .to = .live },
+        .{ .from = .detached, .to = .archived },
+        .{ .from = .detached, .to = .killed },
+        .{ .from = .exited, .to = .live },
+        .{ .from = .exited, .to = .archived },
+        .{ .from = .exited, .to = .killed },
+        .{ .from = .crashed, .to = .live },
+        .{ .from = .crashed, .to = .archived },
+        .{ .from = .crashed, .to = .killed },
+        .{ .from = .archived, .to = .live },
+        .{ .from = .archived, .to = .killed },
+        .{ .from = .killed, .to = .live },
+        .{ .from = .killed, .to = .archived },
+    };
+
+    inline for (std.meta.fields(Status)) |from_field| {
+        inline for (std.meta.fields(Status)) |to_field| {
+            const from: Status = @enumFromInt(from_field.value);
+            const to: Status = @enumFromInt(to_field.value);
+            var expected = from == to;
+            for (allowed) |edge| {
+                if (edge.from == from and edge.to == to) expected = true;
+            }
+            try std.testing.expectEqual(expected, from.canTransitionTo(to));
+        }
+    }
 }
 
 test "terminal session create metadata can be refreshed for restart fallback" {

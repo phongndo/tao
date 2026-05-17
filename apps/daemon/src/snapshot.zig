@@ -1,4 +1,5 @@
 const std = @import("std");
+const limits = @import("limits.zig");
 
 const assert = std.debug.assert;
 
@@ -6,8 +7,27 @@ pub const file_name = "current-screen.state";
 pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x53, 0x4e, 0x50, 0x01, 0x00 }; // TAOSNP\1\0
 pub const file_version: u16 = 1;
 pub const file_header_size: usize = 34;
-pub const max_backend_name_bytes: usize = 128;
-pub const max_payload_bytes: usize = 16 * 1024 * 1024;
+pub const max_backend_name_bytes: usize = limits.snapshot_backend_name_bytes_max;
+pub const max_payload_bytes: usize = limits.snapshot_payload_bytes_max;
+
+/// Current-screen snapshot layout:
+/// 8-byte magic, version, cols/rows, backend-name length, reserved bytes,
+/// sequence, payload length, payload CRC32, backend name, then backend payload.
+/// Snapshots are best-effort hydration hints; corrupt snapshots are rejected and
+/// the session can still continue from its event log or live PTY stream.
+pub const SnapshotCodecError = error{
+    InvalidSnapshot,
+    InvalidSnapshotPath,
+    UnsupportedSnapshotVersion,
+    SnapshotTooLarge,
+    FileOpenFailed,
+    FileStatFailed,
+    FileTooBig,
+    FileReadFailed,
+    FileWriteFailed,
+    FileDeleteFailed,
+    OutOfMemory,
+};
 
 comptime {
     assert(file_magic.len == 8);

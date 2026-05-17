@@ -1,4 +1,5 @@
 const std = @import("std");
+const limits = @import("limits.zig");
 
 const assert = std.debug.assert;
 
@@ -193,7 +194,20 @@ const stream_seq_offset: usize = stream_session_id_offset + stream_session_id_si
 const stream_length_offset: usize = stream_seq_offset + 8;
 const stream_crc_offset: usize = stream_length_offset + 4;
 pub const stream_header_size: usize = stream_crc_offset + 4;
-pub const max_stream_payload_bytes: u32 = 64 * 1024 * 1024;
+pub const max_stream_payload_bytes: u32 = limits.stream_payload_bytes_max;
+
+/// Live stream frame layout is fixed-width header plus payload:
+/// magic/version/kind, a NUL-padded 64-byte session id, sequence, payload
+/// length, payload CRC32, then payload bytes. The parser leaves partial tails
+/// unread for socket buffering and rejects corrupt frames deterministically.
+pub const StreamCodecError = error{
+    InvalidSessionId,
+    PayloadTooLarge,
+    NoSpaceLeft,
+    InvalidSize,
+    InvalidResizePayload,
+    InvalidExitPayload,
+};
 
 comptime {
     assert(stream_session_id_size > 0);
@@ -374,6 +388,27 @@ test "control request JSON accepts protocol type and camelCase identifiers" {
     try std.testing.expectEqual(RequestType.create, parsed.value.requestType());
     try std.testing.expectEqualStrings("s1", parsed.value.requestSessionId().?);
     try std.testing.expectEqualStrings("t1", parsed.value.requestTerminalId().?);
+}
+
+test "control request JSON deterministic shape sweep" {
+    const cases = [_]struct {
+        json: []const u8,
+        request_type: RequestType,
+    }{
+        .{ .json = "{\"type\":\"ping\"}", .request_type = .ping },
+        .{ .json = "{\"method\":\"resize\",\"session_id\":\"s\",\"cols\":1,\"rows\":1}", .request_type = .resize },
+        .{ .json = "{\"type\":\"clearHistory\",\"sessionIds\":[\"s\"]}", .request_type = .clear_history },
+        .{ .json = "{\"type\":\"configurePersistence\",\"enabled\":true,\"persistInput\":false}", .request_type = .configure_persistence },
+        .{ .json = "{\"method\":\"unknown\"}", .request_type = .unknown },
+    };
+
+    for (cases) |case| {
+        var parsed = try std.json.parseFromSlice(ControlRequestJson, std.testing.allocator, case.json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(case.request_type, parsed.value.requestType());
+    }
 }
 
 test "control response formats as newline-delimited JSON" {

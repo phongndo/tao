@@ -1,10 +1,11 @@
 const std = @import("std");
+const limits = @import("limits.zig");
 const sqlite = @import("sqlite");
 
 const assert = std.debug.assert;
 
-pub const event_log_refs_max = 64 * 1024;
-pub const search_results_max = 1024;
+pub const event_log_refs_max = limits.db_event_log_refs_max;
+pub const search_results_max = limits.db_search_results_max;
 
 comptime {
     assert(event_log_refs_max > 0);

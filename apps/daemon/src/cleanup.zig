@@ -1,7 +1,8 @@
 const std = @import("std");
 const event_log = @import("event_log.zig");
+const limits = @import("limits.zig");
 
-pub const session_dirs_scan_max = 64 * 1024;
+pub const session_dirs_scan_max = limits.session_dirs_scan_max;
 
 pub const RetentionPolicy = struct {
     retain_days: u32 = 30,
