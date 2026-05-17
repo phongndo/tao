@@ -1006,11 +1006,13 @@ export const useTaoStore = create<TaoState>()((set) => ({
 
       return {
         tabs: state.tabs.map((candidate) =>
-          candidate.id === tab.id ? { ...candidate, layout, lastActivePaneId: pane.id } : candidate,
+          candidate.id === tab.id
+            ? { ...candidate, layout, lastActivePaneId: newPane.id }
+            : candidate,
         ),
         panes: [...state.panes, newPane],
         activeTabId: tab.id,
-        activePaneId: pane.id,
+        activePaneId: newPane.id,
       }
     }),
   splitActivePane: (direction) =>
@@ -1029,11 +1031,13 @@ export const useTaoStore = create<TaoState>()((set) => ({
 
       return {
         tabs: state.tabs.map((candidate) =>
-          candidate.id === tab.id ? { ...candidate, layout, lastActivePaneId: pane.id } : candidate,
+          candidate.id === tab.id
+            ? { ...candidate, layout, lastActivePaneId: newPane.id }
+            : candidate,
         ),
         panes: [...state.panes, newPane],
         activeTabId: tab.id,
-        activePaneId: pane.id,
+        activePaneId: newPane.id,
       }
     }),
   closePane: (paneId) => set((state) => closePaneState(state, paneId)),
