@@ -227,8 +227,12 @@ async function revealTerminalAfterStableRender(
   term: Terminal,
 ): Promise<void> {
   forceTerminalRender(term)
-  // Wait for Chromium to present the final post-replay resize/render. Without this gate, cold replay
-  // can briefly show historical replay dimensions before the current pane fit is applied.
+  // Show the window, then do one final fit/render before making the terminal surface visible.
+  await window.electronAPI.signalReady()
+  fitTerminalToContainer(container, term)
+  forceTerminalRender(term)
+  // Wait for Chromium to present the final post-attach resize/render. Without this gate, cold
+  // replay can briefly show historical replay dimensions before the current pane fit is applied.
   await nextAnimationFrame()
   await nextAnimationFrame()
   container.classList.remove('terminal-surface-restoring')
@@ -357,13 +361,11 @@ export async function createTerminal(
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
-    void window.electronAPI.killSession(sessionId)
     renderTerminalError(container, err)
     throw err
   }
 
   if (!term) {
-    void window.electronAPI.killSession(sessionId)
     throw new Error('Terminal failed to initialize')
   }
   const openedTerm = term
@@ -546,7 +548,6 @@ export async function createTerminal(
     unsubSessionError()
     unsubSessionExit()
     term.dispose()
-    void window.electronAPI.killSession(sessionId)
     container.classList.remove('terminal-surface-restoring')
     renderTerminalError(container, err)
     throw err

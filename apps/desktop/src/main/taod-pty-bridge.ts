@@ -18,6 +18,7 @@ import { TaodClient, type TaodControlResponse, type TaodSessionStream } from './
 import { decodeTaodExitPayload, decodeTaodResizePayload } from './taod-stream'
 
 const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
+const ATTACH_STREAM_READY_TIMEOUT_MS = 500
 
 export type TaodPtyBridgeOptions = {
   readonly client?: TaodClient
@@ -113,11 +114,52 @@ function decodeAgentStatus(payload: Buffer): AgentStatus | null {
   }
 }
 
+function waitForAttachStreamReady(stream: TaodSessionStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timeout = setTimeout(() => {
+      settle()
+    }, ATTACH_STREAM_READY_TIMEOUT_MS)
+
+    function cleanup() {
+      clearTimeout(timeout)
+      stream.off('frame', onFrame)
+      stream.off('error', onError)
+      stream.off('close', onClose)
+    }
+
+    function settle(error?: Error) {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error) reject(error)
+      else resolve()
+    }
+
+    function onFrame() {
+      settle()
+    }
+
+    function onError(error: Error) {
+      settle(error)
+    }
+
+    function onClose() {
+      settle(new Error('taod attach stream closed before it became ready'))
+    }
+
+    stream.on('frame', onFrame)
+    stream.once('error', onError)
+    stream.once('close', onClose)
+  })
+}
+
 export class TaodPtyBridge {
   private readonly client: TaodClient
   private readonly defaultShell?: string
   private port: MessagePortMain | null = null
   private readonly sessions = new Map<string, BridgeSession>()
+  private readonly supersededAttachStreams = new WeakSet<TaodSessionStream>()
   private readonly cleanupTimer: ReturnType<typeof setInterval>
 
   constructor(options: TaodPtyBridgeOptions = {}) {
@@ -240,6 +282,7 @@ export class TaodPtyBridge {
       // subscriber socket and continue through taod attach so the daemon sends a fresh snapshot.
       existing.cols = cols
       existing.rows = rows
+      this.supersededAttachStreams.add(existing.stream)
       this.closeSessionStream(sessionId)
     }
 
@@ -293,10 +336,20 @@ export class TaodPtyBridge {
     }
     this.sessions.set(sessionId, session)
     this.wireStream(sessionId, session, stream)
-
+    const attachReady = waitForAttachStreamReady(stream)
+    stream.start()
+    try {
+      await attachReady
+    } catch (error) {
+      // A remount/new renderer can supersede an in-flight attach for the same session. In that
+      // case the old stream closes because Tao intentionally replaced it; don't report that stale
+      // close to the renderer or it can clear the ready state for the newer attach.
+      if (this.supersededAttachStreams.has(stream)) return
+      this.closeSessionStream(sessionId)
+      throw error
+    }
     const size = responseSize(attachResponse, { cols, rows })
     this.postReady(sessionId, size, responseSeq(attachResponse), session)
-    stream.start()
   }
 
   private async createShellSession(

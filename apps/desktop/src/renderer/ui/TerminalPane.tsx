@@ -161,6 +161,10 @@ export function TerminalPane({
           terminal.blur()
         }
       } catch (err) {
+        if (disposed) {
+          if (isActive) void window.electronAPI.signalReady()
+          return
+        }
         const message = err instanceof Error ? err.message : String(err)
         console.error('[renderer] Failed:', err)
         setTerminalError({
