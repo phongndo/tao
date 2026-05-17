@@ -37,7 +37,9 @@ const missingField = protocol.missingField;
 const notFound = protocol.notFound;
 const sessionResponse = protocol.sessionResponse;
 
-fn sessionReaderThread(daemon: anytype, session_id: []const u8) void {
+fn sessionReaderThread(daemon: anytype, session_id: []u8) void {
+    defer std.heap.smp_allocator.free(session_id);
+
     daemon.runSessionReader(session_id) catch |err| {
         std.log.warn("session reader failed for {s}: {t}", .{ session_id, err });
         _ = daemon.markExitedAndBroadcast(session_id, -1, 0) catch {};
@@ -66,7 +68,9 @@ pub fn startSessionReaderLocked(self: anytype, item: *session.TerminalSession) !
     const child = item.pty_child orelse return;
     if (child.master_fd < 0) return;
     item.reader_started = true;
-    const thread = std.Thread.spawn(.{}, sessionReaderThread, .{ self, item.id }) catch |err| {
+    const owned_session_id = try std.heap.smp_allocator.dupe(u8, item.id);
+    errdefer std.heap.smp_allocator.free(owned_session_id);
+    const thread = std.Thread.spawn(.{}, sessionReaderThread, .{ self, owned_session_id }) catch |err| {
         item.reader_started = false;
         return err;
     };

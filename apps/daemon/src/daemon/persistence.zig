@@ -127,6 +127,8 @@ pub fn restoreSessionWithArgvJsonLocked(
         _ = self.sessions.remove(session_id);
         return null;
     }
+    const restored_id = try self.allocator.dupe(u8, restored.id);
+    defer self.allocator.free(restored_id);
 
     if (restored.event_log_path) |path| {
         _ = event_log.appendResize(self.allocator, path, &restored.last_seq, cols, rows) catch |err| {
@@ -143,13 +145,13 @@ pub fn restoreSessionWithArgvJsonLocked(
     };
     try self.startSessionReaderLocked(restored);
 
+    restore_committed = true;
     self.unlock();
     defer if (agent_snapshot) |*value| value.deinit(self.allocator);
     if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
     self.lock();
 
-    restore_committed = true;
-    return restored;
+    return self.sessions.find(restored_id);
 }
 
 pub fn ensureSessionPersistence(self: anytype, item: *session.TerminalSession) !void {
@@ -333,6 +335,17 @@ pub fn searchExcerptSnapshotLocked(self: anytype, item: *const session.TerminalS
 }
 
 pub fn pruneMissingEventLogMetadataLocked(self: anytype) void {
+    const MissingEventLogRef = struct {
+        id: []u8,
+        event_log_path: []u8,
+
+        fn deinit(item: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(item.id);
+            allocator.free(item.event_log_path);
+            item.* = undefined;
+        }
+    };
+
     const database = if (self.database) |*database| database else return;
     const refs = database.listTerminalEventLogs(self.allocator) catch |err| {
         std.log.warn("failed to list terminal metadata for pruning: {t}", .{err});
@@ -343,22 +356,45 @@ pub fn pruneMissingEventLogMetadataLocked(self: anytype) void {
         self.allocator.free(refs);
     }
 
-    var missing_ids: std.ArrayList([]const u8) = .empty;
-    defer missing_ids.deinit(self.allocator);
+    var missing_refs: std.ArrayList(MissingEventLogRef) = .empty;
+    defer {
+        for (missing_refs.items) |*item| item.deinit(self.allocator);
+        missing_refs.deinit(self.allocator);
+    }
 
     self.unlock();
     for (refs) |ref| {
         if (fileExists(ref.event_log_path)) continue;
-        missing_ids.append(self.allocator, ref.id) catch |err| {
+        const id = self.allocator.dupe(u8, ref.id) catch |err| {
+            std.log.warn("failed to copy missing session id {s}: {t}", .{ ref.id, err });
+            continue;
+        };
+        const event_log_path = self.allocator.dupe(u8, ref.event_log_path) catch |err| {
+            std.log.warn("failed to copy missing event log path for {s}: {t}", .{ ref.id, err });
+            self.allocator.free(id);
+            continue;
+        };
+        missing_refs.append(self.allocator, .{ .id = id, .event_log_path = event_log_path }) catch |err| {
+            self.allocator.free(id);
+            self.allocator.free(event_log_path);
             std.log.warn("failed to track missing session metadata {s}: {t}", .{ ref.id, err });
         };
     }
     self.lock();
 
-    const pruning_database = if (self.database) |*value| value else return;
-    for (missing_ids.items) |id| {
-        pruning_database.deleteTerminalSessionMetadata(id) catch |err| {
-            std.log.warn("failed to prune missing session metadata {s}: {t}", .{ id, err });
+    for (missing_refs.items) |ref| {
+        const should_delete = should_delete: {
+            const path = if (self.sessions.find(ref.id)) |item|
+                item.event_log_path orelse ref.event_log_path
+            else
+                ref.event_log_path;
+            break :should_delete !fileExists(path);
+        };
+        if (!should_delete) continue;
+
+        const pruning_database = if (self.database) |*value| value else return;
+        pruning_database.deleteTerminalSessionMetadata(ref.id) catch |err| {
+            std.log.warn("failed to prune missing session metadata {s}: {t}", .{ ref.id, err });
         };
     }
 }
