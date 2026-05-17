@@ -69,6 +69,35 @@ See [docs](docs/README.md) for architecture notes and plans.
 - Run `pnpm fmt` to auto-format TypeScript and Zig. Run `pnpm zig:lsp` inside `nix develop` to verify the Zig language server is available.
 - **Commit messages**: [Conventional Commits](https://www.conventionalcommits.org/).
 
+## Zig Daemon Memory Safety
+
+Fast local checks:
+
+```bash
+pnpm zig:fmt:check
+pnpm zig:test
+pnpm zig:check
+pnpm --filter @tao/daemon check
+```
+
+Leak smoke check:
+
+```bash
+pnpm zig:leak-check
+```
+
+`pnpm zig:leak-check` runs `taod --check` with `TAOD_DEBUG_ALLOC=1` and a temporary `HOME`, so it does not mutate your real `~/.tao`. `TAOD_DEBUG_ALLOC=1` keeps production behavior unchanged except that `main.zig` uses Zig's `std.heap.DebugAllocator`; if the debug allocator reports a leak, `taod` exits nonzero.
+
+When adding Zig code:
+
+- Use `std.testing.allocator` in unit tests so the test runner reports leaks.
+- Use `std.testing.FailingAllocator` or `std.testing.checkAllAllocationFailures` for constructors that allocate multiple owned fields or transfer ownership.
+- Add `errdefer` immediately after every allocation/resource acquired during partial initialization.
+- Exercise create → mutate → remove/deinit paths for sessions, VT state, snapshots, RPC JSON, event-log files, sqlite lookup results, and adapter helpers.
+- Free every caller-owned slice in the same test that receives it.
+
+There is also a manual/nightly GitHub Actions Valgrind workflow (`Memory Tools`). DebugAllocator is the required PR gate; Valgrind is slower and may need investigation if Zig/libc/sqlite/Ghostty report platform-specific noise.
+
 ## License
 
 Tao is licensed under MIT. All contributions are accepted under the same terms.
