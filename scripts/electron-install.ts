@@ -79,13 +79,40 @@ async function installElectron(): Promise<void> {
     arch,
   })
 
-  await rm(distPath, { recursive: true, force: true })
+  await removePath(distPath)
   await mkdir(distPath, { recursive: true })
   extractZip(zipPath, distPath)
   await writeInstallMarkers()
 
   if (!(await isElectronUsable())) {
     throw new Error(`Electron install is incomplete at ${electronDir}`)
+  }
+}
+
+async function removePath(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    return
+  } catch {
+    // Electron's macOS .app bundle can occasionally leave nested framework resources behind
+    // during recursive removal in fresh worktrees. Fall back to the platform shell remover so
+    // predev/setup can repair a partially extracted Electron install instead of failing.
+    if (platform === 'win32') {
+      execFileSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          `$ErrorActionPreference = 'Stop'; Remove-Item -LiteralPath ${JSON.stringify(
+            path,
+          )} -Recurse -Force -ErrorAction SilentlyContinue`,
+        ],
+        { stdio: 'inherit' },
+      )
+      return
+    }
+
+    execFileSync('rm', ['-rf', path], { stdio: 'inherit' })
   }
 }
 
