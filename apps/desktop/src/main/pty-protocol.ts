@@ -1,4 +1,5 @@
 import { Schema } from 'effect'
+import { AgentStatusSchema, AttachSessionModeSchema } from '@tao/shared/taod-protocol'
 
 export const PtySizeSchema = Schema.Struct({
   cols: Schema.Number,
@@ -18,11 +19,26 @@ export const PtyClientMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal('spawn'),
     sessionId: SessionIdSchema,
+    terminalId: Schema.optional(SessionIdSchema),
+    cols: Schema.Number,
+    rows: Schema.Number,
+    cwd: Schema.optional(CwdSchema),
+    argv: Schema.optional(Schema.Array(Schema.String)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('attach'),
+    sessionId: SessionIdSchema,
+    terminalId: Schema.optional(SessionIdSchema),
     cols: Schema.Number,
     rows: Schema.Number,
     cwd: Schema.optional(CwdSchema),
   }),
-  Schema.Struct({ type: Schema.Literal('write'), sessionId: SessionIdSchema, data: Schema.String }),
+  Schema.Struct({ type: Schema.Literal('detach'), sessionId: SessionIdSchema }),
+  Schema.Struct({
+    type: Schema.Literal('write'),
+    sessionId: SessionIdSchema,
+    data: Schema.Union([Schema.String, Schema.Uint8Array]),
+  }),
   Schema.Struct({
     type: Schema.Literal('resize'),
     sessionId: SessionIdSchema,
@@ -30,11 +46,45 @@ export const PtyClientMessageSchema = Schema.Union([
     rows: Schema.Number,
   }),
   Schema.Struct({ type: Schema.Literal('kill'), sessionId: SessionIdSchema }),
+  Schema.Struct({
+    type: Schema.Literal('clear-history'),
+    sessionIds: Schema.optional(Schema.Array(SessionIdSchema)),
+  }),
 ])
 
 export const PtyServiceMessageSchema = Schema.Union([
-  Schema.Struct({ type: Schema.Literal('ready'), sessionId: SessionIdSchema, size: PtySizeSchema }),
-  Schema.Struct({ type: Schema.Literal('data'), sessionId: SessionIdSchema, data: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal('ready'),
+    sessionId: SessionIdSchema,
+    size: PtySizeSchema,
+    seq: Schema.optional(Schema.Number),
+    archived: Schema.optional(Schema.Boolean),
+    attachMode: Schema.optional(AttachSessionModeSchema),
+    agentProvider: Schema.optional(Schema.String),
+    nativeSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('data'),
+    sessionId: SessionIdSchema,
+    data: Schema.String,
+    seq: Schema.optional(Schema.Number),
+    replay: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('resize'),
+    sessionId: SessionIdSchema,
+    cols: Schema.Number,
+    rows: Schema.Number,
+    seq: Schema.optional(Schema.Number),
+    replay: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('snapshot'),
+    sessionId: SessionIdSchema,
+    dataBase64: Schema.String,
+    seq: Schema.optional(Schema.Number),
+    live: Schema.optional(Schema.Boolean),
+  }),
   Schema.Struct({
     type: Schema.Literal('error'),
     sessionId: SessionIdSchema,
@@ -44,6 +94,11 @@ export const PtyServiceMessageSchema = Schema.Union([
     type: Schema.Literal('exit'),
     sessionId: SessionIdSchema,
     info: PtyExitInfoSchema,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('agent'),
+    sessionId: SessionIdSchema,
+    status: AgentStatusSchema,
   }),
 ])
 

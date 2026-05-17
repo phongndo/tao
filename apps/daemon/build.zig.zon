@@ -1,0 +1,21 @@
+.{
+    .name = .taod,
+    .version = "0.1.0",
+    .fingerprint = 0x24b69be944f5f41c, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .ghostty = .{
+            .url = "https://github.com/ghostty-org/ghostty/archive/refs/tags/v1.3.1.tar.gz",
+            .hash = "ghostty-1.3.1-5UdBCwYm-gQeBa4bu1-sMooCQS4KVriv5wWSIJ_sI-Cb",
+        },
+        .sqlite = .{
+            .url = "https://github.com/vrischmann/zig-sqlite/archive/29c0e65a80b38203c010ed31e7a72d2f804649a5.tar.gz",
+            .hash = "sqlite-3.48.0-F2R_a8eODgCnwT0ssaQUTNrsbDeDOtmuOPzF33cgvN13",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

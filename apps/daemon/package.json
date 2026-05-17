@@ -1,0 +1,15 @@
+{
+  "name": "@tao/daemon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tao persistence daemon",
+  "scripts": {
+    "build": "node ../../scripts/taod-zig.mjs build",
+    "check": "node ../../scripts/taod-zig.mjs check",
+    "fmt": "node ../../scripts/zig-tools.mjs fmt apps/daemon",
+    "fmt:check": "node ../../scripts/zig-tools.mjs fmt:check apps/daemon",
+    "lint": "node ../../scripts/zig-tools.mjs lint apps/daemon",
+    "lsp": "zls --version",
+    "test": "node ../../scripts/taod-zig.mjs test"
+  }
+}

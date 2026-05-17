@@ -1,35 +1,223 @@
 # Persistence Plan
 
-**Status**: Planning  
-**Last updated**: 2026-05-16
+**Status**: ✅ Finished — all phases complete  
+**Last updated**: 2026-05-17
+
+The target architecture described below is fully implemented. `taod` is a single
+static Zig binary that owns PTY lifecycle, VT parsing, event logs, current-screen
+snapshots, SQLite metadata, agent adapter spawning, retention, and privacy controls.
+The Electron UI is a thin client that attaches/detaches from daemon sessions.
+No further phases are planned.
 
 ## Overview
 
-Tao's persistence goal is broader than restoring a terminal viewport. Tao is a terminal for
-orchestrating AI agents through CLIs such as `pi`, `codex`, `claude`, and similar tools. Persistence
-therefore needs to preserve three things:
+Tao's persistence goal is **process and agent continuity**, not replaying old shell scrollback. Tao
+is a terminal for orchestrating AI agents through CLIs such as `pi`, `codex`, `claude`, and similar
+tools. Persistence therefore needs to preserve three things:
 
 1. **Live process continuity** — if an AI CLI is still running, Tao should reattach to the same PTY
    and conversation after the UI restarts.
-2. **Instant visual restore** — the terminal should redraw from a compact libghostty-vt snapshot
-   instead of replaying a large log.
-3. **Cold semantic resume** — if the live process is gone, Tao should relaunch supported AI CLIs via
-   their native resume/session mechanisms and show the previous terminal context immediately.
+2. **Native command/session resume** — if the live process is gone, Tao should restart configured
+   terminal apps or relaunch supported AI CLIs via their native resume/session mechanisms.
+3. **Useful metadata, not fake history** — layout, cwd, titles, last command/agent identity, and
+   bounded diagnostic excerpts can be kept, but Tao should not replay old `zsh`/shell scrollback into
+   a new live terminal.
 
 The architecture is a hybrid:
 
-- **`taod` daemon** (Zig) owns PTYs, AI CLI subprocesses, terminal event logs, snapshots, and agent
+- **`taod` daemon** (Zig) owns PTYs, AI CLI subprocesses, terminal event logs, metadata, and agent
   adapters. The Electron UI is a client that attaches/detaches.
-- **libghostty-vt binary snapshots** provide fast visual restore and bounded catch-up. The daemon
-  builds on **`libghostty-vt`**, Ghostty's embeddable virtual-terminal core, as a Zig library — no
-  WASM overhead in the daemon.
-- **Framed PTY event logs** provide crash recovery and precise replay, including resize events.
+- **Optional current-screen snapshots** improve live reattach first paint when a supported backend can
+  serialize the visible screen, but are not a cold shell-history restore mechanism.
+- **Framed PTY event logs** provide diagnostics, bounded excerpts, and agent/session-id extraction;
+  they are not replayed into newly spawned shells.
 - **Agent adapters/hooks** capture native AI CLI session IDs and resume commands.
-- **SQLite** stores session metadata, snapshot metadata, agent session metadata, and searchable
-  excerpts.
+- **SQLite** stores session metadata, optional current-screen metadata, agent session metadata, and
+  searchable excerpts.
 - **JSON files** remain the source of truth for human-editable settings and UI layout.
 
 This replaces the current Zustand `persist` + browser `localStorage` model.
+
+---
+
+## Current Implementation Status
+
+The full daemon/agent-resume architecture below is the target design. The current codebase now has an
+Electron-side persistence slice that reduces data loss and removes renderer-only layout storage, plus
+an initial Zig daemon skeleton/tooling setup while the larger `taod` runtime work is pending.
+
+### Implemented now
+
+- **File-backed UI layout**: pane/workspace/tab layout is persisted to `~/.tao/pane-layouts.json`
+  through Electron main IPC instead of Zustand `persist` + browser `localStorage`.
+- **One-time localStorage migration**: existing `localStorage['tao-workspaces']` data is read once
+  and then removed after a successful migration path is available.
+- **File-backed settings service**: `~/.tao/settings.json` read/write IPC exists with default
+  persistence settings.
+- **Stable pane/session identifiers**: panes now carry `terminalId` and `lastSessionId` so layout
+  identity is separate from terminal session identity.
+- **Stable terminal IDs reach `taod`**: the renderer/preload/MessagePort bridge now forwards
+  `terminalId` separately from `sessionId`, allowing daemon metadata and cold-restart lookup to key
+  panes by their stable terminal identity instead of only the current PTY session id.
+- **Framed PTY event log prototype**: PTY output, resize, and exit frames are appended under
+  `~/.tao/sessions/<session-id>/events.taoev` with sequence numbers and CRC checks.
+- **Hardened event-log parsing**: readers validate the file header, frame CRCs, monotonic sequence
+  numbers, partial tails, and bounded truncation. Raw cold replay into a newly spawned shell is now
+  removed from the app path because replaying arbitrary PTY tails creates fake/stale terminal state.
+- **No cold shell scrollback restore**: if a pane's process is gone, Tao starts a fresh shell or will
+  run the captured CLI/agent resume command. Old `zsh` scrollback is not shown as a restored terminal.
+- **Historical file-store retention maintenance (superseded)**: the old utility PTY service
+  retention/clear-history path has been replaced by daemon-owned retention and clear-history RPCs.
+- **Explicit transitional session APIs**: preload now exposes `createSession`, `attachSession`,
+  `detachSession`, `writeSessionInput`, `resizeSession`, `killSession`, and `onSessionOutput`
+  wrappers over the daemon-backed PTY bridge.
+- **Event-log regression tests**: the daemon framed-log implementation has Zig tests for CRC
+  rejection, partial tails, bounded diagnostics/excerpts, and cleanup behavior.
+- **First-paint/render stability fixes**: the Electron window is shown only after the active pane is
+  ready; inactive terminals no longer signal app readiness; automatic DevTools opening is disabled;
+  terminal surfaces stay hidden through initial fit/resize settle to avoid exposing intermediate
+  Ghostty renders.
+- **Renderer/window reload survival**: closing a BrowserWindow no longer kills PTY ownership because
+  `taod` owns sessions outside the renderer and new renderer ports reconnect through the daemon bridge.
+- **Electron install repair**: `scripts/fix-electron-install.mjs` repairs incomplete Electron binary
+  installs before `dev` / `start`.
+- **Initial Zig daemon skeleton**: `apps/daemon` now exists as a pnpm workspace package with
+  `build.zig`, `src/main.zig`, module boundaries for daemon/session/RPC/PTY/event-log/snapshot/DB/
+  adapter/cleanup/VT work, a real POSIX PTY boundary, SQLite migration strings, and Zig unit tests
+  for the scaffolded pieces. The daemon is buildable but not yet used by the Electron app.
+- **Daemon control RPC/session registry prototype**: `taod` now binds `~/.tao/run/taod.sock`, accepts
+  newline-delimited JSON control requests, handles create/attach/resize/detach/kill against an
+  in-memory session registry, and returns typed JSON responses. Requests now accept the documented
+  `type`/camelCase fields while preserving the scaffold's older `method`/snake_case shape.
+- **Daemon binary stream frame codec**: `apps/daemon/src/rpc.zig` now has a tested binary frame
+  encoder/parser for output, input, resize, snapshot, exit, and agent frames, including session IDs,
+  sequence numbers, payload lengths, CRC checks, partial-tail handling, and packed resize/exit
+  payload helpers. `@tao/shared/taod-protocol` exports matching stream constants for the future
+  Electron client. The stream session-id field is now large enough for Tao's current prefixed UUID
+  session IDs.
+- **Daemon POSIX PTY driver**: `apps/daemon/src/pty.zig` now uses `forkpty`/`execvp`, applies
+  initial and subsequent window sizes, supports PTY input writes, output reads, termination, and
+  non-blocking child-exit polling.
+- **Daemon socket-level attach stream**: `taod` now keeps accepting control clients while per-attach
+  worker threads bridge binary INPUT/RESIZE frames from clients to the PTY and OUTPUT/EXIT frames
+  back to clients. Attach streams now attach to live output only; old event logs are not replayed as
+  terminal scrollback.
+- **Daemon-owned background PTY readers**: each spawned PTY now has a daemon-owned reader thread that
+  continues draining output, appending event logs, and broadcasting to attached clients even while no
+  renderer is attached. A bounded in-memory pending-output buffer covers create-before-attach and
+  short live reattach gaps without replaying cold event-log scrollback.
+- **Daemon-owned event-log writes**: sessions created with an argv now get `events.taoev` files under
+  `~/.tao/sessions/<session-id>/`, and daemon PTY output, resize, and exit frames are appended from
+  the Zig side for diagnostics/metadata extraction, not terminal replay.
+- **Zig-native libghostty-vt integration**: `apps/daemon/src/vt.zig` now isolates the daemon VT
+  parser boundary, session objects own a Zig-native upstream `ghostty-vt` instance, and daemon PTY
+  output/resize events are fed into that state before live stream broadcast. The daemon toolchain is
+  pinned to Zig 0.15.x to match upstream libghostty-vt; the hand-rolled fallback and system C ABI
+  wrapper have been retired.
+- **Current-screen snapshot daemon support**: the VT wrapper now exposes explicit current-screen
+  serialize/deserialize capability, the Ghostty-native backend round-trips a versioned visible-screen
+  VT restore payload, `snapshot.zig` writes/reads a CRC-checked `current-screen.state` envelope, and
+  `taod` checkpoints live current-screen state on detach while also sending snapshot stream frames on
+  attach.
+- **Current-screen snapshot consumption**: the Electron `taod` bridge forwards daemon snapshot stream
+  frames through preload as explicit live-session snapshot events; the renderer decodes the shared
+  snapshot envelope, applies supported Ghostty-native current-screen frames before first paint,
+  suppresses duplicate pending output through the snapshot sequence, and ignores archived/cold/
+  unsupported snapshots instead of treating them as shell-history restore.
+- **Current-screen snapshot compatibility tests**: TypeScript stream tests cover snapshot envelope CRC
+  validation, native/fallback payload decoding/rendering, unsupported backend gating, and binary
+  stream carriage of snapshot frames.
+- **Daemon-owned retention and clear-history controls**: `taod` now accepts control RPCs for
+  `clear-history` and `cleanup`. Live/in-memory sessions keep their PTYs while their event logs and
+  excerpts are reset, inactive session directories can be deleted by explicit clear-history, and
+  retention cleanup honors configured age/size limits while preserving sessions known to the daemon
+  or Electron bridge.
+- **Initial daemon SQLite layer via `zig-sqlite`**: `taod` now opens `~/.tao/tao.db`, applies ordered
+  migrations for `terminal_sessions`, `agent_sessions`, and FTS search, and mirrors terminal session
+  create/attach/resize/detach/exit metadata outside the PTY-output hot path. The earlier hand-rolled
+  `sqlite3` C ABI declarations were replaced with the `vrischmann/zig-sqlite` package in
+  `apps/daemon/build.zig.zon` with FTS5 enabled.
+- **SQLite restart/search metadata expansion**: `taod` can now look up persisted terminal-session
+  rows by session/terminal id, prune metadata for deleted diagnostic logs, clear stale FTS rows when
+  history is reset, store bounded search excerpts in `terminal_search`, and query indexed excerpts.
+- **Cold command relaunch from metadata**: when an attach targets a session that is not in the
+  in-memory daemon registry, `taod` reads the saved `argv_json`/cwd/size metadata and starts a new
+  PTY with that command instead of replaying old scrollback. If the restart command cannot be run,
+  Electron still falls back to creating a fresh shell.
+- **Agent adapter spawning and built-in scripts**: `taod` now looks for adapter scripts in
+  `TAOD_ADAPTER_DIR` or `~/.tao/adapters`, spawns `pi.js`, `codex.js`, and `claude.js` with the
+  documented NDJSON-style command contract, captures native session ids from adapter output or argv
+  flags, stores `agent_sessions` rows, and prefers stored adapter resume argv when cold-starting a
+  previously agent-driven terminal. The desktop build copies bundled adapters next to the bundled
+  daemon and passes the adapter directory to `taod`.
+- **Electron main `taod` bridge**: the desktop main process now has a `TaodClient` that launches or
+  connects to `taod`, translates the existing MessagePort session protocol to daemon JSON control
+  RPC plus binary stream frames, creates shell sessions through the daemon, streams output/resize/exit
+  frames back to the renderer, and forwards clear-history/retention maintenance to the daemon.
+- **Renderer daemon attach path**: terminal panes now use the explicit session APIs for attach,
+  input, resize, kill, output, exit, and errors. Attach results carry whether Tao reattached live,
+  started fresh, relaunched a saved command, or resumed an agent; command/agent resume results are
+  surfaced in the terminal UI without replaying old scrollback.
+- **Daemon-only desktop PTY path**: the Electron main process no longer falls back to the legacy
+  utility-process `pty-service` path. If `taod` cannot be launched or reached, the renderer receives
+  an explicit daemon-unavailable error instead of silently switching persistence backends.
+- **Production daemon bundling**: desktop production builds now copy the built `taod` binary into
+  the Electron output (`out/bin/taod`), and the desktop client resolves that bundled binary before
+  falling back to source-tree development paths or `TAOD_PATH`.
+- **Daemon lifecycle supervision**: the Electron `TaodClient` now health-checks `taod`, restarts it
+  after process exit/crash, and retries startup instead of treating the daemon as a one-shot child.
+- **Slow-client backpressure policy**: daemon attach sockets are switched to non-blocking mode for
+  stream writes; subscribers that cannot keep up are explicitly dropped while PTY draining, event-log
+  append, VT state, and other subscribers continue.
+- **Legacy Electron event-log scaffold removed**: the old desktop-side `session-persistence` event-log
+  writer/replay helper and `node-pty` install repair hook are gone; event logs are daemon-owned
+  diagnostics only and are not a desktop fallback backend.
+- **Zig tooling and CI support**: Nix now provides Zig 0.15.x, matching ZLS, and `nixpkgs-fmt`; root
+  pnpm `zig:*` scripts wrap build/test/lint/format/LSP checks; CI installs Zig 0.15.2, pins macOS jobs
+  to macOS 15 for that toolchain, runs `pnpm check`, verifies the Nix dev-shell/ZLS path, and builds
+  `taod` before desktop production builds.
+- **Daemon-side persistence privacy controls**: desktop settings now sync `persistence.enabled` and
+  `persistInput` into `taod`. Disabling persistence keeps live PTY/process continuity in memory but
+  stops daemon event-log, excerpt, snapshot, SQLite metadata, search, and agent-resume writes before
+  terminal output is persisted. Optional input-frame logging remains off by default and is gated by
+  `persistInput`.
+- **Phase 12 stress/fault coverage**: persistence tests now cover oversized daemon control payloads,
+  attach-stream tails, failed/slow subscriber dropping, bounded large pending-output frames, bursty
+  stream parsing, oversized stream headers, and corrupt agent-resume metadata falling back to saved
+  command metadata instead of failing cold resume.
+
+### Important limitations of the current slice
+
+- There is now an **Electron-integrated `taod` path**, and it is the only desktop PTY backend. The
+  main process launches/connects to a bundled daemon in production builds and supervises daemon
+  health, but OS-level launch-agent/service integration is still future work.
+- Live reattach in the shipping Electron path now depends on the daemon staying alive. The daemon path
+  keeps PTYs outside the renderer/window and drains detached PTY output in daemon-owned reader
+  threads. Electron now supervises/restarts `taod`, but a daemon crash still downgrades existing
+  terminals to command/agent resume because arbitrary Unix process memory cannot be resurrected.
+- Native current-screen snapshots are **visible-screen restore payloads**, not cold scrollback. The
+  daemon serializes the active libghostty-vt screen to VT restore bytes and the renderer applies them
+  only for live first paint; archived/cold snapshots are still ignored rather than replayed as shell
+  history.
+- There is **no cold terminal scrollback restore by design**. Dead sessions start fresh or resume via
+  native CLI/agent mechanisms; event-log excerpts are for diagnostics/search/adapter detection.
+- There is an **expanded SQLite metadata layer**. `terminal_sessions`, basic `agent_sessions`, and
+  FTS excerpt indexing now exist for internal diagnostics. By design, there is no user-facing search
+  UI — persistence is invisible; the user sees their terminals, not session metadata.
+- There is an **external adapter-script runtime** with built-in `pi`/`codex`/`claude` scripts and a
+  built-in argv heuristic fallback. Adapter execution is intentionally small and optional; richer
+  provider-specific transcript discovery and third-party adapter hardening are still future work.
+- Persistence can now be disabled for the daemon path, but existing on-disk history is intentionally
+  left in place until the user runs Clear History or retention cleanup removes it.
+
+### Next recommended work
+
+1. **Harden and expand agent adapters** so third-party providers can add richer discovery/resume
+   logic, adapter timeouts, and transcript parsing without recompiling `taod`.
+2. **Harden/package native VT snapshots** by fuzzing the Ghostty-native snapshot decoder, bounding
+   renderer apply failures, and documenting compatibility for older fallback snapshot payloads.
+3. **Harden privacy controls** with more granular policies for metadata-only, excerpts-only, and
+   provider-specific agent transcript discovery.
 
 ---
 
@@ -37,11 +225,11 @@ This replaces the current Zustand `persist` + browser `localStorage` model.
 
 Tao should make explicit, honest guarantees:
 
-| Level | Scenario | Restore behavior |
-|---|---|---|
-| **1. Live reattach** | `taod` and the PTY process are still alive | Reattach to the same PTY and same AI CLI process. This is true full restore. |
-| **2. Agent resume** | PTY/process died, but Tao captured a supported AI CLI native session ID | Restore terminal snapshot immediately, spawn the adapter-specific resume command, attach to the new PTY. |
-| **3. Visual archive** | No live process and no known resume path | Restore terminal snapshot/transcript as an archived terminal view; user can start a fresh shell. |
+| Level                       | Scenario                                                                 | Restore behavior                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| **1. Live reattach**        | `taod` and the PTY process are still alive                               | Reattach to the same PTY and same AI CLI process. This is true full restore.                                |
+| **2. Agent/command resume** | PTY/process died, but Tao captured a supported resume command/session ID | Spawn the adapter-specific resume command or saved terminal preset and attach to the new PTY.               |
+| **3. Fresh shell fallback** | No live process and no known resume path                                 | Restore layout/cwd and start a fresh shell. Do not replay old shell scrollback as if it were live terminal. |
 
 Tao cannot generally resurrect arbitrary dead Unix process memory. Full live-process restore requires
 keeping the process alive in `taod`.
@@ -50,17 +238,17 @@ keeping the process alive in `taod`.
 
 ## Goals
 
-| Goal | Why |
-|---|---|
-| **Live AI CLI reattach** | Closing/restarting Tao UI must not kill long-running AI agent chats. |
-| **Instant visual restore** | Deserialize a libghostty-vt checkpoint, then replay only the small event-log tail. |
-| **Crash resilience** | Event logs allow recovery if the latest snapshot is missing/corrupted. |
-| **Agent-aware cold resume** | Capture native AI session IDs and relaunch supported agents after daemon/process death. |
-| **Pane/session correctness** | Sessions attach to logical terminal/pane IDs, not just workspaces. |
-| **Efficient hot path** | PTY output is bytes → log append → libghostty-vt parser → stream; no SQLite writes per chunk. |
-| **Searchable history** | Store bounded plaintext excerpts/FTS rows for search without indexing huge binary logs. |
-| **Effect-TS services** | DB/file/daemon services use Effect layers and typed errors across desktop/taod bridge. |
-| **Security/privacy** | Terminal logs can contain secrets; use restrictive permissions, retention controls, and clear-history UX. |
+| Goal                         | Why                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Live AI CLI reattach**     | Closing/restarting Tao UI must not kill long-running AI agent chats.                                      |
+| **Command/app relaunch**     | If no live process exists, restart the saved command/preset instead of showing stale shell history.       |
+| **Crash resilience**         | Event logs and metadata support diagnostics and agent/session-id extraction after failures.               |
+| **Agent-aware cold resume**  | Capture native AI session IDs and relaunch supported agents after daemon/process death.                   |
+| **Pane/session correctness** | Sessions attach to logical terminal/pane IDs, not just workspaces.                                        |
+| **Efficient hot path**       | PTY output is bytes → log append → libghostty-vt parser → stream; no SQLite writes per chunk.             |
+| **Searchable excerpts**      | Store bounded plaintext excerpts/FTS rows for search/debug without treating them as terminal restore.     |
+| **Effect-TS services**       | DB/file/daemon services use Effect layers and typed errors across desktop/taod bridge.                    |
+| **Security/privacy**         | Terminal logs can contain secrets; use restrictive permissions, retention controls, and clear-history UX. |
 
 ---
 
@@ -92,7 +280,7 @@ keeping the process alive in `taod`.
     ├── PtyDriver               owns PTY master fds and child processes
     ├── LibghosttyVt            Zig-native libghostty-vt parser/state (no WASM)
     ├── EventLog                append-only framed PTY log
-    ├── SnapshotStore           libghostty-vt binary checkpoints (zstd)
+    ├── SnapshotStore           current-screen VT restore snapshots
     ├── AgentRegistry           spawns adapter scripts for pi/codex/claude
     ├── SqliteDb                session/agent metadata (zig-sqlite)
     └── Maintenance             retention, cleanup, integrity checks
@@ -108,12 +296,12 @@ Killing is explicit: `Kill Session`, `Stop Agent`, or retention cleanup after co
 
 ## Why Zig for `taod`
 
-| Factor | Reason |
-|---|---|
+| Factor                 | Reason                                                                                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **libghostty-vt link** | `libghostty-vt` is Ghostty's embeddable VT core for parsing terminal sequences and maintaining terminal state. `taod` links it directly as a Zig library — no WASM, no JS ABI boundary. |
-| **Self-contained** | Single static binary. No Node runtime, no npm dependencies, no version conflicts with the Electron app. |
-| **Performance** | PTY hot path is memory-safe zero-copy: PTY read → libghostty-vt parser → event log append → socket broadcast. All in one process, no GC pauses. |
-| **Same snapshot format, two runtimes** | The serialization extension lives at the `libghostty-vt` layer and emits a stable snapshot format consumed by both native `taod` and the renderer's Ghostty WASM build. |
+| **Self-contained**     | Single static binary. No Node runtime, no npm dependencies, no version conflicts with the Electron app.                                                                                 |
+| **Performance**        | PTY hot path is memory-safe zero-copy: PTY read → event log append/metadata extraction → socket broadcast. All in one process, no GC pauses.                                            |
+| **Optional VT state**  | A VT layer can later provide current-screen state for live reattach polish, but not cold scrollback replay.                                                                             |
 
 Trade-off acknowledged:
 
@@ -127,10 +315,10 @@ Trade-off acknowledged:
 
 `taod` is headless. It needs Ghostty's virtual-terminal core, not a renderer or platform frontend.
 
-Use `libghostty-vt` for:
+If linked later, use `libghostty-vt` for:
 
 - VT escape sequence parsing
-- screen, scrollback, cursor, styles, colors, and modes
+- current screen, cursor, styles, colors, and modes
 - resize/reflow
 - render-state data for clients
 - plain-text/formatter extraction for search
@@ -144,10 +332,15 @@ Do **not** put Ghostty's GUI/platform layer in `taod`:
 - no renderer event loop
 
 Tao owns daemon/session/process concerns around the VT core: PTY lifecycle, live reattach, event
-logs, snapshots, SQLite metadata, retention, and AI-agent resume orchestration.
+logs, SQLite metadata, retention, and AI-agent resume orchestration.
 
-Note: `libghostty-vt` is still API-in-flux upstream. Tao should wrap it behind `apps/taod/src/vt.zig`
+Note: `libghostty-vt` is still API-in-flux upstream. Tao should wrap it behind `apps/daemon/src/vt.zig`
 so upstream API churn is isolated to one file.
+
+Current implementation note: Tao's wrapper is now present and fed by the daemon hot path. The daemon
+toolchain is pinned to Zig 0.15.x to match upstream libghostty-vt, `build.zig.zon` depends on the
+Ghostty package, and `vt_ghostty_native.zig` imports the upstream `ghostty-vt` Zig module. The old
+hand-rolled fallback and system `libghostty-vt` C ABI wrapper have been retired.
 
 ---
 
@@ -164,7 +357,7 @@ so upstream API churn is isolated to one file.
 ├── sessions/
 │   └── <session-id>/
 │       ├── events.taoev           # Framed PTY event log, append-only
-│       ├── snapshot.state.zst     # Latest compressed libghostty-vt checkpoint
+│       ├── current-screen.state   # Optional future live-reattach first-paint state
 │       └── excerpt.txt            # Bounded plain text excerpt for search/debug
 └── adapters/                      # Optional agent adapter scripts
     ├── pi.js
@@ -192,7 +385,7 @@ tao/
 │           └── taod-protocol.ts            NEW: daemon RPC/stream message schemas
 │
 ├── apps/
-│   ├── taod/                               NEW: Zig daemon package
+│   ├── daemon/                               NEW: Zig daemon package
 │   │   ├── build.zig
 │   │   ├── build.zig.zon
 │   │   ├── src/
@@ -201,27 +394,25 @@ tao/
 │   │   │   ├── rpc.zig                     JSON control RPC + binary stream frames
 │   │   │   ├── session.zig                 terminal session state machine
 │   │   │   ├── pty.zig                     PTY master via posix_openpt / fork
-│   │   │   ├── vt.zig                      libghostty-vt wrapper / API isolation
+│   │   │   ├── vt.zig                      VT wrapper / API isolation
+│   │   │   ├── vt_ghostty_native.zig       Zig-native ghostty-vt adapter
 │   │   │   ├── event_log.zig               framed binary log, append/read/seek
 │   │   │   ├── snapshot.zig                zstd compress/decompress, file I/O
 │   │   │   ├── db.zig                      SQLite schema, migrations, queries
 │   │   │   ├── adapter.zig                 agent adapter process spawning
 │   │   │   └── cleanup.zig                 retention, periodic maintenance
-│   │   └── libghostty-vt/                  (git submodule or Zig dependency)
-│   │       └── src/                        Ghostty virtual-terminal core
+│   │   └── build.zig.zon                   includes Ghostty Zig package dependency
 │   │
 │   └── desktop/
 │       ├── package.json                    MODIFY: add build:taod script
-│       ├── patches/
-│       │   └── libghostty-vt-snapshot.patch NEW: snapshot exports for WASM build
 │       └── src/
 │           ├── main/
 │           │   ├── index.ts                MODIFY: launch/connect taod, bridge IPC
 │           │   ├── taod-client.ts          NEW: Unix socket control/stream client
-│           │   ├── session-ipc.ts          NEW: session IPC handlers
+│           │   ├── taod-pty-bridge.ts      daemon MessagePort session bridge
 │           │   ├── layout-store.ts         NEW: pane-layouts.json service
 │           │   ├── settings-store.ts       NEW: settings.json service
-│           │   └── pty-service.ts          REMOVE/REPLACE with taod bridge
+│           │   └── pty-service.ts          removed/replaced with taod bridge
 │           ├── preload/
 │           │   └── index.ts                MODIFY: expose session APIs
 │           └── renderer/
@@ -233,73 +424,48 @@ tao/
 
 ---
 
-## libghostty-vt Integration (the key insight)
+## Zig-native libghostty-vt Integration
 
-`libghostty-vt` is Ghostty's embeddable virtual-terminal core. It handles VT parsing,
-terminal state, scrollback, resize/reflow, modes, styles, render state, input encoding, and
-formatting. `taod` imports this layer as a Zig dependency instead of using Ghostty's app/frontend
-code:
+`libghostty-vt` is Ghostty's embeddable virtual-terminal core. It can handle VT parsing, current
+screen state, resize/reflow, modes, styles, render state, input encoding, and formatting. Tao now
+imports Ghostty's upstream `ghostty-vt` Zig module directly from `build.zig.zon` and wraps it behind
+`apps/daemon/src/vt.zig` / `vt_ghostty_native.zig` so upstream API churn remains isolated. Tao still
+must not use VT state to replay old shell scrollback after a process is gone.
 
 ```zig
-// apps/taod/src/vt.zig
-const vt = @import("libghostty_vt");
+// apps/daemon/src/vt_ghostty_native.zig
+const ghostty_vt = @import("ghostty-vt");
 
 pub const Terminal = struct {
-    inner: vt.Terminal,
+    handle: *ghostty_vt.Terminal,
+    stream: ghostty_vt.ReadonlyStream,
 
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Terminal {
-        const inner = try vt.Terminal.init(allocator, .{
-            .cols = cols,
-            .rows = rows,
-            .max_scrollback = 10_000,
-        });
-        return .{ .inner = inner };
+        // Allocate the upstream terminal on the heap so the stream's handler
+        // pointer remains stable even if Tao session structs move in memory.
     }
 
-    pub fn write(self: *Terminal, bytes: []const u8) void {
-        self.inner.vtWrite(bytes);
+    pub fn write(self: *Terminal, bytes: []const u8) !void {
+        try self.stream.nextSlice(bytes);
     }
 
-    pub fn serialize(self: *Terminal, allocator: std.mem.Allocator) ![]u8 {
-        // Calls Tao's libghostty-vt snapshot extension.
-        // Produces a stable, pointer-free, versioned binary snapshot.
-        // Compression is applied by SnapshotStore, not by the terminal core.
-    }
-
-    pub fn deserialize(self: *Terminal, data: []const u8) !void {
-        // Restore terminal state from snapshot.
+    pub fn serializeCurrentScreenAlloc(self: *const Terminal, allocator: std.mem.Allocator) ![]u8 {
+        // Emit a versioned Tao wrapper around Ghostty's VT formatter output.
+        // This is a live visible-screen payload, not a cold scrollback format.
     }
 };
 ```
 
-This is the single most important performance advantage: the daemon never goes through WASM JS glue
-for terminal parsing. It calls `libghostty-vt` directly. The daemon still owns PTY lifecycle,
-session management, persistence, and agent orchestration; `libghostty-vt` owns terminal emulation.
-
-### The snapshot extension
-
-The snapshot extension should live at the `libghostty-vt` boundary and serve two builds:
-
-1. **Native Zig** (`taod` binary) — direct `libghostty-vt` calls, no WASM overhead.
-2. **WASM target** (`ghostty-web` / renderer build) — exports the same snapshot read/write
-   functions through WASM.
-
-```zig
-// shared serialization logic, compiled for both targets
-pub fn terminalSerialize(term: *vt.Terminal, writer: anytype) !void { ... }
-pub fn terminalDeserialize(term: *vt.Terminal, reader: anytype) !void { ... }
-```
-
-If upstream `libghostty-vt` does not expose snapshot APIs, Tao maintains a small extension and
-upstreams it if possible. The patch file in `apps/desktop/patches/libghostty-vt-snapshot.patch`
-patches the renderer/WASM build to export the same snapshot functions. The format must be stable,
-versioned, endian-defined, pointer-free, CRC-checked, and tagged with the libghostty-vt version.
+The daemon still owns PTY lifecycle, session management, persistence, and agent orchestration. Native
+current-screen snapshots are stable, versioned, endian-defined, pointer-free, CRC-checked visible-
+screen restore payloads. Historical scrollback remains outside the live-reattach contract.
 
 ---
 
 ## SQLite
 
-`taod` uses a Zig SQLite binding (either `zig-sqlite` package or direct `sqlite3.h` C ABI calls).
+`taod` uses the `vrischmann/zig-sqlite` package declared via `build.zig.zon`, replacing the
+earlier hand-rolled `extern "c" fn` C ABI calls with a type-safe Zig binding.
 Schema uses STRICT tables, WAL, foreign keys.
 
 ### Migration 001 — `terminal_sessions`
@@ -417,22 +583,22 @@ Repeated frames:
 
 Frame kinds:
 
-| Kind | Payload |
-|---|---|
-| `OUTPUT` | raw PTY bytes (use encoding:null) |
-| `INPUT` | optional user input bytes (default off, privacy setting) |
-| `RESIZE` | `{ cols: u16, rows: u16 }` |
-| `TITLE` | UTF-8 title string |
-| `CWD` | UTF-8 cwd string |
-| `AGENT_EVENT` | adapter-specific JSON |
-| `SNAPSHOT_MARK` | `{ snapshot_seq: u64, snapshot_path: str }` |
-| `EXIT` | `{ exit_code: i32, signal: i32 }` |
+| Kind            | Payload                                                  |
+| --------------- | -------------------------------------------------------- |
+| `OUTPUT`        | raw PTY bytes (use encoding:null)                        |
+| `INPUT`         | optional user input bytes (default off, privacy setting) |
+| `RESIZE`        | `{ cols: u16, rows: u16 }`                               |
+| `TITLE`         | UTF-8 title string                                       |
+| `CWD`           | UTF-8 cwd string                                         |
+| `AGENT_EVENT`   | adapter-specific JSON                                    |
+| `SNAPSHOT_MARK` | `{ snapshot_seq: u64, snapshot_path: str }`              |
+| `EXIT`          | `{ exit_code: i32, signal: i32 }`                        |
 
 Important rules:
 
 - `seq` is monotonically increasing per terminal session.
-- Each snapshot records the `seq` up to which state is fully captured.
-- Reopen flow: `deserialize(snapshot)` → replay frames after `snapshot_seq`.
+- Event logs are not replayed into newly spawned shells. They are retained for diagnostics, bounded
+  excerpts, and adapter/session-id extraction.
 - SQLite stores metadata, not each frame. The frames live on disk.
 
 ---
@@ -440,8 +606,8 @@ Important rules:
 ## Daemon Protocol — control RPC + binary stream
 
 Taod exposes local Unix domain sockets under `~/.tao/run/`. Use JSON/NDJSON only for low-volume
-control messages. PTY output, snapshots, and event-log catch-up use binary frames to avoid base64
-overhead.
+control messages. PTY output and client input/resize events use binary frames to avoid base64
+overhead. Event-log catch-up is intentionally not part of attach semantics.
 
 ### Control messages (request/response)
 
@@ -475,7 +641,7 @@ payload[length]
 kind=OUTPUT     payload = raw PTY bytes
 kind=INPUT      payload = raw user input bytes (client → daemon)
 kind=RESIZE     payload = packed cols/rows
-kind=SNAPSHOT   payload = compressed snapshot bytes
+kind=SNAPSHOT   payload = live current-screen snapshot envelope bytes
 kind=EXIT       payload = packed exit_code/signal
 kind=AGENT      payload = compact JSON/msgpack agent status
 ```
@@ -483,8 +649,9 @@ kind=AGENT      payload = compact JSON/msgpack agent status
 Backpressure:
 
 - Active pane receives live bytes.
-- If the client falls behind, taod sends a fresh snapshot and discards the backlog for that client.
-- Background panes may receive coalesced output or periodic snapshot refreshes only.
+- If the client falls behind, taod may drop/coalesce output for that client rather than attempting to
+  replay a full historical scrollback.
+- Background panes may receive coalesced output only.
 
 ---
 
@@ -532,16 +699,21 @@ switch (msg.command) {
     // Scan terminal output / env / files for native session id
     const sessionDir = msg.sessionDir
     const match = readFileSync(`${sessionDir}/events.taoev`)
-      .toString().match(/pi-session-([a-f0-9]+)/)
-    process.stdout.write(JSON.stringify({
-      nativeSessionId: match?.[1] ?? null
-    }) + '\n')
+      .toString()
+      .match(/pi-session-([a-f0-9]+)/)
+    process.stdout.write(
+      JSON.stringify({
+        nativeSessionId: match?.[1] ?? null,
+      }) + '\n',
+    )
     break
   }
   case 'resume-command': {
-    process.stdout.write(JSON.stringify({
-      argv: ['pi', '--session', msg.nativeSessionId]
-    }) + '\n')
+    process.stdout.write(
+      JSON.stringify({
+        argv: ['pi', '--session', msg.nativeSessionId],
+      }) + '\n',
+    )
     break
   }
 }
@@ -557,22 +729,22 @@ Tao opens previous terminal
   ├─► if provider + native_session_id:
   │      spawn adapter.resumeCommand()
   │      attach new PTY
-  └─► else: show archived snapshot/transcript
+  └─► else: start a fresh shell or saved pane command without replaying old scrollback
 ```
 
 ---
 
 ## Source of Truth Decisions
 
-| Data | Source of truth | Notes |
-|---|---|---|
-| Terminal session metadata | SQLite | Written by taod. |
-| Agent resume metadata | SQLite | Written by taod via adapter scripts. |
-| Search excerpts | SQLite FTS | Bounded text only. |
-| UI layout/workspaces/tabs/panes | `pane-layouts.json` | Loaded before rendering app shell. |
-| User settings | `settings.json` | Human-editable. |
-| PTY output | `events.taoev` files | Append-only binary logs. |
-| Terminal state | `snapshot.state.zst` files | Compressed libghostty-vt snapshots. |
+| Data                            | Source of truth          | Notes                                                   |
+| ------------------------------- | ------------------------ | ------------------------------------------------------- |
+| Terminal session metadata       | SQLite                   | Written by taod.                                        |
+| Agent resume metadata           | SQLite                   | Written by taod via adapter scripts.                    |
+| Search excerpts                 | SQLite FTS               | Bounded text only.                                      |
+| UI layout/workspaces/tabs/panes | `pane-layouts.json`      | Loaded before rendering app shell.                      |
+| User settings                   | `settings.json`          | Human-editable.                                         |
+| PTY output                      | `events.taoev` files     | Append-only diagnostics/excerpts; not terminal restore. |
+| Terminal state                  | Live daemon PTY/VT state | Optional future current-screen snapshots only.          |
 
 ---
 
@@ -581,7 +753,7 @@ Tao opens previous terminal
 ### Build
 
 ```zig
-// apps/taod/build.zig
+// apps/daemon/build.zig
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -592,23 +764,17 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSafe,
     });
 
-    // Link libghostty-vt as a Zig dependency
-    const libghostty_vt = b.dependency("libghostty_vt", .{});
-    exe.root_module.addImport("libghostty_vt", libghostty_vt.module("vt"));
+    // Link Ghostty's Zig-native libghostty-vt module from build.zig.zon.
+    const ghostty = b.dependency("ghostty", .{ .target = target, .optimize = optimize, .simd = false });
+    exe.root_module.addImport("ghostty-vt", ghostty.module("ghostty-vt"));
 
-    // Link sqlite3
-    exe.linkSystemLibrary("sqlite3");
+    // Import zig-sqlite from build.zig.zon with FTS5 enabled in b.dependency(...).
+    const sqlite = b.dependency("sqlite", .{ .target = target, .optimize = optimize, .fts5 = true });
+    exe.root_module.addImport("sqlite", sqlite.module("sqlite"));
 
-    // Build snapshot exports for the renderer/WASM build
-    const wasm_step = b.addObject(.{
-        .name = "libghostty-vt-snapshot",
-        .root_source_file = b.path("src/serialize.zig"),
-        .target = .{ .cpu_arch = .wasm32, .os_tag = .wasi },
-        .optimize = .ReleaseSmall,
-    });
+    // vt_ghostty_native.zig owns Tao's current-screen snapshot format.
 
     b.installArtifact(exe);
-    b.installArtifact(wasm_step);
 }
 ```
 
@@ -648,12 +814,16 @@ async function ensureTaodRunning() {
 ```json
 {
   "version": 2,
-  "workspaces": [
-    { "id": "tao:local", "name": "Local", "projectPath": null, "order": 0 }
-  ],
+  "workspaces": [{ "id": "tao:local", "name": "Local", "projectPath": null, "order": 0 }],
   "activeWorkspaceId": "tao:local",
   "tabs": [
-    { "id": "tab-xxx", "workspaceId": "tao:local", "name": "Terminal", "layout": "pane-yyy", "order": 0 }
+    {
+      "id": "tab-xxx",
+      "workspaceId": "tao:local",
+      "name": "Terminal",
+      "layout": "pane-yyy",
+      "order": 0
+    }
   ],
   "panes": [
     {
@@ -688,8 +858,7 @@ User creates pane/tab or starts AI agent
   ├─► taod: INSERT terminal_sessions (status='live')
   ├─► taod: create session dir, init event log
   ├─► taod: posix_openpt() → fork/exec shell or agent CLI
-  ├─► taod: start libghostty-vt terminal state for this session
-  └─► Renderer: attach → receive snapshot + live stream
+  └─► Renderer: attach → receive live stream
 ```
 
 ### Detach
@@ -698,7 +867,7 @@ User creates pane/tab or starts AI agent
 Pane hidden / window closed / renderer reloads
   ├─► Renderer unsubscribes
   ├─► Main sends detach to taod
-  └─► taod keeps PTY + libghostty-vt state + event log running
+  └─► taod keeps PTY + event log running
 ```
 
 ### Kill
@@ -708,19 +877,16 @@ User explicitly kills session
   ├─► taod sends SIGTERM to PTY child (then SIGKILL after grace)
   ├─► writes EXIT frame to event log
   ├─► updates terminal_sessions status/ended_at
-  └─► keeps snapshot/log until retention cleanup or clear-history
+  └─► keeps metadata/log until retention cleanup or clear-history
 ```
 
-### Snapshot
+### Optional current-screen snapshot
 
-```
-Timer (30s) / output threshold (1MB) / before shutdown
-  ├─► libghostty-vt snapshot extension serialize()
-  ├─► zstd compress
-  ├─► atomic write snapshot.state.zst.tmp → snapshot.state.zst
-  ├─► update snapshot_seq/crc/size in DB
-  └─► write SNAPSHOT_MARK frame to event log
-```
+Compact current-screen snapshots make live reattach first paint nicer when the daemon backend can
+serialize the current visible screen. These snapshots must not be used to fake a dead shell/app
+restore; if the process is gone, Tao should run a native resume command or start fresh. The renderer
+currently applies Ghostty-native VT restore payloads for live first paint and ignores archived/cold
+or unsupported formats.
 
 ### Reattach
 
@@ -729,9 +895,9 @@ Tao UI starts
   ├─► load pane-layouts.json before rendering terminals
   ├─► connect to taod socket
   ├─► for each visible pane: attach(lastSessionId | terminalId)
-  ├─► if live: receive snapshot + live stream
-  ├─► if not live but resumable: show snapshot, spawn resume command via adapter
-  └─► if archived: show visual archive
+  ├─► if live: attach to the existing PTY/process
+  ├─► if not live but resumable: spawn resume command via adapter
+  └─► else: restore layout/cwd and start a fresh shell or saved pane command
 ```
 
 ---
@@ -766,7 +932,8 @@ interface ElectronAPI {
 
 ## Search
 
-Bounded plaintext excerpts extracted periodically through libghostty-vt formatter/grid APIs and stored in SQLite FTS5.
+Bounded plaintext excerpts can be extracted from logs or future VT state and stored in SQLite FTS5.
+Search results are references/debug context, not terminal scrollback restoration.
 
 ```sql
 SELECT terminal_session_id, title, snippet(terminal_search, 3, '[', ']', '…', 12)
@@ -782,7 +949,7 @@ LIMIT 20;
 
 Configurable maintenance runs in taod:
 
-- delete archived/exited sessions older than retention period (default 30 days).
+- delete exited/killed diagnostic logs older than retention period (default 30 days).
 - cap total `~/.tao/sessions` size (default 2 GB).
 - keep `status = 'live'` or `'detached'` sessions regardless of age.
 - explicit "Clear History" per session / per workspace / all.
@@ -791,26 +958,26 @@ Configurable maintenance runs in taod:
 
 ## Edge Cases
 
-| Scenario | Handling |
-|---|---|
-| **Renderer crash/reload** | Reconnect to taod; live PTY never dies. |
-| **Electron app quit** | Default detach; taod keeps sessions alive. |
-| **Daemon crash** | Load latest snapshot + event tail. If agent resumable, spawn resume command via adapter. |
-| **Machine reboot** | No live PTY process. Use agent resume if available, else archive restore. |
-| **Snapshot corrupted** | CRC/version failure → load prior snapshot if available, else replay event log from start. |
-| **Event log tail huge** | Periodic snapshots bound replay. If renderer lags, taod sends fresh snapshot. |
-| **Resize during replay** | Event log includes RESIZE frames with seq; replay at correct dimensions. |
-| **Multiple panes per workspace** | Sessions keyed by terminal_id/lastSessionId, not workspace. |
-| **Secrets in terminal output** | User can disable persistence, reduce retention, clear history, or chmod session files. |
+| Scenario                         | Handling                                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Renderer crash/reload**        | Reconnect to taod; live PTY never dies.                                                  |
+| **Electron app quit**            | Default detach; taod keeps sessions alive.                                               |
+| **Daemon crash**                 | Live processes are gone. Use native agent/command resume if available, else start fresh. |
+| **Machine reboot**               | No live PTY process. Use agent/command resume if available, else start fresh.            |
+| **Snapshot corrupted**           | Ignore the snapshot; do not replay event logs into a fake live terminal.                 |
+| **Event log tail huge**          | Retention/clear-history handles disk use; attach does not replay the tail.               |
+| **Resize while detached**        | Store latest size metadata and apply it to live/fresh sessions.                          |
+| **Multiple panes per workspace** | Sessions keyed by terminal_id/lastSessionId, not workspace.                              |
+| **Secrets in terminal output**   | User can disable persistence, reduce retention, clear history, or chmod session files.   |
 
 ---
 
 ## Dependencies
 
-### Zig (apps/taod)
+### Zig (apps/daemon)
 
-- `libghostty-vt` Zig package or C API from Ghostty (git submodule or Zig dependency).
-- `zig-sqlite` or direct `sqlite3.h` C ABI.
+- Ghostty Zig package via `build.zig.zon`; `taod` imports its `ghostty-vt` module directly.
+- `vrischmann/zig-sqlite` via `build.zig.zon` (replaced earlier hand-rolled `sqlite3.h` C ABI).
 - `zstd` via Zig package or system library.
 - No Node/npm dependencies in the daemon itself.
 
@@ -823,38 +990,42 @@ Configurable maintenance runs in taod:
 ### Maintainers only
 
 ```bash
-brew install zig
-zig version  # 0.15.2+
+nix develop
+zig version  # 0.15.x
+zls --version
+pnpm zig:check
 ```
 
 ---
 
 ## Implementation Order
 
-| Phase | What | Est. time |
-|---|---|---|
-| **0** | Set up `apps/taod` Zig project with `build.zig`, dependency on `libghostty-vt` | 1 week |
-| **1** | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager | 2 weeks |
-| **2** | Write PTY driver (posix_openpt, fork/exec, raw byte read/write) | 1 week |
-| **3** | Link `libghostty-vt`; write `vt.zig` wrapper and smoke tests | 1-2 weeks |
-| **4** | Add `libghostty-vt` snapshot extension (native + WASM exports) | 2-3 weeks |
-| **5** | Write event log (framed binary, append/read/seek/crc) | 1 week |
-| **6** | Write SQLite layer (zig-sqlite, migrations, query functions) | 1 week |
-| **7** | Integrate daemon with Electron main (launch, socket client, IPC bridge) | 1 week |
-| **8** | Renderer attach from snapshot + live stream; remove old pty-service path | 1 week |
-| **9** | Add agent adapter spawning + pi/codex/claude adapter scripts | 1-2 weeks |
-| **10** | Add pane-layouts.json / settings.json services; migrate localStorage | 3-4 days |
-| **11** | Search excerpts / FTS, cleanup/retention, clear-history UX | 1 week |
-| **12** | Stress testing: crash, restart, daemon fail, large logs, agent resume | 1-2 weeks |
+| Phase  | Status                          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Est. time |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| **A**  | **Done**                        | Electron-side bootstrap slice: `pane-layouts.json`, `settings.json`, localStorage migration, stable pane/session IDs, PTY event-log prototype, Electron install repair                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Done      |
+| **B**  | **Done**                        | Harden current event-log implementation with tests, corruption handling, retention controls, explicit session IPC wrappers, first-paint/render stability fixes, and current-file-store clear-history controls. Cold scrollback replay/archive restore has since been removed from the app path.                                                                                                                                                                                                                                                                                                                          | Done      |
+| **0**  | Done                            | Set up `apps/daemon` Zig project with `build.zig`, pnpm workspace scripts, Nix/ZLS/CI tooling, and module skeletons. Tooling is pinned to Zig 0.15.x, `build.zig.zon` now depends on Ghostty, and the daemon uses the Zig-native upstream `ghostty-vt` module.                                                                                                                                                                                                                                                                                                                                                           | Done      |
+| **1**  | **Done**                        | Write core daemon: Unix socket server, JSON control RPC, binary stream, session manager. The socket server, JSON control RPC, in-memory session registry, binary stream frame codec, socket-level attach loop, live PTY streaming, daemon-owned PTY reader threads, and bounded live pending-output buffers are implemented. Electron can now use it through the transitional bridge.                                                                                                                                                                                                                                    | Done      |
+| **2**  | Done for POSIX prototype        | Write PTY driver. `pty.zig` now uses `forkpty`/`execvp`, resize, input writes, output reads, termination, and exit polling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Done      |
+| **3**  | Done for Zig-native VT boundary | `vt.zig` now isolates the VT backend, session objects own upstream Zig-native libghostty-vt state, daemon output/resize paths feed that state, smoke tests cover the wrapper/current-screen boundary, and native snapshots are supported. The fallback and C ABI backends have been retired.                                                                                                                                                                                                                                                                                                                             | Done      |
+| **4**  | Done for native live path       | Optional current-screen snapshot extension for nicer live reattach first paint. The daemon has a versioned/CRC-checked `current-screen.state` envelope, Ghostty-native VT snapshot round-trips, detach checkpointing, snapshot DB metadata, event-log snapshot marks, and attach-time snapshot stream frames. Electron now forwards/decodes snapshot frames, applies supported native current-screen snapshots before first paint, suppresses duplicate pending output through the snapshot seq, and ignores archived/cold/unsupported snapshots. Do not use snapshots/event-log tails as cold shell scrollback restore. | Done      |
+| **5**  | Done for daemon ownership       | Move framed event log from Electron utility process into `taod`; add append/read/seek/crc tests. The daemon now creates session logs, appends output/resize/exit/snapshot-mark frames, owns retention/clear-history, and the legacy Electron utility logging scaffold has been removed.                                                                                                                                                                                                                                                                                                                                  | Done      |
+| **6**  | **Done**                        | Write SQLite layer (migrations, query functions). `taod` now opens SQLite through `vrischmann/zig-sqlite`, runs migrations, mirrors terminal session lifecycle metadata, records initial agent-session resume rows, indexes bounded search excerpts, and uses restart lookup queries for cold command/agent relaunch.                                                                                                                                                                                                                                                                                                    | Done      |
+| **7**  | Done for production readiness   | Integrate daemon with Electron main (launch, socket client, IPC bridge). A `TaodClient`/MessagePort bridge now launches or connects to `taod`, maps the renderer session protocol to control RPC + binary stream frames, bundles `taod` into desktop production output, health-checks it, restarts after exit/crash, and daemon stream writes drop slow subscribers instead of blocking PTY draining.                                                                                                                                                                                                                    | Done      |
+| **8**  | Done for daemon path            | Renderer attach to live stream and native command/agent resume results. The renderer now uses explicit session APIs, attach results report live/fresh/command-resume/agent-resume, command/agent resume is surfaced in UI, and Electron main no longer falls back to the utility-process PTY service.                                                                                                                                                                                                                                                                                                                    | Done      |
+| **9**  | Done for built-in adapters      | Add agent adapter spawning + pi/codex/claude adapter scripts. `taod` now spawns provider scripts from `TAOD_ADAPTER_DIR`/`~/.tao/adapters`, falls back to argv/session-id heuristics, seeds `agent_sessions`, stores resume argv metadata, and desktop builds bundle/pass the adapter directory. Broader third-party adapter hardening remains future work.                                                                                                                                                                                                                                                              | Done      |
+| **10** | **Done for Electron slice**     | Add pane-layouts.json / settings.json services; migrate localStorage. Revisit once `taod` exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Done      |
+| **11** | Done                            | Search excerpts / FTS, daemon cleanup/retention, and daemon-side persistence privacy controls. The daemon-side implementation (indexing, retention, reaping, and settings-driven output/excerpt/snapshot/metadata write gating) is complete. By design, there is no search UI, no session history panel, no clear-history buttons — persistence is invisible. Retention settings auto-clean old sessions; the user sees their terminals, not session metadata.                                                                                                                                                           | Done      |
+| **12** | Done                            | Stress/fault-injection hardening for crash/restart supervision, daemon failure boundaries, large stream/log behavior, and agent resume edge cases. Coverage now exercises control-payload oversize rejection, attach-tail preservation, failed/slow subscriber drops without blocking PTY draining, bounded single-frame pending output, bursty stream parsing, oversized stream-header rejection, and fallback to saved command metadata when agent resume metadata is corrupt.                                                                                                                                         | Done      |
 
-**Total**: roughly 10-14 weeks, dominated by the libghostty-vt snapshot extension and robust daemon
-lifecycle.
+**Total**: dominated by adapter hardening, privacy hardening, and VT snapshot hardening. Persistence
+is intentionally invisible — no user-facing search, history, or retention UI.
 
 ---
 
-## Revised Summary
+## Target Summary
 
-The persistence architecture is now:
+The target persistence architecture remains:
 
 ```
 ┌──────────────────────────────┐
@@ -872,16 +1043,16 @@ The persistence architecture is now:
 │ taod (Zig binary)            │
 │                              │
 │ PTY driver                   │
-│ libghostty-vt terminal core  │ ← direct Zig link, no WASM
+│ optional VT current-screen   │ ← live first-paint optimization only
 │ Event log                    │
-│ Snapshot store (zstd)        │
 │ SQLite metadata              │
 │ Agent adapter processes      │ ← spawns small scripts
 └──────────────────────────────┘
 ```
 
 - `taod` is a single static Zig binary. No Node, no npm, no WASM runtime for terminal parsing.
-- Snapshot serialization lives at the `libghostty-vt` layer and is shared by native daemon and WASM renderer builds.
+- Current-screen snapshots are live reattach polish; Tao does not cold-restore old shell scrollback
+  into new processes.
 - Agent adapters are lightweight scripts spawned by `taod` — the only part that stays in
   TypeScript/Node.
 - The Electron UI is a thin client that attaches/detaches from sessions. The daemon owns the

@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  ZIG_VERSION: '0.15.2'
+
 on:
   push:
     branches: [main]
@@ -10,27 +13,31 @@ jobs:
   # ── Type check + lint + format ──
   check-ubuntu:
     runs-on: ubuntu-latest
+    env:
+      TAOD_SKIP_NATIVE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tsc
-      - run: pnpm lint
-      - run: pnpm fmt:check
+      - run: pnpm check
 
   check-macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tsc
-      - run: pnpm lint
-      - run: pnpm fmt:check
+      - run: pnpm check
 
   check-windows:
     runs-on: windows-latest
@@ -42,19 +49,45 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tsc
-      - run: pnpm lint
-      - run: pnpm fmt:check
+      - run: pnpm check
+
+  # ── Nix dev shell + Zig LSP smoke test ──
+  nix-tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix develop --command nixpkgs-fmt --check flake.nix
+      - run: |
+          nix develop --command bash -lc '
+            node --version
+            pnpm --version
+            zig version
+            zls --version
+            pnpm zig:fmt:check
+            pnpm zig:lint
+          '
 
   # ── Production build ──
   build-ubuntu:
     runs-on: ubuntu-latest
+    env:
+      TAOD_SKIP_NATIVE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: actions/upload-artifact@v4
@@ -63,12 +96,15 @@ jobs:
           path: apps/desktop/out/
 
   build-macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: actions/upload-artifact@v4
@@ -86,6 +122,9 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: actions/upload-artifact@v4

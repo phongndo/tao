@@ -9,7 +9,7 @@
  * TL;DR improvements applied:
  *   - GPU rasterization + zero-copy (canvas rendering)
  *   - V8 heap limit tuned for terminal workloads
- *   - PTY isolated in a utility process with direct MessagePort IPC
+ *   - PTY isolated in taod with direct MessagePort IPC to the renderer bridge
  *   - Renderer process limit = 1 (single window app)
  *   - Disabled unused Chromium features (~15 services)
  *   - Canvas compositor layer promotion
@@ -17,7 +17,7 @@
  */
 
 import { join } from 'node:path'
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 import {
   app,
   BrowserWindow,
@@ -25,12 +25,19 @@ import {
   ipcMain,
   type IpcMainInvokeEvent,
   MessageChannelMain,
-  utilityProcess,
 } from 'electron'
-import ptyServicePath from './pty-service?modulePath'
+import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
+import { defaultSettings, readSettings, writeSettings } from './settings-store'
+import { TaodPtyBridge } from './taod-pty-bridge'
 import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
+import {
+  PaneLayoutDataSchema,
+  SettingsDataSchema,
+  type PaneLayoutData,
+  type SettingsData,
+} from '@tao/shared/session'
 import {
   WorkspaceError,
   decodeWorkspacePathFromUnknown,
@@ -85,6 +92,18 @@ const enableFeatures = [
 
 app.commandLine.appendSwitch('enable-features', enableFeatures)
 
+function decodePaneLayoutData(data: unknown): PaneLayoutData {
+  const decoded = Schema.decodeUnknownOption(PaneLayoutDataSchema)(data)
+  if (decoded._tag === 'None') throw new Error('Invalid pane layout data')
+  return decoded.value
+}
+
+function decodeSettingsData(data: unknown): SettingsData {
+  const decoded = Schema.decodeUnknownOption(SettingsDataSchema)(data)
+  if (decoded._tag === 'None') throw new Error('Invalid settings data')
+  return decoded.value
+}
+
 // V8: cap old-space for predictable GC without forcing size-optimized codegen.
 // Terminal workloads are steady-state; 256MB is plenty for one terminal window.
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=256')
@@ -96,10 +115,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 // ─── Application State ───
 
 let mainWindow: BrowserWindow | null = null
-let ptyService: Electron.UtilityProcess | null = null
-let rendererPort: Electron.MessagePortMain | null = null
-
-const WINDOW_SHOW_FALLBACK_MS = 5000
+let taodBridge: TaodPtyBridge | null = null
 
 // ─── Window Creation ───
 
@@ -143,13 +159,6 @@ function createWindow() {
       v8CacheOptions: 'bypassHeatCheck',
     },
   })
-
-  const showFallbackTimer = setTimeout(() => {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      mainWindow.show()
-      mainWindow.focus()
-    }
-  }, WINDOW_SHOW_FALLBACK_MS)
 
   // Remove menu bar (cleaner look, fewer resources)
   mainWindow.setMenuBarVisibility(false)
@@ -234,18 +243,11 @@ function createWindow() {
   // Load the renderer
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  mainWindow.once('show', () => {
-    clearTimeout(showFallbackTimer)
-  })
-
   mainWindow.on('closed', () => {
-    clearTimeout(showFallbackTimer)
-    disposePtyService()
     mainWindow = null
   })
 }
@@ -254,72 +256,39 @@ function sendAppCommand(command: AppCommand) {
   mainWindow?.webContents.send('app:command', command)
 }
 
-// ─── PTY Service Lifecycle ───
+// ─── Session Backend Lifecycle ───
 
-function sendPtyPortToRenderer() {
+async function sendPtyPortToRenderer() {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  if (!rendererPort) {
-    setupPtyService()
-  }
-  if (!rendererPort) return
 
-  mainWindow.webContents.postMessage('pty:port', null, [rendererPort])
-  rendererPort = null
-}
-
-function setupPtyService() {
-  disposePtyService()
-
-  const { port1, port2 } = new MessageChannelMain()
-  let service: Electron.UtilityProcess
   try {
-    service = utilityProcess.fork(ptyServicePath, [], {
-      serviceName: 'Tao PTY Service',
-      stdio: 'inherit',
-    })
+    const bridge = ensureTaodBridge()
+    await bridge.ensureReady()
+
+    const { port1, port2 } = new MessageChannelMain()
+    bridge.connectPort(port1)
+    mainWindow.webContents.postMessage('pty:port', null, [port2])
   } catch (err) {
-    port1.close()
-    port2.close()
-    notifyPtyServiceError(`Failed to start PTY service: ${errorMessageFromUnknown(err)}`)
-    return
+    console.warn(`[main] Tao daemon unavailable: ${errorMessageFromUnknown(err)}`)
   }
-
-  ptyService = service
-  rendererPort = port2
-  ptyService.postMessage({ type: 'connect' }, [port1])
-  ptyService.once('error', (err) => {
-    if (ptyService === service) {
-      rendererPort?.close()
-      rendererPort = null
-      ptyService = null
-    }
-    notifyPtyServiceError(`PTY service error: ${errorMessageFromUnknown(err)}`)
-  })
-  ptyService.once('exit', (code) => {
-    console.log(`[main] PTY service exited with code ${code}`)
-    if (ptyService === service) {
-      rendererPort?.close()
-      rendererPort = null
-      ptyService = null
-      if (code !== 0) {
-        notifyPtyServiceError(`PTY service exited before ready (code=${code})`)
-      }
-    }
-  })
 }
 
-function disposePtyService() {
-  rendererPort?.close()
-  rendererPort = null
-
-  if (!ptyService) return
-  ptyService.kill()
-  ptyService = null
+function ensureTaodBridge(): TaodPtyBridge {
+  taodBridge ??= new TaodPtyBridge()
+  return taodBridge
 }
 
-function notifyPtyServiceError(error: string) {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  mainWindow.webContents.send('pty:service-error', error)
+function warmSessionBackend() {
+  void ensureTaodBridge()
+    .ensureReady()
+    .catch((err) => {
+      console.warn(`[main] Failed to warm taod backend: ${errorMessageFromUnknown(err)}`)
+    })
+}
+
+function disposeSessionBackends() {
+  taodBridge?.dispose()
+  taodBridge = null
 }
 
 function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, WorkspaceError> {
@@ -412,14 +381,37 @@ ipcMain.on('renderer:ready', (event) => {
   mainWindow?.show()
   // Focus the window so the terminal receives keyboard input immediately
   mainWindow?.focus()
+  event.sender.send('renderer:shown')
 })
 
 ipcMain.on('pty:requestPort', (event) => {
   if (event.sender !== mainWindow?.webContents) return
-  sendPtyPortToRenderer()
+  void sendPtyPortToRenderer()
 })
 
 ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
+
+ipcMain.handle('layout:read', async (event) => {
+  if (event.sender !== mainWindow?.webContents) return null
+  return readLayout()
+})
+
+ipcMain.handle('layout:write', async (event, data: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  await writeLayout(decodePaneLayoutData(data))
+})
+
+ipcMain.handle('settings:read', async (event) => {
+  if (event.sender !== mainWindow?.webContents) return null
+  return (await readSettings()) ?? defaultSettings
+})
+
+ipcMain.handle('settings:write', async (event, data: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  const settings = decodeSettingsData(data)
+  await writeSettings(settings)
+  await taodBridge?.syncPersistenceSettings(settings)
+})
 
 ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>
   workspaceServiceRequest(event, workspacePath, (service, path) => service.getGitBranch(path)),
@@ -453,24 +445,23 @@ ipcMain.handle('workspace:getPullRequestInfo', async (event, workspacePath: unkn
 
 app.whenReady().then(() => {
   createWindow()
-  setupPtyService()
+  warmSessionBackend()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
-      setupPtyService()
+      warmSessionBackend()
     }
   })
 })
 
 app.on('window-all-closed', () => {
-  disposePtyService()
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
 app.on('before-quit', () => {
-  disposePtyService()
+  disposeSessionBackends()
   void disposeMainRuntime()
 })

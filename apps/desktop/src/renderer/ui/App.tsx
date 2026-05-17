@@ -1,6 +1,7 @@
 import {
   FiChevronLeft,
   FiChevronRight,
+  FiArchive,
   FiFolderPlus,
   FiGitBranch,
   FiMenu,
@@ -11,6 +12,7 @@ import {
 } from 'react-icons/fi'
 import {
   type ComponentType,
+  type CSSProperties,
   type DragEvent,
   memo,
   type ReactNode,
@@ -22,10 +24,12 @@ import {
 } from 'react'
 import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
 import type { AppCommand } from '@tao/shared/app-command'
+import type { PaneLayoutData } from '@tao/shared/session'
 import {
   LOCAL_WORKSPACE_ID,
   type Pane,
   type ReorderPlacement,
+  selectPaneLayoutData,
   type Tab,
   useTaoStore,
   type Workspace,
@@ -43,6 +47,28 @@ const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tao-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
+const LAYOUT_WRITE_DEBOUNCE_MS = 150
+const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
+
+function readLegacyLocalStorageLayout(): unknown | null {
+  try {
+    const raw = window.localStorage?.getItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { state?: unknown }
+    return parsed.state ?? parsed
+  } catch (error) {
+    console.warn('[layout] Failed to read legacy localStorage layout:', error)
+    return null
+  }
+}
+
+function clearLegacyLocalStorageLayout(): void {
+  try {
+    window.localStorage?.removeItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
+  } catch {
+    // Best-effort migration cleanup only.
+  }
+}
 
 // react-mosaic-component ships React 18-era class component types that do not satisfy
 // React 19's JSX constructor check. Keep the runtime component and narrow only the JSX type.
@@ -61,6 +87,12 @@ function workspaceInitials(name: string): string {
     .toUpperCase()
 
   return initials || name.slice(0, 2).toUpperCase() || '•'
+}
+
+function normalizeSidebarWidth(nextWidth: number): number {
+  return nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
+    ? SIDEBAR_COLLAPSED_WIDTH
+    : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
 }
 
 function getDropPlacement(
@@ -159,23 +191,35 @@ function ResizeShell({
   children,
   width,
   onResize,
+  onResizePreview,
 }: {
   children: ReactNode
   width: number
   onResize(width: number): void
+  onResizePreview?(width: number | null): void
 }) {
   const [isResizing, setIsResizing] = useState(false)
+  const [draftWidth, setDraftWidth] = useState<number | null>(null)
   const startXRef = useRef(0)
   const startWidthRef = useRef(0)
+  const currentWidthRef = useRef(width)
   const pendingWidthRef = useRef<number | null>(null)
   const frameRef = useRef<number | null>(null)
+  const displayWidth = draftWidth ?? width
+
+  useEffect(() => {
+    if (!isResizing) currentWidthRef.current = width
+  }, [isResizing, width])
 
   const flushPendingWidth = useCallback(() => {
     const nextWidth = pendingWidthRef.current
     pendingWidthRef.current = null
     if (nextWidth === null) return
-    onResize(nextWidth)
-  }, [onResize])
+    const clampedWidth = normalizeSidebarWidth(nextWidth)
+    currentWidthRef.current = clampedWidth
+    setDraftWidth(clampedWidth)
+    onResizePreview?.(clampedWidth)
+  }, [onResizePreview])
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
@@ -200,8 +244,10 @@ function ResizeShell({
       frameRef.current = null
     }
     flushPendingWidth()
+    onResize(currentWidthRef.current)
+    setDraftWidth(null)
     setIsResizing(false)
-  }, [flushPendingWidth, isResizing])
+  }, [flushPendingWidth, isResizing, onResize])
 
   useEffect(() => {
     if (!isResizing) return
@@ -221,8 +267,9 @@ function ResizeShell({
         frameRef.current = null
       }
       pendingWidthRef.current = null
+      onResizePreview?.(null)
     }
-  }, [handlePointerMove, handlePointerUp, isResizing])
+  }, [handlePointerMove, handlePointerUp, isResizing, onResizePreview])
 
   const resizeHandle = (
     <div
@@ -231,7 +278,7 @@ function ResizeShell({
       aria-orientation="vertical"
       aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
-      aria-valuenow={width}
+      aria-valuenow={displayWidth}
       aria-label="Resize sidebar"
       tabIndex={0}
       className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
@@ -239,22 +286,26 @@ function ResizeShell({
         if (!event.isPrimary || event.button !== 0) return
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
+        const normalizedWidth = normalizeSidebarWidth(width)
         startXRef.current = event.clientX
-        startWidthRef.current = width
+        startWidthRef.current = normalizedWidth
+        currentWidthRef.current = normalizedWidth
+        setDraftWidth(normalizedWidth)
+        onResizePreview?.(normalizedWidth)
         setIsResizing(true)
       }}
       onKeyDown={(event) => {
         if (event.key === 'ArrowLeft') {
           event.preventDefault()
-          onResize(width - SIDEBAR_KEYBOARD_RESIZE_STEP)
+          onResize(normalizeSidebarWidth(displayWidth - SIDEBAR_KEYBOARD_RESIZE_STEP))
           return
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
           onResize(
-            width <= SIDEBAR_COMPACT_THRESHOLD
+            displayWidth <= SIDEBAR_COMPACT_THRESHOLD
               ? SIDEBAR_EXPANDED_MIN_WIDTH
-              : width + SIDEBAR_KEYBOARD_RESIZE_STEP,
+              : normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP),
           )
           return
         }
@@ -279,14 +330,16 @@ function ResizeShell({
 
   const className = [
     'tao-sidebar',
-    width <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
-    width <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD ? 'tao-sidebar-header-actions-hidden' : null,
+    displayWidth <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
+    displayWidth <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD
+      ? 'tao-sidebar-header-actions-hidden'
+      : null,
   ]
     .filter(Boolean)
     .join(' ')
 
   return (
-    <aside className={className} style={{ width }} aria-label="Workspaces">
+    <aside className={className} style={{ width: displayWidth }} aria-label="Workspaces">
       {children}
       {resizeHandle}
     </aside>
@@ -307,6 +360,7 @@ const TabBar = memo(function TabBar({
   onSelectTab,
   onCloseTab,
   onReorderTab,
+  archivedTabIds,
 }: {
   tabs: Tab[]
   activeTabId: string | null
@@ -321,6 +375,7 @@ const TabBar = memo(function TabBar({
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
+  archivedTabIds: ReadonlySet<string>
 }) {
   return (
     <div className="tab-bar">
@@ -337,9 +392,17 @@ const TabBar = memo(function TabBar({
       <div className="tab-list" role="tablist" aria-label="Terminal tabs">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
+          const isArchived = archivedTabIds.has(tab.id)
+          const className = [
+            'tab-item',
+            isActive ? 'tab-item-active' : null,
+            isArchived ? 'tab-item-archived' : null,
+          ]
+            .filter(Boolean)
+            .join(' ')
           return (
             <div
-              className={isActive ? 'tab-item tab-item-active' : 'tab-item'}
+              className={className}
               key={tab.id}
               draggable
               onDragStart={(event) => {
@@ -364,10 +427,19 @@ const TabBar = memo(function TabBar({
                 className="tab-select-button"
                 role="tab"
                 aria-selected={isActive}
+                title={
+                  isArchived ? `${tab.name} — contains a read-only archived session` : tab.name
+                }
                 onClick={() => onSelectTab(tab.id)}
               >
                 <FiTerminal size={13} />
                 <span>{tab.name}</span>
+                {isArchived ? (
+                  <span className="tab-archive-pill" aria-label="Read-only archive">
+                    <FiArchive size={10} />
+                    Archive
+                  </span>
+                ) : null}
               </button>
               <button
                 type="button"
@@ -452,6 +524,8 @@ const PaneTile = memo(function PaneTile({
   focusToken,
   onSelect,
   onTitleChange,
+  onRestartSession,
+  onArchiveStateChange,
 }: {
   pane: Pane
   terminalCwd?: string
@@ -459,12 +533,22 @@ const PaneTile = memo(function PaneTile({
   focusToken: number
   onSelect(): void
   onTitleChange(title: string): void
+  onRestartSession(): void
+  onArchiveStateChange(archived: boolean): void
 }) {
   const status = pane.status ?? 'idle'
+  const isArchived = status === 'archived'
+  const className = [
+    'pane-tile',
+    isActive ? 'pane-tile-active' : null,
+    isArchived ? 'pane-tile-archived' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
     <div
-      className={isActive ? 'pane-tile pane-tile-active' : 'pane-tile'}
+      className={className}
       data-pane-id={pane.id}
       onPointerDown={(event) => {
         if (event.target instanceof Node && event.currentTarget.contains(event.target)) onSelect()
@@ -479,11 +563,14 @@ const PaneTile = memo(function PaneTile({
       )}
       {pane.type === 'terminal' ? (
         <TerminalPane
-          sessionId={pane.id}
+          sessionId={pane.lastSessionId ?? pane.id}
+          terminalId={pane.terminalId}
           cwd={pane.cwd ?? terminalCwd}
           isActive={isActive}
           focusToken={focusToken}
           onTitleChange={onTitleChange}
+          onRestartSession={onRestartSession}
+          onArchiveStateChange={onArchiveStateChange}
         />
       ) : (
         <div className="pane-standby" aria-hidden="true">
@@ -503,6 +590,8 @@ const PaneGrid = memo(function PaneGrid({
   onLayoutRelease,
   onSelectPane,
   onPaneTitle,
+  onRestartPaneSession,
+  onPaneArchiveState,
 }: {
   tab: Tab
   terminalCwd?: string
@@ -512,6 +601,8 @@ const PaneGrid = memo(function PaneGrid({
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
   onPaneTitle(paneId: string, title: string): void
+  onRestartPaneSession(paneId: string): void
+  onPaneArchiveState(paneId: string, archived: boolean): void
 }) {
   const [draftLayout, setDraftLayout] = useState<MosaicNode<string> | null>(tab.layout)
 
@@ -546,10 +637,21 @@ const PaneGrid = memo(function PaneGrid({
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
           onSelect={() => onSelectPane(pane.id)}
           onTitleChange={(title) => onPaneTitle(pane.id, title)}
+          onRestartSession={() => onRestartPaneSession(pane.id)}
+          onArchiveStateChange={(archived) => onPaneArchiveState(pane.id, archived)}
         />
       )
     },
-    [activePaneId, onPaneTitle, onSelectPane, panesById, terminalCwd, terminalFocusTokens],
+    [
+      activePaneId,
+      onPaneTitle,
+      onPaneArchiveState,
+      onRestartPaneSession,
+      onSelectPane,
+      panesById,
+      terminalCwd,
+      terminalFocusTokens,
+    ],
   )
 
   return (
@@ -586,14 +688,19 @@ export function App() {
   const setTabLayout = useTaoStore((state) => state.setTabLayout)
   const selectPane = useTaoStore((state) => state.selectPane)
   const selectPaneByDirection = useTaoStore((state) => state.selectPaneByDirection)
+  const restartPaneSession = useTaoStore((state) => state.restartPaneSession)
   const setPaneTitle = useTaoStore((state) => state.setPaneTitle)
+  const setPaneStatus = useTaoStore((state) => state.setPaneStatus)
   const splitActivePane = useTaoStore((state) => state.splitActivePane)
   const closeActivePane = useTaoStore((state) => state.closeActivePane)
   const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
+  const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
+  const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
+  const [layoutLoaded, setLayoutLoaded] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
     () =>
@@ -640,29 +747,95 @@ export function App() {
     [workspaces],
   )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
+  const archivedTabIds = useMemo(
+    () => new Set(panes.filter((pane) => pane.status === 'archived').map((pane) => pane.tabId)),
+    [panes],
+  )
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
     [terminalFocusCounts],
   )
-  const previousPaneIdsRef = useRef(new Set(panes.map((pane) => pane.id)))
+  const previousPaneSessionsRef = useRef(
+    new Map(panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id])),
+  )
 
   useEffect(() => {
+    let cancelled = false
+
+    async function loadLayout() {
+      try {
+        const layout = (await window.electronAPI.readLayout()) ?? readLegacyLocalStorageLayout()
+        if (!cancelled && layout) hydrateLayout(layout as PaneLayoutData)
+        if (!cancelled && layout) clearLegacyLocalStorageLayout()
+      } catch (error) {
+        console.warn('[layout] Failed to read pane layout:', error)
+      } finally {
+        if (!cancelled) setLayoutLoaded(true)
+      }
+    }
+
+    void loadLayout()
+
+    return () => {
+      cancelled = true
+    }
+  }, [hydrateLayout])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = useTaoStore.subscribe((state) => {
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        window.electronAPI.writeLayout(selectPaneLayoutData(state)).catch((error) => {
+          console.warn('[layout] Failed to write pane layout:', error)
+        })
+      }, LAYOUT_WRITE_DEBOUNCE_MS)
+    })
+
+    window.electronAPI.writeLayout(selectPaneLayoutData(useTaoStore.getState())).catch((error) => {
+      console.warn('[layout] Failed to write initial pane layout:', error)
+    })
+
+    return () => {
+      unsubscribe()
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [layoutLoaded])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
     ensureWorkspaceTab(activeWorkspaceKey)
-  }, [activeWorkspaceKey, ensureWorkspaceTab])
+  }, [activeWorkspaceKey, ensureWorkspaceTab, layoutLoaded])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
+    const activePane = activePaneId ? panes.find((pane) => pane.id === activePaneId) : null
+    if (!activePane || activePane.type !== 'terminal') {
+      const frame = window.requestAnimationFrame(() => window.electronAPI.signalReady())
+      return () => window.cancelAnimationFrame(frame)
+    }
+  }, [activePaneId, layoutLoaded, panes])
 
   useEffect(() => {
     document.title = activeTab ? `${activeTab.name} — Tao` : 'Tao'
   }, [activeTab])
 
   useEffect(() => {
+    if (!layoutLoaded) return
     const nextPaneIds = new Set(panes.map((pane) => pane.id))
-    for (const paneId of previousPaneIdsRef.current) {
+    for (const [paneId, sessionId] of previousPaneSessionsRef.current) {
       if (!nextPaneIds.has(paneId)) {
-        window.electronAPI.killPty(paneId)
+        void window.electronAPI.killSession(sessionId)
       }
     }
-    previousPaneIdsRef.current = nextPaneIds
-  }, [panes])
+    previousPaneSessionsRef.current = new Map(
+      panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id]),
+    )
+  }, [layoutLoaded, panes])
 
   useEffect(() => {
     const focusActiveTerminal = () => {
@@ -747,18 +920,35 @@ export function App() {
     useTaoStore.getState().selectWorkspace(workspace.id)
   }
 
+  const handlePaneArchiveState = useCallback(
+    (paneId: string, archived: boolean) => {
+      if (archived) {
+        setPaneStatus(paneId, 'archived')
+        return
+      }
+
+      const pane = useTaoStore.getState().panes.find((candidate) => candidate.id === paneId)
+      if (pane?.status === 'archived') setPaneStatus(paneId, 'idle')
+    },
+    [setPaneStatus],
+  )
+
   const handleResizeSidebar = useCallback(
     (nextWidth: number) => {
-      const clampedWidth =
-        nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
-          ? SIDEBAR_COLLAPSED_WIDTH
-          : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
-      setSidebarWidth(clampedWidth)
+      setSidebarWidth(normalizeSidebarWidth(nextWidth))
       setSidebarExpanded(true)
+      setSidebarResizePreviewWidth(null)
     },
     [setSidebarExpanded, setSidebarWidth],
   )
-  const isSidebarCompact = sidebarExpanded && sidebarSize <= SIDEBAR_COMPACT_THRESHOLD
+  const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
+    setSidebarResizePreviewWidth(nextWidth)
+  }, [])
+  const isSidebarCompact =
+    sidebarExpanded && (sidebarResizePreviewWidth ?? sidebarSize) <= SIDEBAR_COMPACT_THRESHOLD
+  const shellStyle = {
+    '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
+  } as CSSProperties & Record<'--tao-sidebar-width', string>
   const shellClassName = [
     'tao-shell',
     sidebarExpanded ? null : 'tao-shell-sidebar-hidden',
@@ -767,10 +957,18 @@ export function App() {
     .filter(Boolean)
     .join(' ')
 
+  if (!layoutLoaded) {
+    return <div className="tao-shell" />
+  }
+
   return (
-    <div className={shellClassName}>
+    <div className={shellClassName} style={shellStyle}>
       {sidebarExpanded ? (
-        <ResizeShell width={sidebarSize} onResize={handleResizeSidebar}>
+        <ResizeShell
+          width={sidebarSize}
+          onResize={handleResizeSidebar}
+          onResizePreview={handleSidebarResizePreview}
+        >
           {!isSidebarCompact ? (
             <HeaderNavigation
               isSidebarVisible={sidebarExpanded}
@@ -823,6 +1021,7 @@ export function App() {
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
+            archivedTabIds={archivedTabIds}
           />
           <div className="pane-grid">
             {mountedTabs.length > 0 ? (
@@ -845,6 +1044,8 @@ export function App() {
                       onLayoutRelease={setTabLayout}
                       onSelectPane={selectPane}
                       onPaneTitle={setPaneTitle}
+                      onRestartPaneSession={restartPaneSession}
+                      onPaneArchiveState={handlePaneArchiveState}
                     />
                   </div>
                 )

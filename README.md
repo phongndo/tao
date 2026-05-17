@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/parser-Ghostty%20WASM%20(Zig)-blue" alt="Parser">
 </p>
 
-A performance-first workspace terminal built with **Electron**, **Ghostty's WASM-based VT parser**, and **node-pty**.
+A performance-first workspace terminal built with **Electron**, **Ghostty's WASM-based VT parser**, and Tao's **Zig `taod` PTY/persistence daemon**.
 
 Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
 
@@ -28,6 +28,7 @@ Tao is a pnpm workspace. Root scripts delegate to `apps/desktop`, leaving room f
 
 ```text
 tao/
+├── apps/daemon/    # Zig taod persistence daemon
 ├── apps/desktop/   # Electron terminal app
 ├── packages/       # Shared workspace packages
 ├── docs/           # Architecture notes and plans
@@ -51,18 +52,16 @@ See [plans.md](plans.md) for methodology and full comparison.
 ## Architecture
 
 ```
-Main Process                 PTY Utility Process              Renderer Process
-┌──────────────┐             ┌──────────────┐   MessagePort   ┌─────────────────────────────┐
-│  Window      │             │  node-pty    │◄───────────────►│  ghostty-web                │
-│  lifecycle   │             │  real shell  │    buffered     │  - Ghostty WASM parser (Zig)│
-│  only        │             │              │    ~16ms        │  - Canvas 2D renderer       │
-└──────────────┘             └──────────────┘                 │  - WebGL renderer (planned) │
-                                                              └─────────────────────────────┘
+Renderer Process          Main Process             taod daemon
+┌──────────────────┐      ┌──────────────┐         ┌──────────────────────────┐
+│ ghostty-web      │      │ Window +     │  UDS    │ PTY processes, live      │
+│ Canvas renderer  │◄────►│ taod bridge  │◄───────►│ streams, snapshots, logs │
+└──────────────────┘      └──────────────┘         └──────────────────────────┘
 ```
 
-- **node-pty**: Runs in an Electron utility process and spawns a real shell (bash/zsh/fish) with PTY
+- **taod**: Zig daemon owns PTYs, live attach streams, event logs, current-screen snapshots, and resume metadata.
 - **ghostty-web**: Ghostty's production VT emulator compiled to WASM. Same parser as the native Ghostty app.
-- **IPC**: Raw bytes over a direct `MessagePort`, batched at 16ms (~60fps), with main kept off the PTY hot path
+- **IPC**: Renderer talks to Electron main over `MessagePort`; main bridges to `taod` over local daemon sockets.
 - **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/README.md))
 
 ## Benchmarks
@@ -80,11 +79,15 @@ pnpm bench:all          # Run everything
 Desktop source lives in `apps/desktop`. Run commands from the repository root unless you need to target the package directly with `pnpm --filter @tao/desktop <script>`.
 
 ```bash
-pnpm tsc          # Type check
-pnpm lint         # Lint
-pnpm fmt          # Format
-pnpm check        # Format + lint (CI)
+pnpm tsc              # Type check TypeScript
+pnpm lint             # Lint TypeScript + Zig syntax
+pnpm fmt              # Format TypeScript + Zig
+pnpm check            # CI-equivalent TypeScript + Zig checks
+pnpm zig:check        # Zig-only lint + format check + tests
+pnpm fmt:nix:check    # Check flake.nix formatting
 ```
+
+`nix develop` provides Zig 0.15.x, matching ZLS, Node 22, pnpm 10, and `nixpkgs-fmt`.
 
 ## License
 

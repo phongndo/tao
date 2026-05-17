@@ -4,8 +4,15 @@ dist/
 *.log
 .DS_Store
 
+# zig
+.zig-cache/
+zig-cache/
+zig-out/
+zls.log
+
 # nix
 result
 bench/data/
 
 apps/desktop/bench/data/
+apps/daemon/zig-pkg/
