@@ -34,7 +34,11 @@ export const PtyClientMessageSchema = Schema.Union([
     cwd: Schema.optional(CwdSchema),
   }),
   Schema.Struct({ type: Schema.Literal('detach'), sessionId: SessionIdSchema }),
-  Schema.Struct({ type: Schema.Literal('write'), sessionId: SessionIdSchema, data: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal('write'),
+    sessionId: SessionIdSchema,
+    data: Schema.Union([Schema.String, Schema.Uint8Array]),
+  }),
   Schema.Struct({
     type: Schema.Literal('resize'),
     sessionId: SessionIdSchema,

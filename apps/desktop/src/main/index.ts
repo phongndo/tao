@@ -17,7 +17,7 @@
  */
 
 import { join } from 'node:path'
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 import {
   app,
   BrowserWindow,
@@ -32,6 +32,12 @@ import { defaultSettings, readSettings, writeSettings } from './settings-store'
 import { TaodPtyBridge } from './taod-pty-bridge'
 import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
+import {
+  PaneLayoutDataSchema,
+  SettingsDataSchema,
+  type PaneLayoutData,
+  type SettingsData,
+} from '@tao/shared/session'
 import {
   WorkspaceError,
   decodeWorkspacePathFromUnknown,
@@ -85,6 +91,18 @@ const enableFeatures = [
 ].join(',')
 
 app.commandLine.appendSwitch('enable-features', enableFeatures)
+
+function decodePaneLayoutData(data: unknown): PaneLayoutData {
+  const decoded = Schema.decodeUnknownOption(PaneLayoutDataSchema)(data)
+  if (decoded._tag === 'None') throw new Error('Invalid pane layout data')
+  return decoded.value
+}
+
+function decodeSettingsData(data: unknown): SettingsData {
+  const decoded = Schema.decodeUnknownOption(SettingsDataSchema)(data)
+  if (decoded._tag === 'None') throw new Error('Invalid settings data')
+  return decoded.value
+}
 
 // V8: cap old-space for predictable GC without forcing size-optimized codegen.
 // Terminal workloads are steady-state; 256MB is plenty for one terminal window.
@@ -380,7 +398,7 @@ ipcMain.handle('layout:read', async (event) => {
 
 ipcMain.handle('layout:write', async (event, data: unknown) => {
   if (event.sender !== mainWindow?.webContents) return
-  await writeLayout(data as never)
+  await writeLayout(decodePaneLayoutData(data))
 })
 
 ipcMain.handle('settings:read', async (event) => {
@@ -390,8 +408,9 @@ ipcMain.handle('settings:read', async (event) => {
 
 ipcMain.handle('settings:write', async (event, data: unknown) => {
   if (event.sender !== mainWindow?.webContents) return
-  await writeSettings(data as never)
-  await taodBridge?.syncPersistenceSettings(data as never)
+  const settings = decodeSettingsData(data)
+  await writeSettings(settings)
+  await taodBridge?.syncPersistenceSettings(settings)
 })
 
 ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>

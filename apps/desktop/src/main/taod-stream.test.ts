@@ -16,6 +16,7 @@ import {
 } from '@tao/shared/current-screen-snapshot'
 import { TAOD_STREAM_MAX_PAYLOAD_BYTES, TaodStreamFrameKind } from '@tao/shared/taod-protocol'
 import {
+  TAOD_STREAM_PAYLOAD_LENGTH_OFFSET,
   decodeTaodExitPayload,
   decodeTaodResizePayload,
   encodeTaodResizePayload,
@@ -239,7 +240,7 @@ test('taod stream parser rejects oversized payload headers before buffering bodi
     seq: 1,
     payload: 'small',
   })
-  encoded.writeUInt32BE(TAOD_STREAM_MAX_PAYLOAD_BYTES + 1, 80)
+  encoded.writeUInt32BE(TAOD_STREAM_MAX_PAYLOAD_BYTES + 1, TAOD_STREAM_PAYLOAD_LENGTH_OFFSET)
 
   assert.throws(() => new TaodStreamFrameParser().push(encoded), /header/u)
 })

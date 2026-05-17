@@ -309,10 +309,6 @@ function directCompileArgs({ root, binPath }) {
   const args = [
     root === 'main' ? 'build-exe' : 'test',
     ...targetArgs(),
-    '-I',
-    resolve(zigSqlitePath, 'c'),
-    '-I',
-    sqliteAmalgamationPath,
     '-D',
     'SQLITE_ENABLE_FTS5',
     '-D',
@@ -372,7 +368,7 @@ function buildDirect() {
   return binPath
 }
 
-function testDirect() {
+function testAndBuildDirect() {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
   run('zig', directCompileArgs({ root: 'root', binPath: resolve(cacheDir, 'taod-root-test') }))
@@ -434,7 +430,7 @@ switch (command) {
     buildDirect()
     break
   case 'test':
-    testDirect()
+    testAndBuildDirect()
     break
   case 'run': {
     const binaryPath = buildDirect()

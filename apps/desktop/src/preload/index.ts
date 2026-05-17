@@ -48,6 +48,11 @@ type PendingDataState = {
   bufferedChars: number
 }
 
+type PendingOutputState = {
+  frames: OutputFrame[]
+  bufferedChars: number
+}
+
 type ReadyState = {
   size: PtySize | null
   seq: number
@@ -63,6 +68,7 @@ type ReadyState = {
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
 const MAX_PENDING_DATA_CHARS = 1024 * 1024
+const MAX_PENDING_OUTPUT_CHARS = 1024 * 1024
 
 let ptyPort: MessagePort | null = null
 let rendererReadySignaled = false
@@ -71,6 +77,7 @@ let pendingClientMessages: PtyClientMessage[] = []
 const rendererShownWaiters: Array<() => void> = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, PendingDataState>()
+const pendingSessionOutput = new Map<string, PendingOutputState>()
 const pendingSnapshots = new Map<string, CurrentScreenSnapshotFrame>()
 const pendingAgentStatuses = new Map<string, AgentStatus>()
 const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
@@ -196,6 +203,15 @@ function pendingDataFor(sessionId: string): PendingDataState {
   return state
 }
 
+function pendingOutputFor(sessionId: string): PendingOutputState {
+  const existingState = pendingSessionOutput.get(sessionId)
+  if (existingState) return existingState
+
+  const state: PendingOutputState = { frames: [], bufferedChars: 0 }
+  pendingSessionOutput.set(sessionId, state)
+  return state
+}
+
 function removeCallback<T>(callbacksBySession: Map<string, T[]>, sessionId: string, callback: T) {
   const currentCallbacks = callbacksBySession.get(sessionId)
   if (!currentCallbacks) return
@@ -218,6 +234,7 @@ function clearSessionState(sessionId: string) {
   }
   readyStates.delete(sessionId)
   pendingData.delete(sessionId)
+  pendingSessionOutput.delete(sessionId)
   pendingSnapshots.delete(sessionId)
   pendingAgentStatuses.delete(sessionId)
   ptyDataCallbacks.delete(sessionId)
@@ -249,6 +266,19 @@ function flushPendingData(sessionId: string) {
   }
 }
 
+function flushPendingSessionOutput(sessionId: string) {
+  const pending = pendingSessionOutput.get(sessionId)
+  const callbacks = sessionOutputCallbacks.get(sessionId)
+  if (!pending || pending.frames.length === 0 || !callbacks || callbacks.length === 0) return
+
+  const frames = pending.frames
+  pending.frames = []
+  pending.bufferedChars = 0
+  for (const frame of frames) {
+    for (const callback of callbacks) callback(frame)
+  }
+}
+
 function handlePtyData(sessionId: string, data: string) {
   const callbacks = ptyDataCallbacks.get(sessionId)
   if (!callbacks || callbacks.length === 0) {
@@ -271,7 +301,26 @@ function handlePtyData(sessionId: string, data: string) {
 }
 
 function handleSessionOutput(frame: OutputFrame) {
-  for (const callback of sessionOutputCallbacks.get(frame.sessionId) ?? []) {
+  const callbacks = sessionOutputCallbacks.get(frame.sessionId)
+  if (!callbacks || callbacks.length === 0) {
+    const pending = pendingOutputFor(frame.sessionId)
+    pending.frames.push(frame)
+    pending.bufferedChars += frame.data.length
+    while (pending.bufferedChars > MAX_PENDING_OUTPUT_CHARS && pending.frames.length > 1) {
+      pending.bufferedChars -= pending.frames.shift()?.data.length ?? 0
+    }
+    if (pending.bufferedChars > MAX_PENDING_OUTPUT_CHARS && pending.frames.length === 1) {
+      const onlyFrame = pending.frames[0]!
+      pending.frames[0] = {
+        ...onlyFrame,
+        data: onlyFrame.data.slice(-MAX_PENDING_OUTPUT_CHARS),
+      }
+      pending.bufferedChars = pending.frames[0]!.data.length
+    }
+    return
+  }
+
+  for (const callback of callbacks) {
     callback(frame)
   }
 }
@@ -466,9 +515,9 @@ const electronAPI = {
   async attachSession(
     input: AttachSessionInput & { cols?: number; rows?: number; cwd?: string },
   ): Promise<AttachSessionResult> {
-    const sessionId = input.sessionId ?? input.terminalId
+    const sessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : ''
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      return Promise.reject(new Error('sessionId or terminalId is required'))
+      return Promise.reject(new Error('sessionId is required'))
     }
 
     const cols = typeof input.cols === 'number' ? input.cols : 80
@@ -506,7 +555,7 @@ const electronAPI = {
   writeSessionInput(sessionId: string, data: Uint8Array): void {
     if (!(data instanceof Uint8Array) || data.length === 0) return
     if (typeof sessionId !== 'string' || sessionId.length === 0) return
-    queuePtyMessage({ type: 'write', sessionId, data: new TextDecoder().decode(data) })
+    queuePtyMessage({ type: 'write', sessionId, data })
   },
 
   resizeSession(sessionId: string, cols: number, rows: number): void {
@@ -553,6 +602,7 @@ const electronAPI = {
   onSessionOutput(sessionId: string, callback: (frame: OutputFrame) => void): () => void {
     const callbacks = callbacksFor(sessionOutputCallbacks, sessionId)
     callbacks.push(callback)
+    flushPendingSessionOutput(sessionId)
     return () => removeCallback(sessionOutputCallbacks, sessionId, callback)
   },
 

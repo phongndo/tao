@@ -34,22 +34,37 @@ function resumeNoticeFromAttach(result: AttachSessionResult): ResumeNotice | nul
   return null
 }
 
-function renderAfterWindowShown(terminal: Terminal, isCurrent: () => boolean): void {
+function renderAfterWindowShown(terminal: Terminal, isCurrent: () => boolean): () => void {
+  let frame: number | null = null
+  let timer: number | null = null
+  let cancelled = false
+
   void window.electronAPI.signalReady().then(() => {
-    if (!isCurrent()) return
+    if (cancelled || !isCurrent()) return
 
     // Chromium can drop the initial canvas upload while the BrowserWindow is still hidden.
     // Render again after main confirms the window has been shown so the first visible frame
     // contains the shell prompt instead of a black canvas until the next input echo.
     forceTerminalRender(terminal)
-    const frame = window.requestAnimationFrame(() => {
-      if (isCurrent()) forceTerminalRender(terminal)
+    frame = window.requestAnimationFrame(() => {
+      frame = null
+      if (!cancelled && isCurrent()) forceTerminalRender(terminal)
     })
-    window.setTimeout(() => {
-      window.cancelAnimationFrame(frame)
-      if (isCurrent()) forceTerminalRender(terminal)
+    timer = window.setTimeout(() => {
+      timer = null
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame)
+        frame = null
+      }
+      if (!cancelled && isCurrent()) forceTerminalRender(terminal)
     }, 50)
   })
+
+  return () => {
+    cancelled = true
+    if (frame !== null) window.cancelAnimationFrame(frame)
+    if (timer !== null) window.clearTimeout(timer)
+  }
 }
 
 export function TerminalPane({
@@ -95,6 +110,7 @@ export function TerminalPane({
 
   useEffect(() => {
     let disposed = false
+    let cleanupWindowRender: (() => void) | null = null
 
     async function mountTerminal() {
       const surface = surfaceRef.current
@@ -137,7 +153,10 @@ export function TerminalPane({
         setTerminalCursorVisible(terminal, isActive && !isArchived)
         if (isActive && !isArchived) {
           terminal.focus()
-          renderAfterWindowShown(terminal, () => !disposed && terminalRef.current === terminal)
+          cleanupWindowRender = renderAfterWindowShown(
+            terminal,
+            () => !disposed && terminalRef.current === terminal,
+          )
         } else {
           terminal.blur()
         }
@@ -157,6 +176,7 @@ export function TerminalPane({
 
     return () => {
       disposed = true
+      cleanupWindowRender?.()
       terminalReadyRef.current = false
       terminalRef.current?.dispose()
       terminalRef.current = null
@@ -171,7 +191,7 @@ export function TerminalPane({
     if (isActive && !isArchived) {
       terminal.focus()
       if (terminalReadyRef.current) {
-        renderAfterWindowShown(terminal, () => terminalRef.current === terminal)
+        return renderAfterWindowShown(terminal, () => terminalRef.current === terminal)
       }
     } else {
       terminal.blur()

@@ -103,11 +103,6 @@ function parseControlResponse(line: Buffer): TaodControlResponse {
   return parsed
 }
 
-function isUsableSocketError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | null)?.code
-  return code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'EACCES' || code === 'ENOTSOCK'
-}
-
 function candidateTaodPaths(): string[] {
   const envPath = process.env.TAOD_PATH?.trim()
   const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
@@ -390,6 +385,8 @@ export class TaodClient {
     this.healthTimer = null
     if (this.restartTimer) clearTimeout(this.restartTimer)
     this.restartTimer = null
+    // taod is intentionally detached and may keep live PTYs available across Electron restarts.
+    // Disposing the client releases this process' handles without terminating the daemon.
     this.spawnedProcess?.removeAllListeners()
     this.spawnedProcess = null
   }
@@ -498,8 +495,7 @@ export class TaodClient {
     try {
       await this.request({ type: 'ping', id: nextRequestId('ping') }, { ensure: false })
       return true
-    } catch (error) {
-      if (isUsableSocketError(error)) return false
+    } catch {
       return false
     }
   }
@@ -521,6 +517,7 @@ export class TaodClient {
     ) {
       const adapterDir = findTaodAdapterDir()
       const child = spawn(binaryPath, [], {
+        // Detached/unref'd by design: taod owns PTYs and should survive renderer/app restarts.
         detached: true,
         stdio: 'ignore',
         env: {

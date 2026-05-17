@@ -163,9 +163,9 @@ pub const TerminalSession = struct {
     }
 
     pub fn resizeVt(self: *TerminalSession, allocator: std.mem.Allocator, cols: u16, rows: u16) !void {
+        if (self.vt_terminal) |*terminal| try terminal.resize(allocator, cols, rows);
         self.cols = cols;
         self.rows = rows;
-        if (self.vt_terminal) |*terminal| try terminal.resize(allocator, cols, rows);
     }
 
     pub fn currentScreenTextAlloc(self: *const TerminalSession, allocator: std.mem.Allocator) !?[]u8 {

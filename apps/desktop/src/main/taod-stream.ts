@@ -14,6 +14,8 @@ const LENGTH_OFFSET = SEQ_OFFSET + 8
 const CRC_OFFSET = LENGTH_OFFSET + 4
 const FRAME_MAGIC_BYTES = Buffer.from([0x54, 0x41, 0x53, 0x46])
 
+export const TAOD_STREAM_PAYLOAD_LENGTH_OFFSET = LENGTH_OFFSET
+
 export type TaodParsedStreamFrame = {
   readonly kind: TaodStreamFrameKindValue
   readonly sessionId: string

@@ -61,7 +61,7 @@ async function isElectronUsable() {
 }
 
 async function installElectron() {
-  if (existsSync(executablePath) && existsSync(requiredRuntimePath)) {
+  if (existsSync(executablePath) && existsSync(requiredRuntimePath) && (await isElectronUsable())) {
     await writeInstallMarkers()
     return
   }
@@ -79,12 +79,31 @@ async function installElectron() {
 
   await rm(distPath, { recursive: true, force: true })
   await mkdir(distPath, { recursive: true })
-  execFileSync('unzip', ['-q', zipPath, '-d', distPath], { stdio: 'inherit' })
+  extractZip(zipPath, distPath)
   await writeInstallMarkers()
 
   if (!(await isElectronUsable())) {
     throw new Error(`Electron install is incomplete at ${electronDir}`)
   }
+}
+
+function extractZip(zipPath, destinationPath) {
+  if (platform === 'win32') {
+    execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `$ErrorActionPreference = 'Stop'; Expand-Archive -Force -LiteralPath ${JSON.stringify(
+          zipPath,
+        )} -DestinationPath ${JSON.stringify(destinationPath)}`,
+      ],
+      { stdio: 'inherit' },
+    )
+    return
+  }
+
+  execFileSync('unzip', ['-q', zipPath, '-d', destinationPath], { stdio: 'inherit' })
 }
 
 async function writeInstallMarkers() {

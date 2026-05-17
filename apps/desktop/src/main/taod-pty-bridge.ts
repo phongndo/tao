@@ -123,6 +123,7 @@ export class TaodPtyBridge {
     this.cleanupTimer = setInterval(() => {
       void this.runSessionCleanup()
     }, SESSION_CLEANUP_INTERVAL_MS)
+    this.cleanupTimer.unref?.()
   }
 
   async ensureReady(): Promise<void> {

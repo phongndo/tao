@@ -2,9 +2,7 @@ const std = @import("std");
 const taod = @import("taod");
 
 pub fn main() !void {
-    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = debug_allocator.deinit();
-    const allocator = debug_allocator.allocator();
+    const allocator = std.heap.smp_allocator;
 
     const home = try std.process.getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home);

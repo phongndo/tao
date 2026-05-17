@@ -374,7 +374,7 @@ fn firstJsonLine(stdout: []const u8) ?[]const u8 {
     while (remaining.len > 0) {
         const newline = std.mem.indexOfScalar(u8, remaining, '\n') orelse remaining.len;
         const line = std.mem.trim(u8, remaining[0..newline], " \t\r\n");
-        if (line.len > 0) return line;
+        if (line.len > 0 and (line[0] == '{' or line[0] == '[')) return line;
         if (newline == remaining.len) return null;
         remaining = remaining[newline + 1 ..];
     }

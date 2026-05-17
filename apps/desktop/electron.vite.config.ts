@@ -96,7 +96,7 @@ function copyDirectory(source: string, destination: string) {
     }
     if (!stats.isFile()) continue
     copyFileSync(sourcePath, destinationPath)
-    if (process.platform !== 'win32') chmodSync(destinationPath, stats.mode | 0o755)
+    if (process.platform !== 'win32') chmodSync(destinationPath, stats.mode)
   }
 }
 

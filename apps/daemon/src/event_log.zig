@@ -587,11 +587,12 @@ fn mkdirPath(allocator: std.mem.Allocator, path: []const u8, mode: std.c.mode_t)
 }
 
 fn mkdirOne(path: [*:0]const u8, mode: std.c.mode_t) !void {
-    if (std.c.mkdir(path, mode) == 0) {
+    const rc = std.c.mkdir(path, mode);
+    if (rc == 0) {
         _ = std.c.chmod(path, mode);
         return;
     }
-    switch (std.posix.errno(-1)) {
+    switch (std.posix.errno(rc)) {
         .EXIST => {},
         else => return error.CreateDirFailed,
     }

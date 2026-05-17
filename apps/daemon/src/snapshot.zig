@@ -129,15 +129,10 @@ pub fn readCurrentScreenPath(allocator: std.mem.Allocator, path: []const u8) !?D
 }
 
 pub fn deleteCurrentScreenPath(path: []const u8) !void {
-    const allocator = std.heap.smp_allocator;
-    const path_z = try allocator.dupeZ(u8, path);
-    defer allocator.free(path_z);
-
-    if (std.c.unlink(path_z.ptr) == 0) return;
-    switch (std.posix.errno(-1)) {
-        .NOENT => {},
+    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => {},
         else => return error.FileDeleteFailed,
-    }
+    };
 }
 
 fn validateInput(input: CurrentScreenSnapshot) !void {

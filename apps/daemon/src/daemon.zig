@@ -1414,7 +1414,13 @@ fn writeAllFd(fd: std.posix.fd_t, data: []const u8) !void {
     var offset: usize = 0;
     while (offset < data.len) {
         const written = std.c.write(fd, data[offset..].ptr, data.len - offset);
-        if (written <= 0) return error.SocketWriteFailed;
+        if (written < 0) {
+            switch (std.posix.errno(written)) {
+                .INTR => continue,
+                else => return error.SocketWriteFailed,
+            }
+        }
+        if (written == 0) return error.SocketWriteFailed;
         offset += @intCast(written);
     }
 }
@@ -1481,15 +1487,18 @@ fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !ControlPayl
     };
 }
 
+var session_id_counter = std.atomic.Value(u64).init(0);
+
 fn generateSessionId(allocator: std.mem.Allocator) ![]u8 {
     var tv: std.c.timeval = .{ .sec = 0, .usec = 0 };
     _ = std.c.gettimeofday(&tv, null);
+    const counter = session_id_counter.fetchAdd(1, .monotonic) + 1;
     return std.fmt.allocPrint(allocator, "{x:0>8}-{x:0>4}-{x:0>4}-{x:0>4}-{x:0>12}", .{
         @as(u32, @truncate(@as(u64, @intCast(tv.sec)))),
         @as(u16, @truncate(@as(u64, @intCast(tv.usec)))),
         @as(u16, @truncate(@as(u32, @intCast(std.c.getpid())))),
-        @as(u16, @truncate(@as(usize, @intFromPtr(&tv)))),
-        @as(u48, @truncate(@as(u64, @intCast(tv.sec)) * 1000000 + @as(u64, @intCast(tv.usec)))),
+        @as(u16, @truncate(counter)),
+        @as(u48, @truncate(counter)),
     });
 }
 
