@@ -50,6 +50,11 @@ function copyTaodBinary() {
       outDir = config.build.outDir
     },
     closeBundle() {
+      if (process.env.TAOD_SKIP_NATIVE === '1') {
+        console.warn('[copy-taod-binary] Skipping taod copy; TAOD_SKIP_NATIVE=1')
+        return
+      }
+
       if (process.platform === 'win32') {
         console.warn('[copy-taod-binary] Skipping taod copy on Windows; taod is POSIX-only')
         return

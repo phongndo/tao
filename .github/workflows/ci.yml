@@ -13,6 +13,8 @@ jobs:
   # ── Type check + lint + format ──
   check-ubuntu:
     runs-on: ubuntu-latest
+    env:
+      TAOD_SKIP_NATIVE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,15 +24,6 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
-      - name: Add swap for Zig native compile
-        run: |
-          sudo swapoff /mnt/tao-swapfile 2>/dev/null || true
-          sudo rm -f /mnt/tao-swapfile
-          sudo fallocate -l 8G /mnt/tao-swapfile
-          sudo chmod 600 /mnt/tao-swapfile
-          sudo mkswap /mnt/tao-swapfile
-          sudo swapon /mnt/tao-swapfile
-          free -h
       - run: pnpm check
 
   check-macos:
@@ -85,6 +78,8 @@ jobs:
   # ── Production build ──
   build-ubuntu:
     runs-on: ubuntu-latest
+    env:
+      TAOD_SKIP_NATIVE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -94,15 +89,6 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
-      - name: Add swap for Zig native compile
-        run: |
-          sudo swapoff /mnt/tao-swapfile 2>/dev/null || true
-          sudo rm -f /mnt/tao-swapfile
-          sudo fallocate -l 8G /mnt/tao-swapfile
-          sudo chmod 600 /mnt/tao-swapfile
-          sudo mkswap /mnt/tao-swapfile
-          sudo swapon /mnt/tao-swapfile
-          free -h
       - run: pnpm build
       - uses: actions/upload-artifact@v4
         with:

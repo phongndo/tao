@@ -381,6 +381,20 @@ function testDirect() {
 
 assertZigVersion()
 
+if (process.env.TAOD_SKIP_NATIVE === '1') {
+  switch (command) {
+    case 'build':
+    case 'test':
+    case 'check':
+      console.warn(`Skipping taod ${command}; TAOD_SKIP_NATIVE=1`)
+      process.exit(0)
+    case 'run':
+      fail('Cannot run taod when TAOD_SKIP_NATIVE=1')
+    default:
+      fail(`Unknown taod zig command: ${command}`)
+  }
+}
+
 if (process.platform === 'win32') {
   switch (command) {
     case 'build':
