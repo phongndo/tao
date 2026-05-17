@@ -1,7 +1,13 @@
 # Persistence Plan
 
-**Status**: Phase 12 complete; target architecture implemented  
+**Status**: ✅ Finished — all phases complete  
 **Last updated**: 2026-05-17
+
+The target architecture described below is fully implemented. `taod` is a single
+static Zig binary that owns PTY lifecycle, VT parsing, event logs, current-screen
+snapshots, SQLite metadata, agent adapter spawning, retention, and privacy controls.
+The Electron UI is a thin client that attaches/detaches from daemon sessions.
+No further phases are planned.
 
 ## Overview
 
