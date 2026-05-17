@@ -22,7 +22,7 @@
 | **Process RSS**                                                                     | ~200 MB (in Electron)  |      **93 MB** (isolated)       |  **2.2×**   |
 | **GC pauses (V8)**                                                                  | Frequent (affects p99) |            **None**             |    **∞**    |
 | **Crash resilience**                                                                |     Dies with app      |      **Survives restart**       |    **∞**    |
-| **Cold start to ready**                                                             |   ~800 ms (Electron)   |      **~6 ms** (daemon only)    |   **130×**  |
+| **Cold start to ready**                                                             |   ~800 ms (Electron)   |     **~6 ms** (daemon only)     |  **130×**   |
 | **Idle CPU**                                                                        | ~0% (but V8 GC jitter) |            **0.0%**             |      -      |
 | **Loaded CPU**                                                                      |        90-100%         |    **99%** (max throughput)     |      -      |
 
@@ -45,15 +45,15 @@
 
 #### Startup phase breakdown (Debug build, Apple M3)
 
-| Phase | Time | Notes |
-|---|---|---|
-| **fork + exec** (OS process creation) | ~1.5ms | 15MB binary mapped, dyld resolves `libSystem.B.dylib` |
-| **Zig runtime init** | ~1ms | GeneralPurposeAllocator, comptime inits, safety checks |
-| **`Config.fromHome()`** | ~0.5ms | 7x `std.fs.path.join` allocations |
-| **`prepareStorage()`** | **~2.5ms** | Heaviest phase: mkdir×3, `settings.json` read+parse, SQLite open+WAL+migrate, PID file |
-| └ SQLite open + WAL + migrations | ~1.5ms | 6MB database, WAL journal init, 3 migration checks |
-| **`runForever()`** (bind + listen) | ~0.5ms | `unlink`, `bind`, `listen` syscalls |
-| **Total** | **~6ms** | vs node-pty ~5ms (in-process, no isolation, no I/O) |
+| Phase                                 | Time       | Notes                                                                                  |
+| ------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
+| **fork + exec** (OS process creation) | ~1.5ms     | 15MB binary mapped, dyld resolves `libSystem.B.dylib`                                  |
+| **Zig runtime init**                  | ~1ms       | GeneralPurposeAllocator, comptime inits, safety checks                                 |
+| **`Config.fromHome()`**               | ~0.5ms     | 7x `std.fs.path.join` allocations                                                      |
+| **`prepareStorage()`**                | **~2.5ms** | Heaviest phase: mkdir×3, `settings.json` read+parse, SQLite open+WAL+migrate, PID file |
+| └ SQLite open + WAL + migrations      | ~1.5ms     | 6MB database, WAL journal init, 3 migration checks                                     |
+| **`runForever()`** (bind + listen)    | ~0.5ms     | `unlink`, `bind`, `listen` syscalls                                                    |
+| **Total**                             | **~6ms**   | vs node-pty ~5ms (in-process, no isolation, no I/O)                                    |
 
 A ReleaseFast build would be even faster (~3-4ms). The ~6ms is a **one-time cost** paid once per
 session launch. The daemon survives Electron restarts, so subsequent launches cost 0ms.
