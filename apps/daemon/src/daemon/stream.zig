@@ -1,0 +1,232 @@
+const std = @import("std");
+const adapter = @import("../adapter.zig");
+const cleanup = @import("../cleanup.zig");
+const db = @import("../db.zig");
+const event_log = @import("../event_log.zig");
+const pty = @import("../pty.zig");
+const rpc = @import("../rpc.zig");
+const session = @import("../session.zig");
+const snapshot = @import("../snapshot.zig");
+const vt = @import("../vt.zig");
+
+const fd_io = @import("fd_io.zig");
+const protocol = @import("protocol.zig");
+const util = @import("util.zig");
+const types = @import("types.zig");
+
+const AttachKind = protocol.AttachKind;
+const SessionResponseMetadata = protocol.SessionResponseMetadata;
+const RestoreResult = types.RestoreResult;
+const AgentDetectionSnapshot = types.AgentDetectionSnapshot;
+const SearchExcerptSnapshot = types.SearchExcerptSnapshot;
+const CurrentScreenCheckpoint = types.CurrentScreenCheckpoint;
+const SettingsJson = types.SettingsJson;
+
+const readControlPayload = fd_io.readControlPayload;
+const setNonBlockingFd = fd_io.setNonBlockingFd;
+const writeAllFd = fd_io.writeAllFd;
+const writeAllFdNonBlocking = fd_io.writeAllFdNonBlocking;
+const fileExists = util.fileExists;
+const readSmallFileAlloc = util.readSmallFileAlloc;
+const generateSessionId = util.generateSessionId;
+const argvJsonAlloc = util.argvJsonAlloc;
+const parseArgvJson = util.parseArgvJson;
+const isLiveAttachable = util.isLiveAttachable;
+const isResumableAgentStatus = util.isResumableAgentStatus;
+const missingField = protocol.missingField;
+const notFound = protocol.notFound;
+const sessionResponse = protocol.sessionResponse;
+
+fn ClientFrameVisitor(comptime Daemon: type) type {
+    return struct {
+        daemon: Daemon,
+        session_id: []const u8,
+
+        pub fn visit(self: *@This(), frame: rpc.StreamFrame) !void {
+            if (!std.mem.eql(u8, frame.session_id, self.session_id)) return;
+            try self.daemon.applyClientFrame(frame);
+        }
+    };
+}
+
+pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
+    if (!try self.addSubscriber(session_id, socket_fd)) return;
+    defer _ = self.removeSubscriber(session_id, socket_fd);
+
+    var pending: std.ArrayList(u8) = .empty;
+    defer pending.deinit(self.allocator);
+    try pending.appendSlice(self.allocator, initial_tail);
+    try self.applyPendingClientFrames(session_id, &pending);
+
+    while (true) {
+        if (!self.sessionCanContinueStreaming(session_id, socket_fd)) return;
+
+        var poll_fds = [_]std.posix.pollfd{.{ .fd = socket_fd, .events = std.posix.POLL.IN, .revents = 0 }};
+
+        _ = try std.posix.poll(&poll_fds, 250);
+
+        if ((poll_fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
+            if ((poll_fds[0].revents & (std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) return;
+            var buffer: [64 * 1024]u8 = undefined;
+            const amount = std.c.read(socket_fd, &buffer, buffer.len);
+            if (amount < 0) {
+                switch (std.posix.errno(amount)) {
+                    .INTR, .AGAIN => continue,
+                    else => return,
+                }
+            }
+            if (amount == 0) return;
+            try pending.appendSlice(self.allocator, buffer[0..@intCast(amount)]);
+            try self.applyPendingClientFrames(session_id, &pending);
+        }
+    }
+}
+
+pub fn applyPendingClientFrames(self: anytype, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
+    if (pending.items.len == 0) return;
+
+    var visitor = ClientFrameVisitor(@TypeOf(self)){ .daemon = self, .session_id = session_id };
+    const result = try rpc.parseStreamFrames(pending.items, &visitor);
+    if (result.valid_bytes > 0) try pending.replaceRange(self.allocator, 0, result.valid_bytes, &.{});
+}
+
+pub fn addSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
+    self.lock();
+    defer self.unlock();
+
+    const item = self.sessions.find(session_id) orelse return false;
+    if (!isLiveAttachable(item)) return false;
+    if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+
+    // Initial reattach hydration must be reliable. Current-screen snapshots for full-screen
+    // apps such as nvim/vim can exceed the local socket's immediate non-blocking capacity,
+    // especially because the Electron side pauses the socket after reading the attach response
+    // and only resumes it once the renderer is wired. Use blocking writes for the initial
+    // snapshot/backlog, then switch the subscriber to non-blocking for live broadcasts so slow
+    // clients can still be dropped without stalling the daemon.
+    self.sendCurrentScreenSnapshotToSubscriberLocked(item, socket_fd) catch |err| {
+        std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ item.id, err });
+        _ = self.sessions.removeSubscriber(session_id, socket_fd);
+        return false;
+    };
+    self.flushPendingOutputToSubscriberLocked(item, socket_fd) catch |err| {
+        std.log.warn("failed to flush pending output for {s}: {t}", .{ item.id, err });
+        _ = self.sessions.removeSubscriber(session_id, socket_fd);
+        return false;
+    };
+    setNonBlockingFd(socket_fd) catch |err| {
+        std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ item.id, err });
+        _ = self.sessions.removeSubscriber(session_id, socket_fd);
+        return false;
+    };
+    return true;
+}
+
+pub fn removeSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+    self.lock();
+    defer self.unlock();
+
+    const removed = self.sessions.removeSubscriber(session_id, socket_fd);
+    if (removed) {
+        if (self.sessions.find(session_id)) |item| {
+            if (item.subscribers.items.len == 0) self.checkpointCurrentScreenLocked(item);
+            self.recordTerminalSessionLocked(item, null);
+        }
+    }
+    return removed;
+}
+
+pub fn sessionCanContinueStreaming(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+    self.lock();
+    defer self.unlock();
+
+    const item = self.sessions.find(session_id) orelse return false;
+    if (!isLiveAttachable(item)) return false;
+    return self.sessions.hasSubscriber(session_id, socket_fd);
+}
+
+pub fn applyClientFrame(self: anytype, frame: rpc.StreamFrame) !void {
+    self.lock();
+    defer self.unlock();
+
+    const item = self.sessions.find(frame.session_id) orelse return;
+    const child = if (item.pty_child) |*child| child else return;
+
+    switch (frame.kind) {
+        .input => {
+            if (self.persistence.enabled and self.persistence.persist_input) {
+                if (item.event_log_path) |path| {
+                    _ = event_log.appendInput(self.allocator, path, &item.last_seq, frame.payload) catch |err| {
+                        std.log.warn("failed to append input frame for {s}: {t}", .{ item.id, err });
+                    };
+                }
+            }
+            try self.pty_driver.writeAll(child, frame.payload);
+        },
+        .resize => {
+            const resize = try rpc.decodeResizePayload(frame.payload);
+            try self.pty_driver.resize(child, resize.cols, resize.rows);
+            item.resizeVt(self.allocator, resize.cols, resize.rows) catch |err| {
+                std.log.warn("failed to resize VT state for {s}: {t}", .{ item.id, err });
+                item.cols = resize.cols;
+                item.rows = resize.rows;
+            };
+            if (item.event_log_path) |path| {
+                _ = try event_log.appendResize(self.allocator, path, &item.last_seq, resize.cols, resize.rows);
+            }
+            self.recordTerminalSessionLocked(item, null);
+        },
+        else => {},
+    }
+}
+
+pub fn broadcastExitFrameLocked(self: anytype, item: *session.TerminalSession, seq: u64, exit_code: i32, signal_value: i32) !void {
+    var payload: [8]u8 = undefined;
+    const encoded_payload = try rpc.encodeExitPayload(&payload, exit_code, signal_value);
+    try self.broadcastStreamFrameLocked(item, .exit, seq, encoded_payload);
+}
+
+pub fn broadcastStreamFrameLocked(
+    self: anytype,
+    item: *session.TerminalSession,
+    kind: rpc.StreamKind,
+    seq: u64,
+    payload: []const u8,
+) !void {
+    if (item.subscribers.items.len == 0) {
+        if (kind == .output) item.bufferPendingOutput(self.allocator, seq, payload) catch |err| {
+            std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, err });
+        };
+        return;
+    }
+
+    const encoded_len = rpc.encodedStreamFrameSize(payload.len);
+    const buffer = try self.allocator.alloc(u8, encoded_len);
+    defer self.allocator.free(buffer);
+    const encoded = try rpc.encodeStreamFrame(buffer, kind, item.id, seq, payload);
+
+    var index: usize = 0;
+    while (index < item.subscribers.items.len) {
+        const fd = item.subscribers.items[index];
+        writeAllFdNonBlocking(fd, encoded) catch |err| {
+            std.log.warn("dropping slow taod subscriber for {s}: {t}", .{ item.id, err });
+            _ = item.subscribers.orderedRemove(index);
+            continue;
+        };
+        index += 1;
+    }
+}
+
+pub fn flushPendingOutputToSubscriberLocked(self: anytype, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
+    if (item.pending_output.items.len == 0) return;
+
+    for (item.pending_output.items) |frame| {
+        const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
+        const buffer = try self.allocator.alloc(u8, encoded_len);
+        defer self.allocator.free(buffer);
+        const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
+        try writeAllFd(socket_fd, encoded);
+    }
+
+    item.clearPendingOutput(self.allocator);
+}
