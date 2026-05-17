@@ -5,7 +5,19 @@ const rpc = @import("rpc.zig");
 const snapshot = @import("snapshot.zig");
 const vt = @import("vt.zig");
 
+const assert = std.debug.assert;
+
+pub const sessions_max = 16 * 1024;
+pub const subscribers_per_session_max = 1024;
+pub const pending_output_frames_max = 4096;
 pub const max_pending_output_bytes = 1024 * 1024;
+
+comptime {
+    assert(sessions_max > 0);
+    assert(subscribers_per_session_max > 0);
+    assert(pending_output_frames_max > 0);
+    assert(max_pending_output_bytes > 0);
+}
 
 pub const PendingOutputFrame = struct {
     seq: u64,
@@ -35,6 +47,22 @@ pub const Status = enum {
             .killed => "killed",
         };
     }
+
+    /// Terminal sessions are durable state machines: callers may retry create,
+    /// attach, detach, restore, and kill requests after crashes or UI reconnects.
+    /// The graph is therefore intentionally permissive for recovery edges while
+    /// still making every transition explicit at the call site.
+    pub fn canTransitionTo(self: Status, next: Status) bool {
+        if (self == next) return true;
+        return switch (self) {
+            .live => next == .detached or next == .exited or next == .crashed or next == .killed,
+            .detached => next == .live or next == .archived or next == .killed,
+            .exited => next == .live or next == .archived or next == .killed,
+            .crashed => next == .live or next == .archived or next == .killed,
+            .archived => next == .live or next == .killed,
+            .killed => next == .live or next == .archived,
+        };
+    }
 };
 
 pub const TerminalSession = struct {
@@ -59,9 +87,28 @@ pub const TerminalSession = struct {
     snapshot_size: usize,
     reader_started: bool,
 
+    /// These invariants are intentionally cheap enough to keep in production
+    /// safety builds. The session lifecycle is Tao's central state machine;
+    /// every mutating method calls this so impossible states fail near the
+    /// bug instead of surfacing later as persistence or stream corruption.
+    pub fn assertInvariants(self: *const TerminalSession) void {
+        assert(self.id.len > 0);
+        assert(self.terminal_id.len > 0);
+        assert(self.cols > 0);
+        assert(self.rows > 0);
+        assert(self.subscribers.items.len <= subscribers_per_session_max);
+        assert(self.pending_output.items.len <= pending_output_frames_max);
+        if (self.status == .detached) assert(self.subscribers.items.len == 0);
+
+        assert(self.pending_output_bytes <= max_pending_output_bytes);
+    }
+
     pub fn deinit(self: *TerminalSession, allocator: std.mem.Allocator) void {
+        self.assertInvariants();
         if (self.pty_child) |*child| child.close();
         if (self.vt_terminal) |*terminal| terminal.deinit(allocator);
+        self.clearPendingOutput(allocator);
+        self.subscribers.deinit(allocator);
         allocator.free(self.id);
         allocator.free(self.terminal_id);
         if (self.cwd) |cwd| allocator.free(cwd);
@@ -69,13 +116,12 @@ pub const TerminalSession = struct {
         if (self.event_log_path) |path| allocator.free(path);
         if (self.excerpt_path) |path| allocator.free(path);
         if (self.snapshot_path) |path| allocator.free(path);
-        self.subscribers.deinit(allocator);
-        self.clearPendingOutput(allocator);
         self.pending_output.deinit(allocator);
         self.* = undefined;
     }
 
     pub fn installPersistence(self: *TerminalSession, allocator: std.mem.Allocator, files: event_log.SessionFiles) !void {
+        self.assertInvariants();
         const next_snapshot_path = try snapshot.pathAlloc(allocator, files.dir);
         errdefer allocator.free(next_snapshot_path);
 
@@ -89,9 +135,11 @@ pub const TerminalSession = struct {
         self.excerpt_path = files.excerpt_path;
         self.snapshot_path = next_snapshot_path;
         self.last_seq = files.last_seq;
+        self.assertInvariants();
     }
 
     pub fn disablePersistence(self: *TerminalSession, allocator: std.mem.Allocator) void {
+        self.assertInvariants();
         if (self.session_dir) |path| allocator.free(path);
         if (self.event_log_path) |path| allocator.free(path);
         if (self.excerpt_path) |path| allocator.free(path);
@@ -102,12 +150,20 @@ pub const TerminalSession = struct {
         self.excerpt_path = null;
         self.snapshot_path = null;
         self.clearSnapshotMetadata();
+        self.assertInvariants();
     }
 
     pub fn clearSnapshotMetadata(self: *TerminalSession) void {
         self.snapshot_seq = 0;
         self.snapshot_crc32 = null;
         self.snapshot_size = 0;
+    }
+
+    pub fn transitionTo(self: *TerminalSession, status: Status) void {
+        self.assertInvariants();
+        assert(self.status.canTransitionTo(status));
+        self.status = status;
+        self.assertInvariants();
     }
 
     pub fn updateCreateMetadata(
@@ -118,6 +174,10 @@ pub const TerminalSession = struct {
         cols: u16,
         rows: u16,
     ) !void {
+        self.assertInvariants();
+        if (terminal_id.len == 0) return error.InvalidSessionId;
+        if (cols == 0 or rows == 0) return error.InvalidSize;
+
         if (!std.mem.eql(u8, self.terminal_id, terminal_id)) {
             const next_terminal_id = try allocator.dupe(u8, terminal_id);
             allocator.free(self.terminal_id);
@@ -131,9 +191,11 @@ pub const TerminalSession = struct {
         }
 
         try self.resizeVt(allocator, cols, rows);
+        self.assertInvariants();
     }
 
     pub fn bufferPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator, seq: u64, payload: []const u8) !void {
+        self.assertInvariants();
         if (payload.len == 0) return;
 
         const bounded_payload = if (payload.len > max_pending_output_bytes)
@@ -145,17 +207,24 @@ pub const TerminalSession = struct {
         try self.pending_output.append(allocator, .{ .seq = seq, .payload = owned });
         self.pending_output_bytes += owned.len;
 
-        while (self.pending_output_bytes > max_pending_output_bytes and self.pending_output.items.len > 1) {
+        while ((self.pending_output_bytes > max_pending_output_bytes or
+            self.pending_output.items.len > pending_output_frames_max) and
+            self.pending_output.items.len > 1)
+        {
             var frame = self.pending_output.orderedRemove(0);
+            assert(self.pending_output_bytes >= frame.payload.len);
             self.pending_output_bytes -= frame.payload.len;
             frame.deinit(allocator);
         }
+        self.assertInvariants();
     }
 
     pub fn clearPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator) void {
+        self.assertInvariants();
         for (self.pending_output.items) |*frame| frame.deinit(allocator);
         self.pending_output.clearRetainingCapacity();
         self.pending_output_bytes = 0;
+        self.assertInvariants();
     }
 
     pub fn writeVt(self: *TerminalSession, payload: []const u8) !void {
@@ -163,9 +232,12 @@ pub const TerminalSession = struct {
     }
 
     pub fn resizeVt(self: *TerminalSession, allocator: std.mem.Allocator, cols: u16, rows: u16) !void {
+        self.assertInvariants();
+        if (cols == 0 or rows == 0) return error.InvalidSize;
         if (self.vt_terminal) |*terminal| try terminal.resize(allocator, cols, rows);
         self.cols = cols;
         self.rows = rows;
+        self.assertInvariants();
     }
 
     pub fn currentScreenTextAlloc(self: *const TerminalSession, allocator: std.mem.Allocator) !?[]u8 {
@@ -180,11 +252,13 @@ pub const TerminalSession = struct {
     }
 
     pub fn restoreCurrentScreenSnapshot(self: *TerminalSession, allocator: std.mem.Allocator, payload: []const u8) !bool {
+        self.assertInvariants();
         if (!vt.supports_current_screen_snapshots) return false;
         const terminal = if (self.vt_terminal) |*terminal| terminal else return false;
         try terminal.deserializeCurrentScreen(allocator, payload);
         self.cols = terminal.cols;
         self.rows = terminal.rows;
+        self.assertInvariants();
         return true;
     }
 
@@ -204,12 +278,18 @@ pub const Manager = struct {
     }
 
     pub fn deinit(self: *Manager) void {
+        assert(self.sessions.items.len <= sessions_max);
         for (self.sessions.items) |*item| item.deinit(self.allocator);
         self.sessions.deinit(self.allocator);
         self.* = undefined;
     }
 
     pub fn create(self: *Manager, input: rpc.CreateRequest) !*TerminalSession {
+        assert(self.sessions.items.len <= sessions_max);
+        if (self.sessions.items.len >= sessions_max) return error.TooManySessions;
+        if (input.session_id.len == 0 or input.terminal_id.len == 0) return error.InvalidSessionId;
+        if (input.cols == 0 or input.rows == 0) return error.InvalidSize;
+
         const id = try self.allocator.dupe(u8, input.session_id);
         errdefer self.allocator.free(id);
         const terminal_id = try self.allocator.dupe(u8, input.terminal_id);
@@ -241,7 +321,9 @@ pub const Manager = struct {
             .snapshot_size = 0,
             .reader_started = false,
         });
-        return &self.sessions.items[self.sessions.items.len - 1];
+        const created = &self.sessions.items[self.sessions.items.len - 1];
+        created.assertInvariants();
+        return created;
     }
 
     pub fn find(self: *Manager, session_id: []const u8) ?*TerminalSession {
@@ -252,6 +334,7 @@ pub const Manager = struct {
     }
 
     pub fn remove(self: *Manager, session_id: []const u8) bool {
+        assert(self.sessions.items.len <= sessions_max);
         for (self.sessions.items, 0..) |*item, index| {
             if (!std.mem.eql(u8, item.id, session_id)) continue;
             var removed = self.sessions.orderedRemove(index);
@@ -263,36 +346,46 @@ pub const Manager = struct {
 
     pub fn detach(self: *Manager, session_id: []const u8) bool {
         const item = self.find(session_id) orelse return false;
-        if (item.status == .live and item.subscribers.items.len == 0) item.status = .detached;
+        item.assertInvariants();
+        if (item.status == .live and item.subscribers.items.len == 0) item.transitionTo(.detached);
+        item.assertInvariants();
         return true;
     }
 
     pub fn attach(self: *Manager, session_id: []const u8) ?*TerminalSession {
         const item = self.find(session_id) orelse return null;
-        if (item.status == .detached) item.status = .live;
+        item.assertInvariants();
+        if (item.status == .detached) item.transitionTo(.live);
+        item.assertInvariants();
         return item;
     }
 
     pub fn addSubscriber(self: *Manager, session_id: []const u8, fd: std.c.fd_t) !bool {
         const item = self.find(session_id) orelse return false;
+        item.assertInvariants();
         for (item.subscribers.items) |existing| {
             if (existing == fd) return true;
         }
+        if (item.subscribers.items.len >= subscribers_per_session_max) return error.TooManySubscribers;
+        if (item.status == .detached) item.transitionTo(.live);
         try item.subscribers.append(self.allocator, fd);
-        if (item.status == .detached) item.status = .live;
+        item.assertInvariants();
         return true;
     }
 
     pub fn removeSubscriber(self: *Manager, session_id: []const u8, fd: std.c.fd_t) bool {
         const item = self.find(session_id) orelse return false;
+        item.assertInvariants();
         var index: usize = 0;
         while (index < item.subscribers.items.len) : (index += 1) {
             if (item.subscribers.items[index] != fd) continue;
             _ = item.subscribers.orderedRemove(index);
-            if (item.subscribers.items.len == 0 and item.status == .live) item.status = .detached;
+            if (item.subscribers.items.len == 0 and item.status == .live) item.transitionTo(.detached);
+            item.assertInvariants();
             return true;
         }
-        if (item.subscribers.items.len == 0 and item.status == .live) item.status = .detached;
+        if (item.subscribers.items.len == 0 and item.status == .live) item.transitionTo(.detached);
+        item.assertInvariants();
         return true;
     }
 
@@ -312,7 +405,9 @@ pub const Manager = struct {
 
     pub fn kill(self: *Manager, session_id: []const u8) bool {
         const item = self.find(session_id) orelse return false;
-        item.status = .killed;
+        item.assertInvariants();
+        item.transitionTo(.killed);
+        item.assertInvariants();
         return true;
     }
 };
@@ -423,6 +518,29 @@ test "terminal session bounds a single oversized pending-output frame" {
     try std.testing.expectEqual(@as(usize, max_pending_output_bytes), created.pending_output_bytes);
     try std.testing.expectEqual(@as(u64, 42), created.pending_output.items[0].seq);
     try std.testing.expectEqual(@as(u8, 'z'), created.pending_output.items[0].payload[created.pending_output.items[0].payload.len - 1]);
+}
+
+test "terminal session bounds pending output frame count" {
+    var manager = Manager.init(std.testing.allocator);
+    defer manager.deinit();
+
+    const created = try manager.create(.{
+        .session_id = "session-many-pending",
+        .terminal_id = "term-many-pending",
+        .cols = 80,
+        .rows = 24,
+        .cwd = null,
+        .argv = &.{},
+    });
+
+    var seq: u64 = 1;
+    while (seq <= pending_output_frames_max + 10) : (seq += 1) {
+        try created.bufferPendingOutput(std.testing.allocator, seq, "x");
+    }
+
+    try std.testing.expectEqual(@as(usize, pending_output_frames_max), created.pending_output.items.len);
+    try std.testing.expectEqual(@as(usize, pending_output_frames_max), created.pending_output_bytes);
+    try std.testing.expectEqual(@as(u64, 11), created.pending_output.items[0].seq);
 }
 
 test "terminal session owns VT state for output and resize" {

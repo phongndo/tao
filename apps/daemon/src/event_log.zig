@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const assert = std.debug.assert;
+
 pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAOEV\0\1\0
 pub const session_id_header_size: usize = 36;
 pub const file_header_size: usize = file_magic.len + session_id_header_size + 8;
@@ -8,6 +10,13 @@ pub const frame_header_size: usize = 32;
 pub const max_payload_bytes: u32 = 64 * 1024 * 1024;
 pub const max_replay_bytes: usize = 1024 * 1024;
 pub const max_excerpt_bytes: usize = 1024 * 1024;
+
+comptime {
+    assert(file_magic.len == 8);
+    assert(file_header_size == 52);
+    assert(frame_header_size == 32);
+    assert(max_payload_bytes > 0);
+}
 
 pub const FrameKind = enum(u16) {
     output = 1,
@@ -19,6 +28,20 @@ pub const FrameKind = enum(u16) {
     snapshot_mark = 7,
     exit = 8,
     _,
+
+    pub fn fromRaw(raw: u16) ?FrameKind {
+        return switch (raw) {
+            1 => .output,
+            2 => .input,
+            3 => .resize,
+            4 => .title,
+            5 => .cwd,
+            6 => .agent_event,
+            7 => .snapshot_mark,
+            8 => .exit,
+            else => null,
+        };
+    }
 };
 
 pub const Frame = struct {
@@ -63,6 +86,7 @@ pub fn encodedFrameSize(payload_len: usize) usize {
 }
 
 pub fn encodeFileHeader(out: []u8, session_id: []const u8, created_at_ms: u64) ![]u8 {
+    if (session_id.len == 0) return error.InvalidSessionId;
     if (out.len < file_header_size) return error.NoSpaceLeft;
 
     @memcpy(out[0..file_magic.len], &file_magic);
@@ -78,6 +102,10 @@ pub fn hasValidHeader(data: []const u8) bool {
     return data.len >= file_header_size and std.mem.eql(u8, data[0..file_magic.len], &file_magic);
 }
 
+fn nextSequence(last_seq: *const u64) !u64 {
+    return std.math.add(u64, last_seq.*, 1) catch error.SequenceOverflow;
+}
+
 pub fn encodeFrame(
     out: []u8,
     kind: FrameKind,
@@ -85,7 +113,9 @@ pub fn encodeFrame(
     monotonic_ms: u64,
     payload: []const u8,
 ) ![]u8 {
+    if (FrameKind.fromRaw(@intFromEnum(kind)) == null) return error.InvalidFrameKind;
     if (payload.len > max_payload_bytes) return error.PayloadTooLarge;
+    if (seq == 0) return error.InvalidSequence;
     const total_len = encodedFrameSize(payload.len);
     if (out.len < total_len) return error.NoSpaceLeft;
 
@@ -98,6 +128,8 @@ pub fn encodeFrame(
     std.mem.writeInt(u32, out[28..32], std.hash.Crc32.hash(payload), .big);
     @memcpy(out[frame_header_size..total_len], payload);
 
+    assert(total_len == frame_header_size + payload.len);
+
     return out[0..total_len];
 }
 
@@ -107,7 +139,7 @@ pub fn parseFrames(data: []const u8, visitor: anytype) !ParseResult {
     var frames_seen: usize = 0;
     var last_seq: u64 = 0;
 
-    while (offset + frame_header_size <= data.len) {
+    while (offset <= data.len and data.len - offset >= frame_header_size) {
         if (std.mem.readInt(u32, data[offset..][0..4], .big) != frame_magic) break;
 
         const version = std.mem.readInt(u16, data[offset + 4 ..][0..2], .big);
@@ -117,21 +149,24 @@ pub fn parseFrames(data: []const u8, visitor: anytype) !ParseResult {
         const length = std.mem.readInt(u32, data[offset + 24 ..][0..4], .big);
         const expected_crc = std.mem.readInt(u32, data[offset + 28 ..][0..4], .big);
         const payload_start = offset + frame_header_size;
-        const payload_end = payload_start + length;
 
-        if (version != 1 or length > max_payload_bytes or payload_end > data.len) break;
+        const kind = FrameKind.fromRaw(kind_raw) orelse break;
+        if (version != 1 or seq <= last_seq or length > max_payload_bytes) break;
+        if (length > data.len - payload_start) break;
+
+        const payload_end = payload_start + @as(usize, length);
 
         const payload = data[payload_start..payload_end];
-        if (seq > last_seq and std.hash.Crc32.hash(payload) == expected_crc) {
-            try visitor.visit(.{
-                .kind = @enumFromInt(kind_raw),
-                .seq = seq,
-                .monotonic_ms = monotonic_ms,
-                .payload = payload,
-            });
-            frames_seen += 1;
-            last_seq = seq;
-        }
+        if (std.hash.Crc32.hash(payload) != expected_crc) break;
+
+        try visitor.visit(.{
+            .kind = kind,
+            .seq = seq,
+            .monotonic_ms = monotonic_ms,
+            .payload = payload,
+        });
+        frames_seen += 1;
+        last_seq = seq;
 
         offset = payload_end;
         valid_bytes = offset;
@@ -251,6 +286,8 @@ pub fn appendFramePath(
     seq: u64,
     payload: []const u8,
 ) !void {
+    if (payload.len > max_payload_bytes) return error.PayloadTooLarge;
+
     const frame = try allocator.alloc(u8, encodedFrameSize(payload.len));
     defer allocator.free(frame);
 
@@ -265,8 +302,9 @@ pub fn appendOutput(
     last_seq: *u64,
     payload: []const u8,
 ) !u64 {
-    last_seq.* += 1;
-    try appendFramePath(allocator, event_log_path, .output, last_seq.*, payload);
+    const seq = try nextSequence(last_seq);
+    try appendFramePath(allocator, event_log_path, .output, seq, payload);
+    last_seq.* = seq;
     if (excerpt_path) |path| appendBoundedExcerpt(allocator, path, payload) catch {};
     return last_seq.*;
 }
@@ -277,8 +315,9 @@ pub fn appendInput(
     last_seq: *u64,
     payload: []const u8,
 ) !u64 {
-    last_seq.* += 1;
-    try appendFramePath(allocator, event_log_path, .input, last_seq.*, payload);
+    const seq = try nextSequence(last_seq);
+    try appendFramePath(allocator, event_log_path, .input, seq, payload);
+    last_seq.* = seq;
     return last_seq.*;
 }
 
@@ -289,12 +328,15 @@ pub fn appendResize(
     cols: u16,
     rows: u16,
 ) !u64 {
+    if (cols == 0 or rows == 0) return error.InvalidSize;
+
     var payload: [4]u8 = undefined;
     std.mem.writeInt(u16, payload[0..2], cols, .big);
     std.mem.writeInt(u16, payload[2..4], rows, .big);
 
-    last_seq.* += 1;
-    try appendFramePath(allocator, event_log_path, .resize, last_seq.*, &payload);
+    const seq = try nextSequence(last_seq);
+    try appendFramePath(allocator, event_log_path, .resize, seq, &payload);
+    last_seq.* = seq;
     return last_seq.*;
 }
 
@@ -309,8 +351,9 @@ pub fn appendExit(
     std.mem.writeInt(i32, payload[0..4], exit_code, .big);
     std.mem.writeInt(i32, payload[4..8], signal, .big);
 
-    last_seq.* += 1;
-    try appendFramePath(allocator, event_log_path, .exit, last_seq.*, &payload);
+    const seq = try nextSequence(last_seq);
+    try appendFramePath(allocator, event_log_path, .exit, seq, &payload);
+    last_seq.* = seq;
     return last_seq.*;
 }
 
@@ -331,8 +374,9 @@ pub fn appendSnapshotMark(
     const payload = try out.toOwnedSlice();
     defer allocator.free(payload);
 
-    last_seq.* += 1;
-    try appendFramePath(allocator, event_log_path, .snapshot_mark, last_seq.*, payload);
+    const seq = try nextSequence(last_seq);
+    try appendFramePath(allocator, event_log_path, .snapshot_mark, seq, payload);
+    last_seq.* = seq;
     return last_seq.*;
 }
 
@@ -669,7 +713,53 @@ test "event log rejects corrupt CRC payloads without treating tails as valid" {
 
     const result = try parseFrames(encoded, &recorder);
     try std.testing.expectEqual(@as(usize, 0), recorder.count);
-    try std.testing.expectEqual(encoded.len, result.valid_bytes);
+    try std.testing.expectEqual(@as(usize, 0), result.valid_bytes);
+}
+
+test "event log append commits sequence only after durable append succeeds" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const missing_path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/missing/events.taoev",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(missing_path);
+
+    var last_seq: u64 = 0;
+    try std.testing.expectError(
+        error.FileOpenFailed,
+        appendOutput(std.testing.allocator, missing_path, null, &last_seq, "not-written"),
+    );
+    try std.testing.expectEqual(@as(u64, 0), last_seq);
+}
+
+test "event log parser deterministic malformed-input sweep" {
+    var prng = std.Random.DefaultPrng.init(0x54414f5f45564c47);
+    const random = prng.random();
+
+    var buffer: [256]u8 = undefined;
+    var case_index: usize = 0;
+    while (case_index < 256) : (case_index += 1) {
+        const len = random.uintLessThan(usize, buffer.len + 1);
+        random.bytes(buffer[0..len]);
+
+        var recorder = struct {
+            count: usize = 0,
+            last_seq: u64 = 0,
+            pub fn visit(self: *@This(), frame: Frame) !void {
+                try std.testing.expect(frame.seq > self.last_seq);
+                try std.testing.expect(frame.payload.len <= max_payload_bytes);
+                self.count += 1;
+                self.last_seq = frame.seq;
+            }
+        }{};
+
+        const result = try parseFrames(buffer[0..len], &recorder);
+        try std.testing.expect(result.valid_bytes <= len);
+        try std.testing.expectEqual(result.frames_seen, recorder.count);
+    }
 }
 
 fn persistentSessionFilesForAllocationFailure(allocator: std.mem.Allocator, sessions_dir: []const u8) !void {

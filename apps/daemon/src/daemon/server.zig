@@ -93,8 +93,8 @@ pub fn handleControlPayload(self: anytype, allocator: std.mem.Allocator, payload
 }
 
 pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
-    self.lock();
-    defer self.unlock();
+    var lock = self.acquireLock();
+    defer lock.deinit();
 
     return switch (request.requestType()) {
         .create => self.handleCreateLocked(allocator, request),

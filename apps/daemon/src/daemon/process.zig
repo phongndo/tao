@@ -3,6 +3,8 @@ const event_log = @import("../event_log.zig");
 const pty = @import("../pty.zig");
 const session = @import("../session.zig");
 
+const assert = std.debug.assert;
+
 fn sessionReaderThread(daemon: anytype, session_id: []u8) void {
     defer std.heap.smp_allocator.free(session_id);
 
@@ -13,6 +15,7 @@ fn sessionReaderThread(daemon: anytype, session_id: []u8) void {
 }
 
 pub fn ensureSessionProcess(self: anytype, item: *session.TerminalSession, argv: []const []const u8) !void {
+    item.assertInvariants();
     if (item.pty_child) |child| {
         if (child.master_fd >= 0) return;
         item.pty_child = null;
@@ -26,10 +29,12 @@ pub fn ensureSessionProcess(self: anytype, item: *session.TerminalSession, argv:
         .cols = item.cols,
         .rows = item.rows,
     });
-    item.status = .live;
+    item.transitionTo(.live);
+    item.assertInvariants();
 }
 
 pub fn startSessionReaderLocked(self: anytype, item: *session.TerminalSession) !void {
+    item.assertInvariants();
     if (item.reader_started) return;
     const child = item.pty_child orelse return;
     if (child.master_fd < 0) return;
@@ -44,6 +49,8 @@ pub fn startSessionReaderLocked(self: anytype, item: *session.TerminalSession) !
 }
 
 pub fn runSessionReader(self: anytype, session_id: []const u8) !void {
+    assert(session_id.len > 0);
+
     while (true) {
         const child_fd = self.liveChildFd(session_id) orelse return;
         var poll_fds = [_]std.posix.pollfd{.{ .fd = child_fd, .events = std.posix.POLL.IN, .revents = 0 }};
@@ -58,6 +65,8 @@ pub fn runSessionReader(self: anytype, session_id: []const u8) !void {
 }
 
 pub fn liveChildFd(self: anytype, session_id: []const u8) ?std.c.fd_t {
+    assert(session_id.len > 0);
+
     self.lock();
     defer self.unlock();
 
@@ -69,10 +78,13 @@ pub fn liveChildFd(self: anytype, session_id: []const u8) ?std.c.fd_t {
 }
 
 pub fn readPtyAndBroadcast(self: anytype, session_id: []const u8) !void {
+    assert(session_id.len > 0);
+
     var child_copy: pty.Child = blk: {
         self.lock();
         defer self.unlock();
         const item = self.sessions.find(session_id) orelse return;
+        item.assertInvariants();
         break :blk item.pty_child orelse return;
     };
 
@@ -92,6 +104,7 @@ pub fn readPtyAndBroadcast(self: anytype, session_id: []const u8) !void {
     defer self.unlock();
 
     const item = self.sessions.find(session_id) orelse return;
+    item.assertInvariants();
     item.writeVt(payload) catch |err| {
         std.log.warn("failed to feed VT state for {s}: {t}", .{ item.id, err });
     };
@@ -100,14 +113,17 @@ pub fn readPtyAndBroadcast(self: anytype, session_id: []const u8) !void {
             break :seq try event_log.appendOutput(self.allocator, path, item.excerpt_path, &item.last_seq, payload);
         }
 
-        item.last_seq += 1;
+        item.last_seq = std.math.add(u64, item.last_seq, 1) catch return error.SequenceOverflow;
         break :seq item.last_seq;
     };
 
     try self.broadcastStreamFrameLocked(item, .output, seq, payload);
+    item.assertInvariants();
 }
 
 pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
+    assert(session_id.len > 0);
+
     self.lock();
     errdefer self.unlock();
 
@@ -115,6 +131,7 @@ pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
         self.unlock();
         return true;
     };
+    item.assertInvariants();
     const child = if (item.pty_child) |*child| child else {
         self.unlock();
         return false;
@@ -123,7 +140,7 @@ pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
         self.unlock();
         return false;
     };
-    item.status = .exited;
+    item.transitionTo(.exited);
     if (item.event_log_path) |path| {
         _ = event_log.appendExit(self.allocator, path, &item.last_seq, status.exit_code, status.signal) catch |err| {
             std.log.warn("failed to append child exit frame for {s}: {t}", .{ item.id, err });
@@ -134,6 +151,7 @@ pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
     item.reader_started = false;
     try self.broadcastExitFrameLocked(item, item.last_seq, status.exit_code, status.signal);
     self.recordTerminalEndedLocked(item, status.exit_code, status.signal);
+    item.assertInvariants();
     var search_snapshot = self.searchExcerptSnapshotLocked(item) catch |err| blk: {
         std.log.warn("failed to prepare search excerpt indexing for {s}: {t}", .{ item.id, err });
         break :blk null;
@@ -151,6 +169,8 @@ pub fn reapExitedChild(self: anytype, session_id: []const u8) !bool {
 }
 
 pub fn markExitedAndBroadcast(self: anytype, session_id: []const u8, exit_code: i32, signal_value: i32) !bool {
+    assert(session_id.len > 0);
+
     self.lock();
     errdefer self.unlock();
 
@@ -162,7 +182,8 @@ pub fn markExitedAndBroadcast(self: anytype, session_id: []const u8, exit_code: 
         self.unlock();
         return true;
     }
-    item.status = .exited;
+    item.assertInvariants();
+    item.transitionTo(.exited);
     if (item.pty_child) |*child| child.close();
     item.pty_child = null;
     item.reader_started = false;
@@ -173,6 +194,7 @@ pub fn markExitedAndBroadcast(self: anytype, session_id: []const u8, exit_code: 
     }
     try self.broadcastExitFrameLocked(item, item.last_seq, exit_code, signal_value);
     self.recordTerminalEndedLocked(item, exit_code, signal_value);
+    item.assertInvariants();
     var search_snapshot = self.searchExcerptSnapshotLocked(item) catch |err| blk: {
         std.log.warn("failed to prepare search excerpt indexing for {s}: {t}", .{ item.id, err });
         break :blk null;

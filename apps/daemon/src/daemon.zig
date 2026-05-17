@@ -301,6 +301,36 @@ pub const Daemon = struct {
         return stream_mod.flushPendingOutputToSubscriberLocked(self, item, socket_fd);
     }
 
+    /// Guarded daemon mutex ownership. Most daemon methods still expose the
+    /// legacy `lock`/`unlock` pair because the control path deliberately drops
+    /// the lock around filesystem, SQLite, and adapter work. New code should
+    /// prefer this guard so lock ownership is local and mechanically paired.
+    pub const LockGuard = struct {
+        daemon: *Daemon,
+        held: bool = true,
+
+        pub fn release(self: *LockGuard) void {
+            std.debug.assert(self.held);
+            self.daemon.unlock();
+            self.held = false;
+        }
+
+        pub fn reacquire(self: *LockGuard) void {
+            std.debug.assert(!self.held);
+            self.daemon.lock();
+            self.held = true;
+        }
+
+        pub fn deinit(self: *LockGuard) void {
+            if (self.held) self.release();
+        }
+    };
+
+    pub fn acquireLock(self: *Daemon) LockGuard {
+        self.lock();
+        return .{ .daemon = self };
+    }
+
     pub fn lock(self: *Daemon) void {
         self.mutex.lock();
     }

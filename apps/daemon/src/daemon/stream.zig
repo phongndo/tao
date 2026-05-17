@@ -13,14 +13,17 @@ const writeAllFd = fd_io.writeAllFd;
 const writeAllFdNonBlocking = fd_io.writeAllFdNonBlocking;
 const isLiveAttachable = util.isLiveAttachable;
 
+const assert = std.debug.assert;
 const max_pending_client_bytes = 1024 * 1024;
 
 fn appendPendingClientBytes(self: anytype, pending: *std.ArrayList(u8), bytes: []const u8) !bool {
+    assert(pending.items.len <= max_pending_client_bytes);
     if (bytes.len > max_pending_client_bytes or pending.items.len > max_pending_client_bytes - bytes.len) {
         std.log.warn("closing taod stream with oversized pending client frame buffer", .{});
         return false;
     }
     try pending.appendSlice(self.allocator, bytes);
+    assert(pending.items.len <= max_pending_client_bytes);
     return true;
 }
 
@@ -37,6 +40,9 @@ fn ClientFrameVisitor(comptime Daemon: type) type {
 }
 
 pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: []const u8, initial_tail: []const u8) !void {
+    assert(socket_fd >= 0);
+    assert(session_id.len > 0);
+
     if (!try self.addSubscriber(session_id, socket_fd)) return;
     defer _ = self.removeSubscriber(session_id, socket_fd);
 
@@ -70,6 +76,8 @@ pub fn streamAttachedSession(self: anytype, socket_fd: std.c.fd_t, session_id: [
 }
 
 pub fn applyPendingClientFrames(self: anytype, session_id: []const u8, pending: *std.ArrayList(u8)) !void {
+    assert(session_id.len > 0);
+    assert(pending.items.len <= max_pending_client_bytes);
     if (pending.items.len == 0) return;
 
     var visitor = ClientFrameVisitor(@TypeOf(self)){ .daemon = self, .session_id = session_id };
@@ -78,13 +86,18 @@ pub fn applyPendingClientFrames(self: anytype, session_id: []const u8, pending: 
 }
 
 pub fn addSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !bool {
+    assert(session_id.len > 0);
+    assert(socket_fd >= 0);
+
     self.lock();
     {
         defer self.unlock();
 
         const item = self.sessions.find(session_id) orelse return false;
+        item.assertInvariants();
         if (!isLiveAttachable(item)) return false;
         if (!try self.sessions.addSubscriber(session_id, socket_fd)) return false;
+        item.assertInvariants();
     }
 
     // Initial reattach hydration must be reliable. Current-screen snapshots for full-screen
@@ -112,11 +125,15 @@ pub fn addSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_
 }
 
 fn flushPendingOutputToSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) !void {
+    assert(session_id.len > 0);
+    assert(socket_fd >= 0);
+
     const frames = frames: {
         self.lock();
         defer self.unlock();
 
         const item = self.sessions.find(session_id) orelse return error.SessionNotFound;
+        item.assertInvariants();
         if (!self.sessions.hasSubscriber(session_id, socket_fd)) return error.SessionNotAttached;
         if (item.pending_output.items.len == 0) break :frames null;
 
@@ -138,11 +155,15 @@ fn flushPendingOutputToSubscriber(self: anytype, session_id: []const u8, socket_
     self.lock();
     defer self.unlock();
     const item = self.sessions.find(session_id) orelse return;
+    item.assertInvariants();
     if (!self.sessions.hasSubscriber(session_id, socket_fd)) return;
     item.clearPendingOutput(self.allocator);
 }
 
 pub fn removeSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+    assert(session_id.len > 0);
+    assert(socket_fd >= 0);
+
     self.lock();
     defer self.unlock();
 
@@ -157,6 +178,9 @@ pub fn removeSubscriber(self: anytype, session_id: []const u8, socket_fd: std.c.
 }
 
 pub fn sessionCanContinueStreaming(self: anytype, session_id: []const u8, socket_fd: std.c.fd_t) bool {
+    assert(session_id.len > 0);
+    assert(socket_fd >= 0);
+
     self.lock();
     defer self.unlock();
 
@@ -166,10 +190,13 @@ pub fn sessionCanContinueStreaming(self: anytype, session_id: []const u8, socket
 }
 
 pub fn applyClientFrame(self: anytype, frame: rpc.StreamFrame) !void {
+    assert(frame.session_id.len > 0);
+
     self.lock();
     defer self.unlock();
 
     const item = self.sessions.find(frame.session_id) orelse return;
+    item.assertInvariants();
     const child = if (item.pty_child) |*child| child else return;
 
     switch (frame.kind) {
@@ -213,6 +240,8 @@ pub fn broadcastStreamFrameLocked(
     seq: u64,
     payload: []const u8,
 ) !void {
+    item.assertInvariants();
+
     if (item.subscribers.items.len == 0) {
         if (kind == .output) item.bufferPendingOutput(self.allocator, seq, payload) catch |err| {
             std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, err });
@@ -235,9 +264,12 @@ pub fn broadcastStreamFrameLocked(
         };
         index += 1;
     }
+    item.assertInvariants();
 }
 
 pub fn flushPendingOutputToSubscriberLocked(self: anytype, item: *session.TerminalSession, socket_fd: std.c.fd_t) !void {
+    item.assertInvariants();
+    assert(socket_fd >= 0);
     if (item.pending_output.items.len == 0) return;
 
     for (item.pending_output.items) |frame| {

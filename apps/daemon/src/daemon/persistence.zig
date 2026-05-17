@@ -95,7 +95,7 @@ pub fn restoreSessionWithArgvJsonLocked(
     errdefer {
         if (!restore_committed) _ = self.sessions.remove(session_id);
     }
-    restored.status = .live;
+    restored.transitionTo(.live);
 
     try self.ensureSessionPersistence(restored);
     self.ensureSessionProcess(restored, argv) catch |err| {

@@ -31,7 +31,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     const rows = request.rows orelse return missingField(allocator, request, "rows");
 
     const created = if (self.sessions.find(session_id)) |existing| blk: {
-        existing.status = .live;
+        existing.transitionTo(.live);
         try existing.updateCreateMetadata(self.allocator, terminal_id, request.cwd, cols, rows);
         break :blk existing;
     } else try self.sessions.create(.{

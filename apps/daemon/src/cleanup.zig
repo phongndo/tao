@@ -1,6 +1,8 @@
 const std = @import("std");
 const event_log = @import("event_log.zig");
 
+pub const session_dirs_scan_max = 64 * 1024;
+
 pub const RetentionPolicy = struct {
     retain_days: u32 = 30,
     max_session_bytes: u64 = 2 * 1024 * 1024 * 1024,
@@ -140,6 +142,7 @@ fn listSessionDirs(allocator: std.mem.Allocator, sessions_dir: []const u8) ![]Se
     var iterator = dir.iterate();
     while (try iterator.next()) |entry| {
         if (entry.kind != .directory) continue;
+        if (dirs.items.len >= session_dirs_scan_max) return error.TooManySessionDirs;
 
         const stat = dir.statFile(entry.name) catch continue;
 

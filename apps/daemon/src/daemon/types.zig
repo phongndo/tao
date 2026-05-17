@@ -3,6 +3,22 @@ const session = @import("../session.zig");
 const protocol = @import("protocol.zig");
 const util = @import("util.zig");
 
+/// Daemon invariants shared by the split subsystem modules:
+///
+/// * `*Locked` functions are entered with `Daemon.mutex` held and must return
+///   with it held. They may temporarily release it only around blocking IO,
+///   SQLite, adapter, or filesystem work, and must snapshot any heap-owned data
+///   needed after release.
+/// * `TerminalSession` is the authoritative in-memory state machine. Persistent
+///   database/event-log rows are recovery indexes, not a replacement for live
+///   session invariants.
+/// * Stream subscribers are best-effort after initial hydration: slow live
+///   subscribers may be dropped, but pending output and current-screen snapshots
+///   remain bounded and explicit.
+/// * Persistence privacy is fail-closed for input: input frames are written only
+///   when both persistence and `persist_input` are enabled.
+///
+/// Keep this file dependency-light; it is imported by most daemon subsystems.
 pub const PersistencePolicy = struct {
     enabled: bool = true,
     persist_input: bool = false,

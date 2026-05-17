@@ -1,6 +1,16 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 
+const assert = std.debug.assert;
+
+pub const event_log_refs_max = 64 * 1024;
+pub const search_results_max = 1024;
+
+comptime {
+    assert(event_log_refs_max > 0);
+    assert(search_results_max > 0);
+}
+
 pub const migration_001_terminal_sessions =
     \\CREATE TABLE terminal_sessions (
     \\    id                 TEXT PRIMARY KEY,
@@ -474,6 +484,7 @@ pub const Database = struct {
         }
 
         while (try iter.nextAlloc(allocator, .{})) |row| {
+            if (refs.items.len >= event_log_refs_max) return error.TooManyEventLogRefs;
             try refs.append(allocator, row);
         }
 
@@ -550,6 +561,8 @@ pub const Database = struct {
     }
 
     pub fn searchTerminalExcerpts(self: *Database, allocator: std.mem.Allocator, query: []const u8, limit: u32) ![]TerminalSearchResult {
+        if (limit > search_results_max) return error.SearchLimitTooLarge;
+
         var stmt = try self.handle.prepareDynamic(search_terminal_excerpts_sql);
         defer stmt.deinit();
         var iter = try stmt.iteratorAlloc(TerminalSearchResult, allocator, .{ query, limit });
@@ -561,6 +574,7 @@ pub const Database = struct {
         }
 
         while (try iter.nextAlloc(allocator, .{})) |row| {
+            if (results.items.len >= search_results_max) return error.TooManySearchResults;
             try results.append(allocator, row);
         }
 

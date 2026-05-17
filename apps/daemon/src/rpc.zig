@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const assert = std.debug.assert;
+
 pub const RequestType = enum {
     create,
     attach,
@@ -193,6 +195,12 @@ const stream_crc_offset: usize = stream_length_offset + 4;
 pub const stream_header_size: usize = stream_crc_offset + 4;
 pub const max_stream_payload_bytes: u32 = 64 * 1024 * 1024;
 
+comptime {
+    assert(stream_session_id_size > 0);
+    assert(stream_header_size == 88);
+    assert(max_stream_payload_bytes > 0);
+}
+
 pub const StreamFrame = struct {
     kind: StreamKind,
     session_id: []const u8,
@@ -242,6 +250,8 @@ pub fn encodeStreamFrame(
     std.mem.writeInt(u32, out[stream_crc_offset..][0..4], std.hash.Crc32.hash(payload), .big);
     @memcpy(out[stream_header_size..total_len], payload);
 
+    assert(total_len == stream_header_size + payload.len);
+
     return out[0..total_len];
 }
 
@@ -250,7 +260,7 @@ pub fn parseStreamFrames(data: []const u8, visitor: anytype) !StreamParseResult 
     var valid_bytes: usize = 0;
     var frames_seen: usize = 0;
 
-    while (offset + stream_header_size <= data.len) {
+    while (offset <= data.len and data.len - offset >= stream_header_size) {
         if (std.mem.readInt(u32, data[offset..][0..4], .big) != stream_magic) break;
 
         const version = std.mem.readInt(u16, data[offset + 4 ..][0..2], .big);
@@ -264,9 +274,9 @@ pub fn parseStreamFrames(data: []const u8, visitor: anytype) !StreamParseResult 
         const kind = StreamKind.fromRaw(kind_raw) orelse break;
         const session_id = trimStreamSessionId(session_field);
         if (version != stream_version or session_id.len == 0 or length > max_stream_payload_bytes) break;
+        if (length > data.len - payload_start) break;
 
         const payload_end = payload_start + @as(usize, length);
-        if (payload_end > data.len) break;
 
         const payload = data[payload_start..payload_end];
         if (std.hash.Crc32.hash(payload) != expected_crc) break;
@@ -467,6 +477,31 @@ test "stream parser rejects corrupt CRC payloads" {
     try std.testing.expectEqual(@as(usize, 0), result.valid_bytes);
     try std.testing.expectEqual(@as(usize, 0), result.frames_seen);
     try std.testing.expectEqual(@as(usize, 0), recorder.count);
+}
+
+test "stream parser deterministic malformed-input sweep" {
+    var prng = std.Random.DefaultPrng.init(0x54414f5f5354524d);
+    const random = prng.random();
+
+    var buffer: [256]u8 = undefined;
+    var case_index: usize = 0;
+    while (case_index < 256) : (case_index += 1) {
+        const len = random.uintLessThan(usize, buffer.len + 1);
+        random.bytes(buffer[0..len]);
+
+        var recorder = struct {
+            count: usize = 0,
+            pub fn visit(self: *@This(), frame: StreamFrame) !void {
+                self.count += 1;
+                try std.testing.expect(frame.session_id.len > 0);
+                try std.testing.expect(frame.payload.len <= max_stream_payload_bytes);
+            }
+        }{};
+
+        const result = try parseStreamFrames(buffer[0..len], &recorder);
+        try std.testing.expect(result.valid_bytes <= len);
+        try std.testing.expectEqual(result.frames_seen, recorder.count);
+    }
 }
 
 test "stream resize and exit payload helpers round-trip" {
