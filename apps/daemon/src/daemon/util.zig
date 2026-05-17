@@ -72,7 +72,8 @@ pub fn readSmallFileAlloc(allocator: std.mem.Allocator, path: []const u8, limit:
         offset += @intCast(amount);
     }
 
-    return data[0..offset];
+    if (offset == data.len) return data;
+    return try allocator.realloc(data, offset);
 }
 
 pub fn fileExists(path: []const u8) bool {

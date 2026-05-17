@@ -13,6 +13,17 @@ pub const ControlPayload = struct {
     }
 };
 
+fn ownedControlPayload(
+    allocator: std.mem.Allocator,
+    payload: *std.ArrayList(u8),
+    tail: *std.ArrayList(u8),
+) !ControlPayload {
+    const owned_payload = try payload.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_payload);
+    const owned_tail = try tail.toOwnedSlice(allocator);
+    return .{ .payload = owned_payload, .tail = owned_tail };
+}
+
 pub fn writeAllFd(fd: std.posix.fd_t, data: []const u8) !void {
     var offset: usize = 0;
     while (offset < data.len) {
@@ -73,10 +84,7 @@ pub fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !Control
             if (payload.items.len + newline_index > control_payload_max) return error.ControlPayloadTooLarge;
             try payload.appendSlice(allocator, bytes[0..newline_index]);
             if (newline_index + 1 < bytes.len) try tail.appendSlice(allocator, bytes[newline_index + 1 ..]);
-            return .{
-                .payload = try payload.toOwnedSlice(allocator),
-                .tail = try tail.toOwnedSlice(allocator),
-            };
+            return ownedControlPayload(allocator, &payload, &tail);
         }
 
         if (payload.items.len + bytes.len > control_payload_max) return error.ControlPayloadTooLarge;
@@ -84,10 +92,7 @@ pub fn readControlPayload(allocator: std.mem.Allocator, fd: std.c.fd_t) !Control
     }
 
     if (payload.items.len == 0) return error.EmptyControlPayload;
-    return .{
-        .payload = try payload.toOwnedSlice(allocator),
-        .tail = try tail.toOwnedSlice(allocator),
-    };
+    return ownedControlPayload(allocator, &payload, &tail);
 }
 
 test "control payload reader preserves attach tails and rejects oversize lines" {

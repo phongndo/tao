@@ -176,7 +176,8 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8, limit: usize) !
         offset += @intCast(amount);
     }
 
-    return data[0..offset];
+    if (offset == data.len) return data;
+    return try allocator.realloc(data, offset);
 }
 
 fn writeFile(path: []const u8, data: []const u8, mode: std.c.mode_t) !void {
