@@ -286,7 +286,8 @@ fn runAdapterCommandAlloc(
         else => return err,
     };
     defer if (runner) |value| allocator.free(value);
-    const runner_exe = if (runner) |value| if (value.len > 0) value else "node" else "node";
+    const default_runner = if (std.mem.endsWith(u8, script_path, ".ts")) "tsx" else "node";
+    const runner_exe = if (runner) |value| if (value.len > 0) value else default_runner else default_runner;
 
     const child_argv = [_][]const u8{ runner_exe, script_path, request_json };
     const result = std.process.Child.run(.{
@@ -294,15 +295,24 @@ fn runAdapterCommandAlloc(
         .argv = &child_argv,
         .max_output_bytes = adapter_output_max,
     }) catch |err| switch (err) {
-        error.FileNotFound => return null,
+        error.FileNotFound => {
+            std.log.warn("agent adapter runner not found for {s}: {s}", .{ provider.text(), runner_exe });
+            return null;
+        },
         else => return err,
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| if (code != 0) return null,
-        else => return null,
+        .Exited => |code| if (code != 0) {
+            std.log.warn("agent adapter {s} command {s} exited with code {d}: {s}", .{ provider.text(), command, code, result.stderr });
+            return null;
+        },
+        else => |term| {
+            std.log.warn("agent adapter {s} command {s} ended unexpectedly: {any}", .{ provider.text(), command, term });
+            return null;
+        },
     }
 
     const line = firstJsonLine(result.stdout) orelse return null;
@@ -446,13 +456,14 @@ test "agent adapter external detection executes TypeScript adapters" {
     defer tmp.cleanup();
 
     try tmp.dir.writeFile(.{ .sub_path = "pi.ts", .data = 
-        \\const msg = JSON.parse(process.argv[2] || '{}')
+        \\const msg: Record<string, unknown> = JSON.parse(process.argv[2] || '{}')
+        \\const toSession = (id: unknown): string => String(id)
         \\switch (msg.command) {
         \\  case 'detect':
         \\    console.log(JSON.stringify({ detected: true, nativeSessionId: 'adapter-native' }))
         \\    break
         \\  case 'resume-command':
-        \\    console.log(JSON.stringify({ argv: ['pi', '--session', msg.nativeSessionId] }))
+        \\    console.log(JSON.stringify({ argv: ['pi', '--session', toSession(msg.nativeSessionId)] }))
         \\    break
         \\  default:
         \\    console.log(JSON.stringify({ detected: false }))
