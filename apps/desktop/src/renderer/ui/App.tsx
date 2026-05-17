@@ -190,10 +190,12 @@ function ResizeShell({
   children,
   width,
   onResize,
+  onResizePreview,
 }: {
   children: ReactNode
   width: number
   onResize(width: number): void
+  onResizePreview?(width: number | null): void
 }) {
   const [isResizing, setIsResizing] = useState(false)
   const [draftWidth, setDraftWidth] = useState<number | null>(null)
@@ -215,7 +217,8 @@ function ResizeShell({
     const clampedWidth = normalizeSidebarWidth(nextWidth)
     currentWidthRef.current = clampedWidth
     setDraftWidth(clampedWidth)
-  }, [])
+    onResizePreview?.(clampedWidth)
+  }, [onResizePreview])
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
@@ -263,8 +266,9 @@ function ResizeShell({
         frameRef.current = null
       }
       pendingWidthRef.current = null
+      onResizePreview?.(null)
     }
-  }, [handlePointerMove, handlePointerUp, isResizing])
+  }, [handlePointerMove, handlePointerUp, isResizing, onResizePreview])
 
   const resizeHandle = (
     <div
@@ -286,6 +290,7 @@ function ResizeShell({
         startWidthRef.current = normalizedWidth
         currentWidthRef.current = normalizedWidth
         setDraftWidth(normalizedWidth)
+        onResizePreview?.(normalizedWidth)
         setIsResizing(true)
       }}
       onKeyDown={(event) => {
@@ -693,6 +698,9 @@ export function App() {
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
+  const [sidebarResizePreviewCompact, setSidebarResizePreviewCompact] = useState<boolean | null>(
+    null,
+  )
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
@@ -930,10 +938,17 @@ export function App() {
     (nextWidth: number) => {
       setSidebarWidth(normalizeSidebarWidth(nextWidth))
       setSidebarExpanded(true)
+      setSidebarResizePreviewCompact(null)
     },
     [setSidebarExpanded, setSidebarWidth],
   )
-  const isSidebarCompact = sidebarExpanded && sidebarSize <= SIDEBAR_COMPACT_THRESHOLD
+  const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
+    setSidebarResizePreviewCompact(
+      nextWidth === null ? null : nextWidth <= SIDEBAR_COMPACT_THRESHOLD,
+    )
+  }, [])
+  const isSidebarCompact =
+    sidebarExpanded && (sidebarResizePreviewCompact ?? sidebarSize <= SIDEBAR_COMPACT_THRESHOLD)
   const shellClassName = [
     'tao-shell',
     sidebarExpanded ? null : 'tao-shell-sidebar-hidden',
@@ -949,7 +964,11 @@ export function App() {
   return (
     <div className={shellClassName}>
       {sidebarExpanded ? (
-        <ResizeShell width={sidebarSize} onResize={handleResizeSidebar}>
+        <ResizeShell
+          width={sidebarSize}
+          onResize={handleResizeSidebar}
+          onResizePreview={handleSidebarResizePreview}
+        >
           {!isSidebarCompact ? (
             <HeaderNavigation
               isSidebarVisible={sidebarExpanded}
