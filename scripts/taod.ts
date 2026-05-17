@@ -52,6 +52,24 @@ function run(
   return result
 }
 
+function runForStatus(
+  command: string,
+  args: readonly string[],
+  options: RunOptions = {},
+): SpawnSyncReturns<Buffer> {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd ?? daemonRoot,
+    stdio: options.stdio ?? 'inherit',
+    env: options.env ?? process.env,
+  })
+  if (result.error) throw result.error
+  return result
+}
+
+function exitFromRunResult(result: SpawnSyncReturns<Buffer>): void {
+  if (result.status !== 0) process.exit(result.status ?? 1)
+}
+
 function capture(command: string, args: readonly string[], options: RunOptions = {}): Buffer {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? daemonRoot,
@@ -428,6 +446,22 @@ function leakCheckEnv(home: string): NodeJS.ProcessEnv {
   return { ...process.env, HOME: home, TAOD_DEBUG_ALLOC: '1' }
 }
 
+function runLeakCheck(command: string, args: readonly string[], options: RunOptions = {}): void {
+  const result = (() => {
+    try {
+      return withTemporaryHome((home) => {
+        return runForStatus(command, args, {
+          ...options,
+          env: leakCheckEnv(home),
+        })
+      })
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err))
+    }
+  })()
+  exitFromRunResult(result)
+}
+
 function testAndBuildDirect(): void {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
@@ -482,9 +516,7 @@ if (process.platform !== 'darwin' || process.env.TAOD_USE_ZIG_BUILD === '1') {
       run('zig', ['build', 'run', '--', '--check'])
       break
     case 'leak-check':
-      withTemporaryHome((home) => {
-        run('zig', ['build', 'run', '--', '--check'], { env: leakCheckEnv(home) })
-      })
+      runLeakCheck('zig', ['build', 'run', '--', '--check'])
       break
     default:
       fail(`Unknown taod zig command: ${command}`)
@@ -511,9 +543,7 @@ switch (command) {
   }
   case 'leak-check': {
     const binaryPath = buildDirect()
-    withTemporaryHome((home) => {
-      run(binaryPath, ['--check'], { cwd: daemonRoot, env: leakCheckEnv(home) })
-    })
+    runLeakCheck(binaryPath, ['--check'], { cwd: daemonRoot })
     break
   }
   default:
