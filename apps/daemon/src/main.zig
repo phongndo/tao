@@ -2,8 +2,24 @@ const std = @import("std");
 const taod = @import("taod");
 
 pub fn main() !void {
-    const allocator = std.heap.smp_allocator;
+    if (debugAllocatorEnabled()) {
+        var debug_allocator: std.heap.DebugAllocator(.{}) = .{
+            .backing_allocator = std.heap.smp_allocator,
+        };
+        const allocator = debug_allocator.allocator();
 
+        realMain(allocator) catch |err| {
+            if (debug_allocator.deinit() == .leak) std.process.exit(1);
+            return err;
+        };
+        if (debug_allocator.deinit() == .leak) std.process.exit(1);
+        return;
+    }
+
+    try realMain(std.heap.smp_allocator);
+}
+
+fn realMain(allocator: std.mem.Allocator) !void {
     const home = try std.process.getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home);
 
@@ -34,4 +50,14 @@ pub fn main() !void {
     if (check) return;
 
     try daemon.runForever();
+}
+
+fn debugAllocatorEnabled() bool {
+    const allocator = std.heap.smp_allocator;
+    const value = std.process.getEnvVarOwned(allocator, "TAOD_DEBUG_ALLOC") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return false,
+        else => return false,
+    };
+    defer allocator.free(value);
+    return std.mem.eql(u8, value, "1");
 }

@@ -9,6 +9,7 @@
     "check": "node --experimental-strip-types ../../scripts/taod.ts check",
     "fmt": "node --experimental-strip-types ../../scripts/zig-tools.ts fmt apps/daemon",
     "fmt:check": "node --experimental-strip-types ../../scripts/zig-tools.ts fmt:check apps/daemon",
+    "leak-check": "node --experimental-strip-types ../../scripts/taod.ts leak-check",
     "lint": "node --experimental-strip-types ../../scripts/zig-tools.ts lint apps/daemon",
     "lsp": "zls --version",
     "test": "node --experimental-strip-types ../../scripts/taod.ts test"

@@ -26,6 +26,8 @@
     "zig:fmt:check": "pnpm --filter @tao/daemon fmt:check",
     "zig:lsp": "pnpm --filter @tao/daemon lsp",
     "zig:check": "pnpm zig:lint && pnpm zig:fmt:check && pnpm zig:test",
+    "zig:leak-check": "pnpm --filter @tao/daemon leak-check",
+    "leak:taod": "pnpm zig:leak-check",
     "bench": "pnpm --filter @tao/desktop bench",
     "bench:latency": "pnpm --filter @tao/desktop bench:latency",
     "bench:ipc": "pnpm --filter @tao/desktop bench:ipc",
