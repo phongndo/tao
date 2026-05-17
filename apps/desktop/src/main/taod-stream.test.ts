@@ -65,6 +65,22 @@ test('taod stream parser keeps partial tails for the next chunk', () => {
   assert.equal(frames[0]?.seq, 2)
 })
 
+test('taod stream parser preserves magic prefixes while resyncing across chunks', () => {
+  const encoded = encodeTaodStreamFrame({
+    kind: TaodStreamFrameKind.Output,
+    sessionId: 'session-1',
+    seq: 1,
+    payload: 'recovered',
+  })
+
+  const parser = new TaodStreamFrameParser()
+  assert.deepEqual(parser.push(Buffer.concat([Buffer.from('noise'), encoded.subarray(0, 2)])), [])
+  const frames = parser.push(encoded.subarray(2))
+
+  assert.equal(frames.length, 1)
+  assert.equal(frames[0]?.payload.toString('utf8'), 'recovered')
+})
+
 test('taod stream parser rejects CRC corruption', () => {
   const encoded = encodeTaodStreamFrame({
     kind: TaodStreamFrameKind.Output,

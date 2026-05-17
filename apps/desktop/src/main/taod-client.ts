@@ -41,6 +41,7 @@ export type TaodControlResponse = {
   readonly native_session_id?: string | null
   readonly removed_sessions?: number
   readonly removed_bytes?: number
+  readonly error_code?: string
   readonly error_message?: string
 }
 
@@ -94,7 +95,11 @@ function normalizeError(error: unknown): Error {
 }
 
 function responseError(response: TaodControlResponse): Error {
-  return new Error(response.error_message ?? 'taod request failed')
+  const error = new Error(response.error_message ?? 'taod request failed') as Error & {
+    code?: string
+  }
+  error.code = response.error_code
+  return error
 }
 
 function parseControlResponse(line: Buffer): TaodControlResponse {

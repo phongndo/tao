@@ -45,7 +45,10 @@ function normalizeError(error: unknown): Error {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  return normalizeError(error).message.toLowerCase().includes('session not found')
+  if (typeof error === 'object' && error && 'code' in error) {
+    return (error as { code?: unknown }).code === 'session_not_found'
+  }
+  return false
 }
 
 function sanitizeCwd(cwd: unknown): string | undefined {

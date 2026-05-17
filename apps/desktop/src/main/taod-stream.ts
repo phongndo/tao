@@ -131,6 +131,16 @@ function trimSessionId(field: Buffer): string {
   return field.subarray(0, end).toString('utf8')
 }
 
+function trailingMagicPrefixLength(buffer: Buffer): number {
+  const maxLength = Math.min(FRAME_MAGIC_BYTES.length - 1, buffer.length)
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (buffer.subarray(buffer.length - length).equals(FRAME_MAGIC_BYTES.subarray(0, length))) {
+      return length
+    }
+  }
+  return 0
+}
+
 export class TaodStreamFrameParser {
   private pending = Buffer.alloc(0)
 
@@ -147,6 +157,11 @@ export class TaodStreamFrameParser {
       if (magic !== TAOD_STREAM_MAGIC) {
         const nextMagic = this.pending.indexOf(FRAME_MAGIC_BYTES, offset + 1)
         if (nextMagic === -1) {
+          const prefixLength = trailingMagicPrefixLength(this.pending)
+          if (prefixLength > 0) {
+            this.pending = this.pending.subarray(this.pending.length - prefixLength)
+            return frames
+          }
           this.pending = Buffer.alloc(0)
           throw new Error('Invalid taod stream frame magic')
         }

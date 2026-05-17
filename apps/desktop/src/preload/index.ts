@@ -90,6 +90,19 @@ const agentStatusCallbacks = new Map<string, AgentStatusCallback[]>()
 const ptyErrorCallbacks = new Map<string, PtyErrorCallback[]>()
 const ptyExitCallbacks = new Map<string, PtyExitCallback[]>()
 
+function isValidTerminalSize(cols: unknown, rows: unknown): cols is number {
+  return (
+    typeof cols === 'number' &&
+    typeof rows === 'number' &&
+    Number.isFinite(cols) &&
+    Number.isFinite(rows) &&
+    Number.isInteger(cols) &&
+    Number.isInteger(rows) &&
+    cols > 0 &&
+    rows > 0
+  )
+}
+
 function createReadyState(sessionId: string): ReadyState {
   let resolveReady: ((size: PtySize) => void) | null = null
   let rejectReady: ((err: Error) => void) | null = null
@@ -492,8 +505,8 @@ const electronAPI = {
     if (!input || typeof input.terminalId !== 'string' || input.terminalId.length === 0) {
       return Promise.reject(new Error('terminalId is required'))
     }
-    if (typeof input.cols !== 'number' || typeof input.rows !== 'number') {
-      return Promise.reject(new Error('Session size must be numeric'))
+    if (!isValidTerminalSize(input.cols, input.rows)) {
+      return Promise.reject(new Error('Session size must use positive integer cols and rows'))
     }
 
     const sessionId = createSessionId()
@@ -522,6 +535,9 @@ const electronAPI = {
 
     const cols = typeof input.cols === 'number' ? input.cols : 80
     const rows = typeof input.rows === 'number' ? input.rows : 24
+    if (!isValidTerminalSize(cols, rows)) {
+      return Promise.reject(new Error('Session size must use positive integer cols and rows'))
+    }
     const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
@@ -560,7 +576,7 @@ const electronAPI = {
 
   resizeSession(sessionId: string, cols: number, rows: number): void {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return
-    if (typeof cols !== 'number' || typeof rows !== 'number') return
+    if (!isValidTerminalSize(cols, rows)) return
     queuePtyMessage({ type: 'resize', sessionId, cols, rows })
   },
 
@@ -653,8 +669,8 @@ const electronAPI = {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       return Promise.reject(new Error('PTY sessionId is required'))
     }
-    if (typeof cols !== 'number' || typeof rows !== 'number') {
-      return Promise.reject(new Error('PTY size must be numeric'))
+    if (!isValidTerminalSize(cols, rows)) {
+      return Promise.reject(new Error('PTY size must use positive integer cols and rows'))
     }
 
     const state = beginReadyState(sessionId)
@@ -677,7 +693,7 @@ const electronAPI = {
 
   resizePty(sessionId: string, cols: number, rows: number): void {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return
-    if (typeof cols !== 'number' || typeof rows !== 'number') return
+    if (!isValidTerminalSize(cols, rows)) return
     queuePtyMessage({ type: 'resize', sessionId, cols, rows })
   },
 
