@@ -11,7 +11,7 @@ const writeAllFd = fd_io.writeAllFd;
 fn handleConnectionThread(context: anytype) void {
     defer context.daemon.allocator.destroy(context);
     context.daemon.handleStream(context.stream) catch |err| {
-        std.log.warn("control RPC connection failed: {t}", .{err});
+        std.log.warn("control RPC connection failed: {s}", .{@errorName(err)});
     };
 }
 
@@ -67,9 +67,9 @@ pub fn runForever(self: anytype) !void {
         context.* = .{ .daemon = self, .stream = stream };
 
         const thread = std.Thread.spawn(.{}, handleConnectionThread, .{context}) catch |err| {
-            std.log.warn("failed to spawn control RPC thread: {t}; handling inline", .{err});
+            std.log.warn("failed to spawn control RPC thread: {s}; handling inline", .{@errorName(err)});
             self.handleStream(stream) catch |stream_err| {
-                std.log.warn("control RPC connection failed: {t}", .{stream_err});
+                std.log.warn("control RPC connection failed: {s}", .{@errorName(stream_err)});
             };
             self.allocator.destroy(context);
             continue;
