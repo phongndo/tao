@@ -16,6 +16,7 @@ const electronPackage = JSON.parse(readFileSync(electronPackageJsonPath, 'utf8')
 
 const platform =
   process.env.ELECTRON_INSTALL_PLATFORM || process.env.npm_config_platform || process.platform
+const hostPlatform = process.platform
 const arch = process.env.ELECTRON_INSTALL_ARCH || process.env.npm_config_arch || process.arch
 const platformPath = getPlatformPath(platform)
 const distPath = process.env.ELECTRON_OVERRIDE_DIST_PATH || join(electronDir, 'dist')
@@ -79,13 +80,43 @@ async function installElectron(): Promise<void> {
     arch,
   })
 
-  await rm(distPath, { recursive: true, force: true })
+  await removePath(distPath)
   await mkdir(distPath, { recursive: true })
   extractZip(zipPath, distPath)
   await writeInstallMarkers()
 
   if (!(await isElectronUsable())) {
     throw new Error(`Electron install is incomplete at ${electronDir}`)
+  }
+}
+
+async function removePath(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    return
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(
+      `[electron-install] Node rm failed for ${path} on host ${hostPlatform} while installing for ${platform}; falling back to shell removal: ${message}`,
+    )
+    // Electron's macOS .app bundle can occasionally leave nested framework resources behind
+    // during recursive removal in fresh worktrees. Fall back to the platform shell remover so
+    // predev/setup can repair a partially extracted Electron install instead of failing.
+    if (hostPlatform === 'win32') {
+      const target = JSON.stringify(path)
+      execFileSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          `$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath ${target}) { Remove-Item -LiteralPath ${target} -Recurse -Force -ErrorAction Stop }`,
+        ],
+        { stdio: 'inherit' },
+      )
+      return
+    }
+
+    execFileSync('rm', ['-rf', path], { stdio: 'inherit' })
   }
 }
 
