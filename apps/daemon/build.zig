@@ -63,6 +63,13 @@ pub fn build(b: *std.Build) void {
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&b.addRunArtifact(mod_tests).step);
-    test_step.dependOn(&b.addRunArtifact(exe_tests).step);
+    const mod_test_run = b.addRunArtifact(mod_tests);
+    const exe_test_run = b.addRunArtifact(exe_tests);
+
+    const workspace_node_bin = b.pathFromRoot("../../node_modules/.bin");
+    mod_test_run.addPathDir(workspace_node_bin);
+    exe_test_run.addPathDir(workspace_node_bin);
+
+    test_step.dependOn(&mod_test_run.step);
+    test_step.dependOn(&exe_test_run.step);
 }
