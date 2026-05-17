@@ -13,6 +13,7 @@ import {
   PtyClientMessageSchema,
   type PtyServiceMessage,
 } from './pty-protocol'
+import type { SettingsData } from '@tao/shared/session'
 import { TaodClient, type TaodControlResponse, type TaodSessionStream } from './taod-client'
 import { decodeTaodExitPayload, decodeTaodResizePayload } from './taod-stream'
 
@@ -124,8 +125,23 @@ export class TaodPtyBridge {
     }, SESSION_CLEANUP_INTERVAL_MS)
   }
 
-  ensureReady(): Promise<void> {
-    return this.client.ensureRunning()
+  async ensureReady(): Promise<void> {
+    await this.client.ensureRunning()
+    await this.syncPersistenceSettings()
+  }
+
+  async syncPersistenceSettings(settings?: SettingsData): Promise<void> {
+    try {
+      const resolved = settings ?? (await readSettings()) ?? defaultSettings
+      const persistence = resolved.persistence ?? defaultSettings.persistence
+      if (!persistence) return
+      await this.client.configurePersistence({
+        enabled: persistence.enabled,
+        persistInput: persistence.persistInput,
+      })
+    } catch (error) {
+      console.warn('[taod-bridge] Failed to sync persistence settings:', error)
+    }
   }
 
   connectPort(port: MessagePortMain): void {
@@ -417,6 +433,7 @@ export class TaodPtyBridge {
     try {
       const settings = (await readSettings()) ?? defaultSettings
       const persistence = settings.persistence ?? defaultSettings.persistence
+      await this.syncPersistenceSettings(settings)
       if (!persistence?.enabled) return
 
       await this.client.cleanupSessions({

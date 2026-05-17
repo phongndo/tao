@@ -67,6 +67,11 @@ export type TaodCleanupSessionsInput = {
   readonly activeSessionIds?: readonly string[]
 }
 
+export type TaodPersistenceSettingsInput = {
+  readonly enabled: boolean
+  readonly persistInput: boolean
+}
+
 export type TaodSessionStreamEvents = {
   frame: [TaodParsedStreamFrame]
   error: [Error]
@@ -473,6 +478,17 @@ export class TaodClient {
       retainDays: input.retainDays,
       maxSessionBytes: input.maxSessionBytes,
       ...(input.activeSessionIds ? { activeSessionIds: [...input.activeSessionIds] } : {}),
+    })
+    if (!response.ok) throw responseError(response)
+    return response
+  }
+
+  async configurePersistence(input: TaodPersistenceSettingsInput): Promise<TaodControlResponse> {
+    const response = await this.request({
+      type: 'configure-persistence',
+      id: nextRequestId('configure-persistence'),
+      persistenceEnabled: input.enabled,
+      persistInput: input.persistInput,
     })
     if (!response.ok) throw responseError(response)
     return response

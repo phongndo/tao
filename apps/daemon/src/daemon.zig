@@ -10,6 +10,22 @@ const snapshot = @import("snapshot.zig");
 const vt = @import("vt.zig");
 
 const control_payload_max = 64 * 1024;
+
+const PersistencePolicy = struct {
+    enabled: bool = true,
+    persist_input: bool = false,
+};
+
+const PersistenceSettingsJson = struct {
+    enabled: ?bool = null,
+    persistInput: ?bool = null,
+    persist_input: ?bool = null,
+};
+
+const SettingsJson = struct {
+    persistence: ?PersistenceSettingsJson = null,
+};
+
 const AttachKind = enum {
     live,
     command_resume,
@@ -96,6 +112,7 @@ pub const Daemon = struct {
     sessions: session.Manager,
     pty_driver: pty.Driver,
     database: ?db.Database,
+    persistence: PersistencePolicy,
     mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator, config: Config) Daemon {
@@ -105,6 +122,7 @@ pub const Daemon = struct {
             .sessions = session.Manager.init(allocator),
             .pty_driver = pty.Driver.init(allocator),
             .database = null,
+            .persistence = .{},
         };
     }
 
@@ -117,6 +135,7 @@ pub const Daemon = struct {
         try std.fs.cwd().makePath(self.config.run_dir);
         try std.fs.cwd().makePath(self.config.sessions_dir);
         try std.fs.cwd().makePath(self.config.adapters_dir);
+        self.reloadPersistencePolicyFromSettingsLocked();
         if (self.database == null) self.database = try db.Database.open(self.allocator, self.config.database_path);
         try self.writePidFile();
     }
@@ -196,6 +215,7 @@ pub const Daemon = struct {
             .kill => self.handleKillLocked(allocator, request),
             .clear_history => self.handleClearHistoryLocked(allocator, request),
             .cleanup => self.handleCleanupLocked(allocator, request),
+            .configure_persistence => self.handleConfigurePersistenceLocked(allocator, request),
             .ping => rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
                 .ok = true,
@@ -441,11 +461,25 @@ pub const Daemon = struct {
         });
     }
 
+    fn handleConfigurePersistenceLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        if (request.requestPersistenceEnabled()) |enabled| self.persistence.enabled = enabled;
+        if (request.requestPersistInput()) |persist_input| self.persistence.persist_input = persist_input;
+        self.applyPersistencePolicyToSessionsLocked();
+
+        return rpc.responseJsonAlloc(allocator, .{
+            .id = request.requestId(),
+            .ok = true,
+            .persistence_enabled = self.persistence.enabled,
+            .persist_input = self.persistence.persist_input,
+        });
+    }
+
     fn restoreSessionFromDatabaseLocked(
         self: *Daemon,
         session_id: []const u8,
         request: rpc.ControlRequestJson,
     ) !?RestoreResult {
+        if (!self.persistence.enabled) return null;
         const database = if (self.database) |*database| database else return null;
         var record = (try database.findTerminalSessionById(self.allocator, session_id)) orelse record: {
             const terminal_id = request.requestTerminalId() orelse return null;
@@ -526,6 +560,10 @@ pub const Daemon = struct {
     }
 
     fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
+        if (!self.persistence.enabled) {
+            item.disablePersistence(self.allocator);
+            return;
+        }
         if (item.event_log_path != null and item.excerpt_path != null and item.session_dir != null and item.snapshot_path != null) return;
 
         var files = try event_log.openPersistentSession(self.allocator, self.config.sessions_dir, item.id);
@@ -533,7 +571,63 @@ pub const Daemon = struct {
         try item.installPersistence(self.allocator, files);
     }
 
+    fn applyPersistencePolicyToSessionsLocked(self: *Daemon) void {
+        for (self.sessions.sessions.items) |*item| {
+            if (self.persistence.enabled) {
+                self.ensureSessionPersistence(item) catch |err| {
+                    std.log.warn("failed to enable persistence for {s}: {t}", .{ item.id, err });
+                };
+            } else {
+                item.disablePersistence(self.allocator);
+            }
+        }
+    }
+
+    fn reloadPersistencePolicyFromSettingsLocked(self: *Daemon) void {
+        const settings_path = std.fs.path.join(self.allocator, &.{ self.config.root_dir, "settings.json" }) catch |err| {
+            std.log.warn("failed to allocate settings path: {t}", .{err});
+            return;
+        };
+        defer self.allocator.free(settings_path);
+
+        const bytes = std.fs.cwd().readFileAlloc(self.allocator, settings_path, 64 * 1024) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => {
+                std.log.warn("failed to read persistence settings: {t}", .{err});
+                return;
+            },
+        };
+        defer self.allocator.free(bytes);
+
+        var parsed = std.json.parseFromSlice(SettingsJson, self.allocator, bytes, .{
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            std.log.warn("failed to parse persistence settings: {t}", .{err});
+            return;
+        };
+        defer parsed.deinit();
+
+        const persistence = parsed.value.persistence orelse return;
+        if (persistence.enabled) |enabled| self.persistence.enabled = enabled;
+        if (persistence.persistInput orelse persistence.persist_input) |persist_input| self.persistence.persist_input = persist_input;
+        self.applyPersistencePolicyToSessionsLocked();
+    }
+
     fn resetSessionHistoryLocked(self: *Daemon, item: *session.TerminalSession) !void {
+        if (!self.persistence.enabled) {
+            self.clearSnapshotFileLocked(item);
+            item.disablePersistence(self.allocator);
+            item.clearPendingOutput(self.allocator);
+            _ = cleanup.deleteSessionDir(self.allocator, self.config.sessions_dir, item.id) catch |err| {
+                std.log.warn("failed to delete disabled-persistence history for {s}: {t}", .{ item.id, err });
+            };
+            if (self.database) |*database| {
+                database.deleteTerminalSessionMetadata(item.id) catch |err| {
+                    std.log.warn("failed to delete disabled-persistence metadata for {s}: {t}", .{ item.id, err });
+                };
+            }
+            return;
+        }
         var files = try event_log.resetPersistentSession(self.allocator, self.config.sessions_dir, item.id);
         errdefer files.deinit(self.allocator);
         try item.installPersistence(self.allocator, files);
@@ -743,7 +837,16 @@ pub const Daemon = struct {
         const child = if (item.pty_child) |*child| child else return;
 
         switch (frame.kind) {
-            .input => try self.pty_driver.writeAll(child, frame.payload),
+            .input => {
+                if (self.persistence.enabled and self.persistence.persist_input) {
+                    if (item.event_log_path) |path| {
+                        _ = event_log.appendInput(self.allocator, path, &item.last_seq, frame.payload) catch |err| {
+                            std.log.warn("failed to append input frame for {s}: {t}", .{ item.id, err });
+                        };
+                    }
+                }
+                try self.pty_driver.writeAll(child, frame.payload);
+            },
             .resize => {
                 const resize = try rpc.decodeResizePayload(frame.payload);
                 try self.pty_driver.resize(child, resize.cols, resize.rows);
@@ -803,6 +906,7 @@ pub const Daemon = struct {
     }
 
     fn recordTerminalSessionLocked(self: *Daemon, item: *const session.TerminalSession, argv_json: ?[]const u8) void {
+        if (!self.persistence.enabled) return;
         const database = if (self.database) |*database| database else return;
         const event_log_path = item.event_log_path orelse return;
         const pid: ?i64 = if (item.pidU32()) |value| @intCast(value) else null;
@@ -829,6 +933,7 @@ pub const Daemon = struct {
     }
 
     fn recordTerminalEndedLocked(self: *Daemon, item: *const session.TerminalSession, exit_code: i32, signal_value: i32) void {
+        if (!self.persistence.enabled) return;
         const database = if (self.database) |*database| database else return;
 
         database.recordTerminalEnded(.{
@@ -848,6 +953,7 @@ pub const Daemon = struct {
     }
 
     fn refreshAgentSessionMetadataFromStoredArgvLocked(self: *Daemon, item: *const session.TerminalSession, status: []const u8) void {
+        if (!self.persistence.enabled) return;
         const database = if (self.database) |*database| database else return;
         var record = (database.findTerminalSessionById(self.allocator, item.id) catch |err| {
             std.log.warn("failed to load terminal argv for agent refresh {s}: {t}", .{ item.id, err });
@@ -874,6 +980,7 @@ pub const Daemon = struct {
         original_argv_json: ?[]const u8,
         status: []const u8,
     ) void {
+        if (!self.persistence.enabled) return;
         const database = if (self.database) |*database| database else return;
         var detected = (adapter.detectSessionAlloc(self.allocator, self.config.adapters_dir, .{
             .terminal_session_id = item.id,
@@ -913,6 +1020,7 @@ pub const Daemon = struct {
     }
 
     fn indexSearchExcerptLocked(self: *Daemon, item: *const session.TerminalSession) void {
+        if (!self.persistence.enabled) return;
         const database = if (self.database) |*database| database else return;
         const excerpt_path = item.excerpt_path orelse return;
 
@@ -959,6 +1067,7 @@ pub const Daemon = struct {
     }
 
     fn checkpointCurrentScreenLocked(self: *Daemon, item: *session.TerminalSession) void {
+        if (!self.persistence.enabled) return;
         const snapshot_path = item.snapshot_path orelse return;
         const payload = item.currentScreenSnapshotAlloc(self.allocator) catch |err| {
             std.log.warn("failed to serialize current-screen snapshot for {s}: {t}", .{ item.id, err });
@@ -1423,6 +1532,37 @@ test "daemon control RPC reports missing sessions" {
 
     try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "session not found") != null);
+}
+
+test "daemon persistence privacy toggle avoids session log creation" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+    try daemon.prepareStorage();
+
+    const configured = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"privacy","type":"configure-persistence","persistenceEnabled":false,"persistInput":true}
+    );
+    defer std.testing.allocator.free(configured);
+    try std.testing.expect(std.mem.indexOf(u8, configured, "\"persistence_enabled\":false") != null);
+
+    const created = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"1","method":"create","session_id":"private-session","terminal_id":"private-terminal","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(created);
+
+    const item = daemon.sessions.find("private-session").?;
+    try std.testing.expect(item.event_log_path == null);
+    try std.testing.expect(item.excerpt_path == null);
+    try std.testing.expect((try event_log.openExistingSession(std.testing.allocator, daemon.config.sessions_dir, "private-session")) == null);
 }
 
 test "daemon detach checkpoints current-screen snapshot" {

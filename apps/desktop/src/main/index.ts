@@ -391,6 +391,7 @@ ipcMain.handle('settings:read', async (event) => {
 ipcMain.handle('settings:write', async (event, data: unknown) => {
   if (event.sender !== mainWindow?.webContents) return
   await writeSettings(data as never)
+  await taodBridge?.syncPersistenceSettings(data as never)
 })
 
 ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>

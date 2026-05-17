@@ -91,6 +91,19 @@ pub const TerminalSession = struct {
         self.last_seq = files.last_seq;
     }
 
+    pub fn disablePersistence(self: *TerminalSession, allocator: std.mem.Allocator) void {
+        if (self.session_dir) |path| allocator.free(path);
+        if (self.event_log_path) |path| allocator.free(path);
+        if (self.excerpt_path) |path| allocator.free(path);
+        if (self.snapshot_path) |path| allocator.free(path);
+
+        self.session_dir = null;
+        self.event_log_path = null;
+        self.excerpt_path = null;
+        self.snapshot_path = null;
+        self.clearSnapshotMetadata();
+    }
+
     pub fn clearSnapshotMetadata(self: *TerminalSession) void {
         self.snapshot_seq = 0;
         self.snapshot_crc32 = null;

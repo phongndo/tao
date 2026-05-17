@@ -8,6 +8,7 @@ pub const RequestType = enum {
     kill,
     clear_history,
     cleanup,
+    configure_persistence,
     ping,
     unknown,
 
@@ -21,6 +22,9 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "clearHistory")) return .clear_history;
         if (std.mem.eql(u8, text, "clear_history")) return .clear_history;
         if (std.mem.eql(u8, text, "cleanup")) return .cleanup;
+        if (std.mem.eql(u8, text, "configure-persistence")) return .configure_persistence;
+        if (std.mem.eql(u8, text, "configurePersistence")) return .configure_persistence;
+        if (std.mem.eql(u8, text, "configure_persistence")) return .configure_persistence;
         if (std.mem.eql(u8, text, "ping")) return .ping;
         return .unknown;
     }
@@ -46,6 +50,11 @@ pub const ControlRequestJson = struct {
     retainDays: ?u32 = null,
     max_session_bytes: ?u64 = null,
     maxSessionBytes: ?u64 = null,
+    persistence_enabled: ?bool = null,
+    persistenceEnabled: ?bool = null,
+    enabled: ?bool = null,
+    persist_input: ?bool = null,
+    persistInput: ?bool = null,
 
     pub fn requestType(self: ControlRequestJson) RequestType {
         return RequestType.fromText(self.method orelse self.type orelse "");
@@ -77,6 +86,14 @@ pub const ControlRequestJson = struct {
 
     pub fn requestMaxSessionBytes(self: ControlRequestJson) ?u64 {
         return self.max_session_bytes orelse self.maxSessionBytes;
+    }
+
+    pub fn requestPersistenceEnabled(self: ControlRequestJson) ?bool {
+        return self.persistence_enabled orelse self.persistenceEnabled orelse self.enabled;
+    }
+
+    pub fn requestPersistInput(self: ControlRequestJson) ?bool {
+        return self.persist_input orelse self.persistInput;
     }
 };
 
@@ -131,6 +148,8 @@ pub const ControlResponse = struct {
     native_session_id: ?[]const u8 = null,
     removed_sessions: ?u64 = null,
     removed_bytes: ?u64 = null,
+    persistence_enabled: ?bool = null,
+    persist_input: ?bool = null,
     error_message: ?[]const u8 = null,
 };
 
@@ -308,8 +327,20 @@ test "request type decoding is stable" {
     try std.testing.expectEqual(RequestType.clear_history, RequestType.fromText("clear-history"));
     try std.testing.expectEqual(RequestType.clear_history, RequestType.fromText("clearHistory"));
     try std.testing.expectEqual(RequestType.cleanup, RequestType.fromText("cleanup"));
+    try std.testing.expectEqual(RequestType.configure_persistence, RequestType.fromText("configure-persistence"));
     try std.testing.expectEqual(RequestType.ping, RequestType.fromText("ping"));
     try std.testing.expectEqual(RequestType.unknown, RequestType.fromText("other"));
+}
+
+test "control request JSON decodes persistence privacy settings" {
+    var parsed = try std.json.parseFromSlice(ControlRequestJson, std.testing.allocator,
+        \\{"id":"1","type":"configure-persistence","persistenceEnabled":false,"persistInput":true}
+    , .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(RequestType.configure_persistence, parsed.value.requestType());
+    try std.testing.expectEqual(false, parsed.value.requestPersistenceEnabled().?);
+    try std.testing.expectEqual(true, parsed.value.requestPersistInput().?);
 }
 
 test "control request JSON decodes create messages" {

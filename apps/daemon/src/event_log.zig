@@ -271,6 +271,17 @@ pub fn appendOutput(
     return last_seq.*;
 }
 
+pub fn appendInput(
+    allocator: std.mem.Allocator,
+    event_log_path: []const u8,
+    last_seq: *u64,
+    payload: []const u8,
+) !u64 {
+    last_seq.* += 1;
+    try appendFramePath(allocator, event_log_path, .input, last_seq.*, payload);
+    return last_seq.*;
+}
+
 pub fn appendResize(
     allocator: std.mem.Allocator,
     event_log_path: []const u8,
