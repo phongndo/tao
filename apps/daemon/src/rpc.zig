@@ -150,6 +150,7 @@ pub const ControlResponse = struct {
     removed_bytes: ?u64 = null,
     persistence_enabled: ?bool = null,
     persist_input: ?bool = null,
+    error_code: ?[]const u8 = null,
     error_message: ?[]const u8 = null,
 };
 

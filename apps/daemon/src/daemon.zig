@@ -356,9 +356,12 @@ pub const Daemon = struct {
     fn handleKillLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         const session_id = request.requestSessionId() orelse return missingField(allocator, request, "session_id");
         const item = self.sessions.find(session_id) orelse return notFound(allocator, request);
-        if (item.pty_child) |*child| self.pty_driver.terminate(child) catch |err| {
-            std.log.warn("failed to terminate PTY for {s}: {t}", .{ item.id, err });
-        };
+        if (item.pty_child) |*child| {
+            self.pty_driver.terminate(child) catch |err| {
+                std.log.warn("failed to terminate PTY for {s}: {t}", .{ item.id, err });
+            };
+            child.close();
+        }
         if (item.event_log_path) |path| {
             _ = event_log.appendExit(self.allocator, path, &item.last_seq, 0, 15) catch |err| {
                 std.log.warn("failed to append kill exit frame for {s}: {t}", .{ item.id, err });
@@ -427,23 +430,39 @@ pub const Daemon = struct {
 
     fn handleCleanupLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         var active_ids: std.ArrayList([]const u8) = .empty;
-        defer active_ids.deinit(self.allocator);
+        defer {
+            for (active_ids.items) |active_id| self.allocator.free(active_id);
+            active_ids.deinit(self.allocator);
+        }
 
         for (self.sessions.sessions.items) |*item| {
-            try active_ids.append(self.allocator, item.id);
+            const active_id = try self.allocator.dupe(u8, item.id);
+            active_ids.append(self.allocator, active_id) catch |err| {
+                self.allocator.free(active_id);
+                return err;
+            };
         }
         if (request.requestActiveSessionIds()) |request_active_ids| {
             for (request_active_ids) |active_id| {
                 if (cleanup.isActiveSession(active_id, active_ids.items)) continue;
-                try active_ids.append(self.allocator, active_id);
+                const owned_active_id = try self.allocator.dupe(u8, active_id);
+                active_ids.append(self.allocator, owned_active_id) catch |err| {
+                    self.allocator.free(owned_active_id);
+                    return err;
+                };
             }
         }
 
+        const retain_days = request.requestRetainDays() orelse 30;
+        const max_session_bytes = request.requestMaxSessionBytes() orelse 2 * 1024 * 1024 * 1024;
+
+        self.unlock();
         const result = cleanup.runSessionRetention(self.allocator, self.config.sessions_dir, .{
-            .retain_days = request.requestRetainDays() orelse 30,
-            .max_session_bytes = request.requestMaxSessionBytes() orelse 2 * 1024 * 1024 * 1024,
+            .retain_days = retain_days,
+            .max_session_bytes = max_session_bytes,
             .active_session_ids = active_ids.items,
         }) catch |err| {
+            self.lock();
             std.log.warn("session cleanup failed: {t}", .{err});
             return rpc.responseJsonAlloc(allocator, .{
                 .id = request.requestId(),
@@ -451,6 +470,7 @@ pub const Daemon = struct {
                 .error_message = @errorName(err),
             });
         };
+        self.lock();
         self.pruneMissingEventLogMetadataLocked();
 
         return rpc.responseJsonAlloc(allocator, .{
@@ -1321,6 +1341,7 @@ fn notFound(allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8
     return rpc.responseJsonAlloc(allocator, .{
         .id = request.requestId(),
         .ok = false,
+        .error_code = "session_not_found",
         .error_message = "session not found",
     });
 }

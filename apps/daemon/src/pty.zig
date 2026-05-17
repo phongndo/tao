@@ -151,8 +151,8 @@ pub const Driver = struct {
     }
 
     pub fn terminate(_: *Driver, child: *Child) PtyError!void {
+        defer child.close();
         if (child.pid > 0 and std.c.kill(child.pid, std.c.SIG.TERM) != 0) return error.KillFailed;
-        child.close();
     }
 
     pub fn tryWait(_: *Driver, child: *Child) PtyError!?ExitStatus {
