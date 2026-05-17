@@ -82,6 +82,35 @@ const AgentDetectionSnapshot = struct {
     }
 };
 
+const SearchExcerptSnapshot = struct {
+    terminal_session_id: []u8,
+    title: []u8,
+    excerpt_path: []u8,
+
+    fn deinit(self: *SearchExcerptSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.terminal_session_id);
+        allocator.free(self.title);
+        allocator.free(self.excerpt_path);
+        self.* = undefined;
+    }
+};
+
+const CurrentScreenCheckpoint = struct {
+    session_id: []u8,
+    snapshot_path: []u8,
+    payload: []u8,
+    seq: u64,
+    cols: u16,
+    rows: u16,
+
+    fn deinit(self: *CurrentScreenCheckpoint, allocator: std.mem.Allocator) void {
+        allocator.free(self.session_id);
+        allocator.free(self.snapshot_path);
+        allocator.free(self.payload);
+        self.* = undefined;
+    }
+};
+
 pub const Config = struct {
     root_dir: []const u8,
     database_path: []const u8,
@@ -404,8 +433,18 @@ pub const Daemon = struct {
         try self.broadcastExitFrameLocked(item, item.last_seq, 0, 15);
         if (!self.sessions.kill(session_id)) return notFound(allocator, request);
         self.recordTerminalEndedLocked(item, 0, 15);
+        var search_snapshot = self.searchExcerptSnapshotLocked(item) catch |err| blk: {
+            std.log.warn("failed to prepare search excerpt indexing for {s}: {t}", .{ item.id, err });
+            break :blk null;
+        };
+        defer if (search_snapshot) |*value| value.deinit(self.allocator);
+        const response = try sessionResponse(allocator, request, self.sessions.find(session_id).?, .{});
 
-        return sessionResponse(allocator, request, self.sessions.find(session_id).?, .{});
+        self.unlock();
+        if (search_snapshot) |*value| self.indexSearchExcerptFromSnapshot(value);
+        self.lock();
+
+        return response;
     }
 
     fn handleClearHistoryLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -1019,12 +1058,18 @@ pub const Daemon = struct {
         item.reader_started = false;
         try self.broadcastExitFrameLocked(item, item.last_seq, status.exit_code, status.signal);
         self.recordTerminalEndedLocked(item, status.exit_code, status.signal);
+        var search_snapshot = self.searchExcerptSnapshotLocked(item) catch |err| blk: {
+            std.log.warn("failed to prepare search excerpt indexing for {s}: {t}", .{ item.id, err });
+            break :blk null;
+        };
         var agent_snapshot = self.agentDetectionSnapshotFromStoredArgvLocked(item, "ended") catch |err| blk: {
             std.log.warn("failed to prepare agent metadata refresh for {s}: {t}", .{ item.id, err });
             break :blk null;
         };
         self.unlock();
+        defer if (search_snapshot) |*value| value.deinit(self.allocator);
         defer if (agent_snapshot) |*value| value.deinit(self.allocator);
+        if (search_snapshot) |*value| self.indexSearchExcerptFromSnapshot(value);
         if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
         return true;
     }
@@ -1052,12 +1097,18 @@ pub const Daemon = struct {
         }
         try self.broadcastExitFrameLocked(item, item.last_seq, exit_code, signal_value);
         self.recordTerminalEndedLocked(item, exit_code, signal_value);
+        var search_snapshot = self.searchExcerptSnapshotLocked(item) catch |err| blk: {
+            std.log.warn("failed to prepare search excerpt indexing for {s}: {t}", .{ item.id, err });
+            break :blk null;
+        };
         var agent_snapshot = self.agentDetectionSnapshotFromStoredArgvLocked(item, "ended") catch |err| blk: {
             std.log.warn("failed to prepare agent metadata refresh for {s}: {t}", .{ item.id, err });
             break :blk null;
         };
         self.unlock();
+        defer if (search_snapshot) |*value| value.deinit(self.allocator);
         defer if (agent_snapshot) |*value| value.deinit(self.allocator);
+        if (search_snapshot) |*value| self.indexSearchExcerptFromSnapshot(value);
         if (agent_snapshot) |*value| self.recordAgentSessionFromSnapshot(value);
         return true;
     }
@@ -1104,8 +1155,24 @@ pub const Daemon = struct {
         }) catch |err| {
             std.log.warn("failed to record terminal session exit {s}: {t}", .{ item.id, err });
         };
+    }
 
-        self.indexSearchExcerptLocked(item);
+    fn searchExcerptSnapshotLocked(self: *Daemon, item: *const session.TerminalSession) !?SearchExcerptSnapshot {
+        if (!self.persistence.enabled) return null;
+        if (self.database == null) return null;
+        const excerpt_path = item.excerpt_path orelse return null;
+
+        const terminal_session_id = try self.allocator.dupe(u8, item.id);
+        errdefer self.allocator.free(terminal_session_id);
+        const title = try self.allocator.dupe(u8, item.terminal_id);
+        errdefer self.allocator.free(title);
+        const owned_excerpt_path = try self.allocator.dupe(u8, excerpt_path);
+
+        return .{
+            .terminal_session_id = terminal_session_id,
+            .title = title,
+            .excerpt_path = owned_excerpt_path,
+        };
     }
 
     fn agentDetectionSnapshotFromStoredArgvLocked(self: *Daemon, item: *const session.TerminalSession, status: []const u8) !?AgentDetectionSnapshot {
@@ -1286,25 +1353,26 @@ pub const Daemon = struct {
         };
     }
 
-    fn indexSearchExcerptLocked(self: *Daemon, item: *const session.TerminalSession) void {
-        if (!self.persistence.enabled) return;
-        const database = if (self.database) |*database| database else return;
-        const excerpt_path = item.excerpt_path orelse return;
-
-        const excerpt = readSmallFileAlloc(self.allocator, excerpt_path, event_log.max_excerpt_bytes) catch |err| {
-            std.log.warn("failed to read search excerpt for {s}: {t}", .{ item.id, err });
+    fn indexSearchExcerptFromSnapshot(self: *Daemon, snapshot_input: *const SearchExcerptSnapshot) void {
+        const excerpt = readSmallFileAlloc(self.allocator, snapshot_input.excerpt_path, event_log.max_excerpt_bytes) catch |err| {
+            std.log.warn("failed to read search excerpt for {s}: {t}", .{ snapshot_input.terminal_session_id, err });
             return;
         };
         defer if (excerpt) |bytes| self.allocator.free(bytes);
         const bytes = excerpt orelse return;
         if (bytes.len == 0) return;
 
+        self.lock();
+        defer self.unlock();
+        if (!self.persistence.enabled) return;
+        const database = if (self.database) |*database| database else return;
+
         database.recordTerminalSearch(.{
-            .terminal_session_id = item.id,
-            .title = item.terminal_id,
+            .terminal_session_id = snapshot_input.terminal_session_id,
+            .title = snapshot_input.title,
             .excerpt = bytes,
         }) catch |err| {
-            std.log.warn("failed to index search excerpt for {s}: {t}", .{ item.id, err });
+            std.log.warn("failed to index search excerpt for {s}: {t}", .{ snapshot_input.terminal_session_id, err });
         };
     }
 
@@ -1346,36 +1414,61 @@ pub const Daemon = struct {
     }
 
     fn checkpointCurrentScreenLocked(self: *Daemon, item: *session.TerminalSession) void {
-        if (!self.persistence.enabled) return;
-        const snapshot_path = item.snapshot_path orelse return;
-        const payload = item.currentScreenSnapshotAlloc(self.allocator) catch |err| {
-            std.log.warn("failed to serialize current-screen snapshot for {s}: {t}", .{ item.id, err });
+        var checkpoint = (self.currentScreenCheckpointLocked(item) catch |err| {
+            std.log.warn("failed to prepare current-screen snapshot for {s}: {t}", .{ item.id, err });
             return;
-        };
-        const snapshot_payload = payload orelse return;
-        defer self.allocator.free(snapshot_payload);
+        }) orelse return;
+        defer checkpoint.deinit(self.allocator);
 
-        const snapshot_seq = item.last_seq;
-        const meta = snapshot.writeCurrentScreenPath(self.allocator, snapshot_path, .{
-            .seq = snapshot_seq,
-            .cols = item.cols,
-            .rows = item.rows,
+        self.unlock();
+        const meta = snapshot.writeCurrentScreenPath(self.allocator, checkpoint.snapshot_path, .{
+            .seq = checkpoint.seq,
+            .cols = checkpoint.cols,
+            .rows = checkpoint.rows,
             .backend_name = vt.backend_name,
-            .payload = snapshot_payload,
+            .payload = checkpoint.payload,
         }) catch |err| {
-            std.log.warn("failed to write current-screen snapshot for {s}: {t}", .{ item.id, err });
+            self.lock();
+            std.log.warn("failed to write current-screen snapshot for {s}: {t}", .{ checkpoint.session_id, err });
             return;
         };
+        self.lock();
 
-        item.snapshot_seq = meta.seq;
-        item.snapshot_crc32 = meta.crc32;
-        item.snapshot_size = meta.size;
+        if (!self.persistence.enabled) return;
+        const current = self.sessions.find(checkpoint.session_id) orelse return;
+        const current_snapshot_path = current.snapshot_path orelse return;
+        if (!std.mem.eql(u8, current_snapshot_path, checkpoint.snapshot_path)) return;
 
-        if (item.event_log_path) |event_log_path| {
-            _ = event_log.appendSnapshotMark(self.allocator, event_log_path, &item.last_seq, meta.seq, snapshot_path) catch |err| {
-                std.log.warn("failed to append snapshot mark for {s}: {t}", .{ item.id, err });
+        current.snapshot_seq = meta.seq;
+        current.snapshot_crc32 = meta.crc32;
+        current.snapshot_size = meta.size;
+
+        if (current.event_log_path) |event_log_path| {
+            _ = event_log.appendSnapshotMark(self.allocator, event_log_path, &current.last_seq, meta.seq, current_snapshot_path) catch |err| {
+                std.log.warn("failed to append snapshot mark for {s}: {t}", .{ current.id, err });
             };
         }
+    }
+
+    fn currentScreenCheckpointLocked(self: *Daemon, item: *const session.TerminalSession) !?CurrentScreenCheckpoint {
+        if (!self.persistence.enabled) return null;
+        const snapshot_path = item.snapshot_path orelse return null;
+        const payload = try item.currentScreenSnapshotAlloc(self.allocator);
+        const snapshot_payload = payload orelse return null;
+        errdefer self.allocator.free(snapshot_payload);
+
+        const session_id = try self.allocator.dupe(u8, item.id);
+        errdefer self.allocator.free(session_id);
+        const owned_snapshot_path = try self.allocator.dupe(u8, snapshot_path);
+
+        return .{
+            .session_id = session_id,
+            .snapshot_path = owned_snapshot_path,
+            .payload = snapshot_payload,
+            .seq = item.last_seq,
+            .cols = item.cols,
+            .rows = item.rows,
+        };
     }
 
     fn clearSnapshotFileLocked(self: *Daemon, item: *session.TerminalSession) void {
