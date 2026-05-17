@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -10,7 +10,9 @@ const require = createRequire(import.meta.url)
 
 const electronPackageJsonPath = require.resolve('electron/package.json')
 const electronDir = dirname(electronPackageJsonPath)
-const electronPackage = JSON.parse(readFileSync(electronPackageJsonPath, 'utf8'))
+const electronPackage = JSON.parse(readFileSync(electronPackageJsonPath, 'utf8')) as {
+  version: string
+}
 
 const platform =
   process.env.ELECTRON_INSTALL_PLATFORM || process.env.npm_config_platform || process.platform
@@ -37,12 +39,12 @@ void main()
   })
   .finally(() => clearInterval(keepAlive))
 
-async function main() {
+async function main(): Promise<void> {
   if (await isElectronUsable()) return
   await installElectron()
 }
 
-async function isElectronUsable() {
+async function isElectronUsable(): Promise<boolean> {
   try {
     const [installedVersion, installedPath] = await Promise.all([
       readFile(versionPath, 'utf8'),
@@ -60,7 +62,7 @@ async function isElectronUsable() {
   }
 }
 
-async function installElectron() {
+async function installElectron(): Promise<void> {
   if (existsSync(executablePath) && existsSync(requiredRuntimePath) && (await isElectronUsable())) {
     await writeInstallMarkers()
     return
@@ -87,7 +89,7 @@ async function installElectron() {
   }
 }
 
-function extractZip(zipPath, destinationPath) {
+function extractZip(zipPath: string, destinationPath: string): void {
   if (platform === 'win32') {
     execFileSync(
       'powershell',
@@ -106,7 +108,7 @@ function extractZip(zipPath, destinationPath) {
   execFileSync('unzip', ['-q', zipPath, '-d', destinationPath], { stdio: 'inherit' })
 }
 
-async function writeInstallMarkers() {
+async function writeInstallMarkers(): Promise<void> {
   await mkdir(distPath, { recursive: true })
   await Promise.all([
     writeFile(pathTxtPath, platformPath),
@@ -114,7 +116,7 @@ async function writeInstallMarkers() {
   ])
 }
 
-function getPlatformPath(targetPlatform) {
+function getPlatformPath(targetPlatform: string): string {
   switch (targetPlatform) {
     case 'mas':
     case 'darwin':

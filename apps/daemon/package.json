@@ -3,13 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "description": "Tao persistence daemon",
+  "type": "module",
   "scripts": {
-    "build": "node ../../scripts/taod-zig.mjs build",
-    "check": "node ../../scripts/taod-zig.mjs check",
-    "fmt": "node ../../scripts/zig-tools.mjs fmt apps/daemon",
-    "fmt:check": "node ../../scripts/zig-tools.mjs fmt:check apps/daemon",
-    "lint": "node ../../scripts/zig-tools.mjs lint apps/daemon",
+    "build": "node --experimental-strip-types ../../scripts/taod.ts build",
+    "check": "node --experimental-strip-types ../../scripts/taod.ts check",
+    "fmt": "node --experimental-strip-types ../../scripts/zig-tools.ts fmt apps/daemon",
+    "fmt:check": "node --experimental-strip-types ../../scripts/zig-tools.ts fmt:check apps/daemon",
+    "lint": "node --experimental-strip-types ../../scripts/zig-tools.ts lint apps/daemon",
     "lsp": "zls --version",
-    "test": "node ../../scripts/taod-zig.mjs test"
+    "test": "node --experimental-strip-types ../../scripts/taod.ts test"
   }
 }

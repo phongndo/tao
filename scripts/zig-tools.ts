@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,11 +16,11 @@ const ignoredDirectories = new Set([
   'node_modules',
 ])
 
-function usage() {
-  console.error(`Usage: node scripts/zig-tools.mjs <fmt|fmt:check|lint> [paths...]`)
+function usage(): void {
+  console.error(`Usage: tsx scripts/zig-tools.ts <fmt|fmt:check|lint> [paths...]`)
 }
 
-function collectZigFiles(root) {
+function collectZigFiles(root: string): string[] {
   const absoluteRoot = resolve(repoRoot, root)
   if (!existsSync(absoluteRoot)) return []
 
@@ -47,11 +47,11 @@ function collectZigFiles(root) {
   return files
 }
 
-function isZigSource(path) {
+function isZigSource(path: string): boolean {
   return path.endsWith('.zig') || path.endsWith('.zon')
 }
 
-function run(command, args) {
+function run(command: string, args: readonly string[]): void {
   const result = spawnSync(command, args, { cwd: repoRoot, stdio: 'inherit' })
   if (result.error) {
     console.error(result.error.message)

@@ -526,8 +526,15 @@ export async function createTerminal(
     // which presents as a blank terminal until the next input-triggered repaint. Flush only after
     // the terminal dimensions have settled for first paint.
     await nextAnimationFrame()
-    if (!archived && pendingStartupSnapshot) {
-      suppressOutputThroughSeq = tryApplyCurrentScreenSnapshot(term, pendingStartupSnapshot)
+    // Fresh shells do not need a current-screen restore: the renderer already buffered all startup
+    // output before attach completes. Applying the daemon snapshot here can capture/replay an
+    // in-progress prompt restore (notably zsh/starship right-prompt cursor movement), leaving the
+    // visible cursor far to the right in brand-new tabs. Keep snapshots for live/resumed attaches,
+    // where they are needed to hydrate an existing screen without replaying full scrollback.
+    if (pendingStartupSnapshot) {
+      if (!archived && attachedSession.attachMode !== 'fresh') {
+        suppressOutputThroughSeq = tryApplyCurrentScreenSnapshot(term, pendingStartupSnapshot)
+      }
       pendingStartupSnapshot = null
     }
     flushStartupOutput(suppressOutputThroughSeq)

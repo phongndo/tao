@@ -1,31 +1,55 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process'
+
+type RunOptions = {
+  cwd?: string
+  stdio?: SpawnSyncOptions['stdio']
+}
+
+type ZonDependency = {
+  url: string
+  hash: string
+}
+
+type NativePaths = {
+  ghosttyPath: string
+  uucodePath: string
+  tablesPath: string
+  propsPath: string
+  symbolsPath: string
+  ghosttyBuildOptionsPath: string
+  ghosttyTerminalOptionsPath: string
+}
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const daemonRoot = resolve(repoRoot, 'apps/daemon')
 const [command = 'build', ...rawArgs] = process.argv.slice(2)
 const passthroughArgs = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs
 
-function fail(message) {
+function fail(message: string): never {
   console.error(message)
   process.exit(1)
 }
 
-function run(command, args, options = {}) {
+function run(
+  command: string,
+  args: readonly string[],
+  options: RunOptions = {},
+): SpawnSyncReturns<Buffer> {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? daemonRoot,
     stdio: options.stdio ?? 'inherit',
-    encoding: options.encoding,
   })
   if (result.error) fail(result.error.message)
   if (result.status !== 0) process.exit(result.status ?? 1)
   return result
 }
 
-function capture(command, args, options = {}) {
+function capture(command: string, args: readonly string[], options: RunOptions = {}): Buffer {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? daemonRoot,
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -35,11 +59,18 @@ function capture(command, args, options = {}) {
   return result.stdout
 }
 
-function output(command, args, cwd = daemonRoot) {
-  return run(command, args, { cwd, stdio: 'pipe', encoding: 'utf8' }).stdout.trim()
+function output(command: string, args: readonly string[], cwd = daemonRoot): string {
+  const result = spawnSync(command, args, {
+    cwd,
+    stdio: ['ignore', 'pipe', 'inherit'],
+    encoding: 'utf8',
+  })
+  if (result.error) fail(result.error.message)
+  if (result.status !== 0) process.exit(result.status ?? 1)
+  return result.stdout.trim()
 }
 
-function assertZigVersion() {
+function assertZigVersion(): string {
   const version = output('zig', ['version'])
   if (!version.startsWith('0.15.')) {
     fail(`taod requires Zig 0.15.x; found ${version}. Run: nix profile install nixpkgs#zig_0_15`)
@@ -47,7 +78,7 @@ function assertZigVersion() {
   return version
 }
 
-function zonDependency(zonPath, name) {
+function zonDependency(zonPath: string, name: string): ZonDependency {
   const zon = readFileSync(zonPath, 'utf8')
   const pattern = new RegExp(
     `\\.${name}\\s*=\\s*\\.\\{[\\s\\S]*?\\.url\\s*=\\s*"([^"]+)"[\\s\\S]*?\\.hash\\s*=\\s*"([^"]+)"`,
@@ -58,7 +89,7 @@ function zonDependency(zonPath, name) {
   return { url: match[1], hash: match[2] }
 }
 
-function ensurePackage(dep) {
+function ensurePackage(dep: ZonDependency): string {
   const envOutput = output('zig', ['env'])
   const globalCacheDir =
     tryParseJson(envOutput)?.global_cache_dir ??
@@ -70,13 +101,13 @@ function ensurePackage(dep) {
   return packagePath
 }
 
-function writeFileIfChanged(path, contents) {
+function writeFileIfChanged(path: string, contents: string): void {
   if (existsSync(path) && readFileSync(path, 'utf8') === contents) return
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, contents)
 }
 
-function tryParseJson(value) {
+function tryParseJson(value: string): { global_cache_dir?: string } | null {
   try {
     return JSON.parse(value)
   } catch {
@@ -84,12 +115,12 @@ function tryParseJson(value) {
   }
 }
 
-function darwinTarget() {
+function darwinTarget(): string {
   const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
   return `${arch}-macos.15.0`
 }
 
-function darwinBuildOptionsPath() {
+function darwinBuildOptionsPath(): string {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
   const path = resolve(cacheDir, 'taod-build-options.zig')
@@ -97,13 +128,13 @@ function darwinBuildOptionsPath() {
   return path
 }
 
-function ghosttyBuildOptionsPath(dir) {
+function ghosttyBuildOptionsPath(dir: string): string {
   const path = resolve(dir, 'ghostty-build-options.zig')
   writeFileIfChanged(path, 'pub const simd = false;\n')
   return path
 }
 
-function ghosttyTerminalOptionsPath(dir) {
+function ghosttyTerminalOptionsPath(dir: string): string {
   const path = resolve(dir, 'ghostty-terminal-options.zig')
   writeFileIfChanged(
     path,
@@ -120,12 +151,18 @@ pub const tmux_control_mode = false;
   return path
 }
 
-function targetArgs() {
+function targetArgs(): string[] {
   if (process.platform !== 'darwin') return []
   return ['-target', darwinTarget()]
 }
 
-function uucodeBuildTablesArgs({ ghosttyPath, outputPath }) {
+function uucodeBuildTablesArgs({
+  ghosttyPath,
+  outputPath,
+}: {
+  ghosttyPath: string
+  outputPath: string
+}): string[] {
   return [
     'run',
     ...targetArgs(),
@@ -167,7 +204,7 @@ function uucodeBuildTablesArgs({ ghosttyPath, outputPath }) {
   ]
 }
 
-function uucodeModuleArgs({ uucodePath, ghosttyPath, tablesPath }) {
+function uucodeModuleArgs({ uucodePath, ghosttyPath, tablesPath }: NativePaths): string[] {
   const ghosttyUucodeConfig = resolve(ghosttyPath, 'src/build/uucode_config.zig')
   return [
     '--dep',
@@ -225,7 +262,7 @@ function uucodeModuleArgs({ uucodePath, ghosttyPath, tablesPath }) {
   ]
 }
 
-function ghosttyUnicodeGeneratorArgs(kind, native) {
+function ghosttyUnicodeGeneratorArgs(kind: 'props' | 'symbols', native: NativePaths): string[] {
   return [
     'run',
     ...targetArgs(),
@@ -237,7 +274,7 @@ function ghosttyUnicodeGeneratorArgs(kind, native) {
   ]
 }
 
-function ensureGhosttyNativeDirect() {
+function ensureGhosttyNativeDirect(): NativePaths {
   const ghosttyDep = zonDependency(resolve(daemonRoot, 'build.zig.zon'), 'ghostty')
   const ghosttyPath = ensurePackage(ghosttyDep)
   const uucodeDep = zonDependency(resolve(ghosttyPath, 'build.zig.zon'), 'uucode')
@@ -277,7 +314,7 @@ function ensureGhosttyNativeDirect() {
   return native
 }
 
-function ghosttyModuleArgs(native) {
+function ghosttyModuleArgs(native: NativePaths): string[] {
   return [
     '--dep',
     'uucode',
@@ -298,7 +335,13 @@ function ghosttyModuleArgs(native) {
   ]
 }
 
-function directCompileArgs({ root, binPath }) {
+function directCompileArgs({
+  root,
+  binPath,
+}: {
+  root: 'main' | 'root'
+  binPath?: string
+}): string[] {
   const zigSqlite = zonDependency(resolve(daemonRoot, 'build.zig.zon'), 'sqlite')
   const zigSqlitePath = ensurePackage(zigSqlite)
   const sqliteAmalgamation = zonDependency(resolve(zigSqlitePath, 'build.zig.zon'), 'sqlite')
@@ -359,7 +402,7 @@ function directCompileArgs({ root, binPath }) {
   return args
 }
 
-function buildDirect() {
+function buildDirect(): string {
   const binDir = resolve(daemonRoot, 'zig-out/bin')
   mkdirSync(binDir, { recursive: true })
   const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
@@ -368,7 +411,7 @@ function buildDirect() {
   return binPath
 }
 
-function testAndBuildDirect() {
+function testAndBuildDirect(): void {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
   run('zig', directCompileArgs({ root: 'root', binPath: resolve(cacheDir, 'taod-root-test') }))
