@@ -159,6 +159,7 @@ export class TaodPtyBridge {
   private readonly defaultShell?: string
   private port: MessagePortMain | null = null
   private readonly sessions = new Map<string, BridgeSession>()
+  private readonly supersededAttachStreams = new WeakSet<TaodSessionStream>()
   private readonly cleanupTimer: ReturnType<typeof setInterval>
 
   constructor(options: TaodPtyBridgeOptions = {}) {
@@ -281,6 +282,7 @@ export class TaodPtyBridge {
       // subscriber socket and continue through taod attach so the daemon sends a fresh snapshot.
       existing.cols = cols
       existing.rows = rows
+      this.supersededAttachStreams.add(existing.stream)
       this.closeSessionStream(sessionId)
     }
 
@@ -342,7 +344,7 @@ export class TaodPtyBridge {
       // A remount/new renderer can supersede an in-flight attach for the same session. In that
       // case the old stream closes because Tao intentionally replaced it; don't report that stale
       // close to the renderer or it can clear the ready state for the newer attach.
-      if (this.sessions.get(sessionId)?.stream !== stream) return
+      if (this.supersededAttachStreams.has(stream)) return
       this.closeSessionStream(sessionId)
       throw error
     }
