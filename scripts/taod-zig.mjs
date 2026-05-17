@@ -120,11 +120,15 @@ pub const tmux_control_mode = false;
   return path
 }
 
+function targetArgs() {
+  if (process.platform !== 'darwin') return []
+  return ['-target', darwinTarget()]
+}
+
 function uucodeBuildTablesArgs({ ghosttyPath, outputPath }) {
   return [
     'run',
-    '-target',
-    darwinTarget(),
+    ...targetArgs(),
     '-lc',
     '--dep',
     'config.zig',
@@ -224,8 +228,7 @@ function uucodeModuleArgs({ uucodePath, ghosttyPath, tablesPath }) {
 function ghosttyUnicodeGeneratorArgs(kind, native) {
   return [
     'run',
-    '-target',
-    darwinTarget(),
+    ...targetArgs(),
     '-lc',
     '--dep',
     'uucode',
@@ -234,7 +237,7 @@ function ghosttyUnicodeGeneratorArgs(kind, native) {
   ]
 }
 
-function ensureGhosttyNativeDarwin() {
+function ensureGhosttyNativeDirect() {
   const ghosttyDep = zonDependency(resolve(daemonRoot, 'build.zig.zon'), 'ghostty')
   const ghosttyPath = ensurePackage(ghosttyDep)
   const uucodeDep = zonDependency(resolve(ghosttyPath, 'build.zig.zon'), 'uucode')
@@ -295,18 +298,17 @@ function ghosttyModuleArgs(native) {
   ]
 }
 
-function darwinCompileArgs({ root, binPath }) {
+function directCompileArgs({ root, binPath }) {
   const zigSqlite = zonDependency(resolve(daemonRoot, 'build.zig.zon'), 'sqlite')
   const zigSqlitePath = ensurePackage(zigSqlite)
   const sqliteAmalgamation = zonDependency(resolve(zigSqlitePath, 'build.zig.zon'), 'sqlite')
   const sqliteAmalgamationPath = ensurePackage(sqliteAmalgamation)
   const buildOptionsPath = darwinBuildOptionsPath()
-  const ghosttyNative = ensureGhosttyNativeDarwin()
+  const ghosttyNative = ensureGhosttyNativeDirect()
 
   const args = [
     root === 'main' ? 'build-exe' : 'test',
-    '-target',
-    darwinTarget(),
+    ...targetArgs(),
     '-I',
     resolve(zigSqlitePath, 'c'),
     '-I',
@@ -356,29 +358,44 @@ function darwinCompileArgs({ root, binPath }) {
     ...ghosttyModuleArgs(ghosttyNative),
     '-lc',
   )
+  if (process.platform === 'linux') args.push('-lutil')
 
   return args
 }
 
-function buildDarwin() {
+function buildDirect() {
   const binDir = resolve(daemonRoot, 'zig-out/bin')
   mkdirSync(binDir, { recursive: true })
   const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
   const binPath = resolve(binDir, exeName)
-  run('zig', darwinCompileArgs({ root: 'main', binPath }))
+  run('zig', directCompileArgs({ root: 'main', binPath }))
   return binPath
 }
 
-function testDarwin() {
+function testDirect() {
   const cacheDir = resolve(daemonRoot, '.zig-cache')
   mkdirSync(cacheDir, { recursive: true })
-  run('zig', darwinCompileArgs({ root: 'root', binPath: resolve(cacheDir, 'taod-root-test') }))
-  run('zig', darwinCompileArgs({ root: 'main', binPath: resolve(cacheDir, 'taod-main-test') }))
+  run('zig', directCompileArgs({ root: 'root', binPath: resolve(cacheDir, 'taod-root-test') }))
+  run('zig', directCompileArgs({ root: 'main', binPath: resolve(cacheDir, 'taod-main-test') }))
 }
 
 assertZigVersion()
 
-if (process.platform !== 'darwin') {
+if (process.platform === 'win32') {
+  switch (command) {
+    case 'build':
+    case 'test':
+    case 'check':
+      console.warn(`Skipping taod ${command} on Windows; taod is POSIX-only`)
+      process.exit(0)
+    case 'run':
+      fail('Cannot run taod on Windows; taod is POSIX-only')
+    default:
+      fail(`Unknown taod zig command: ${command}`)
+  }
+}
+
+if (process.env.TAOD_USE_ZIG_BUILD === '1') {
   switch (command) {
     case 'build':
       run('zig', ['build'])
@@ -400,18 +417,18 @@ if (process.platform !== 'darwin') {
 
 switch (command) {
   case 'build':
-    buildDarwin()
+    buildDirect()
     break
   case 'test':
-    testDarwin()
+    testDirect()
     break
   case 'run': {
-    const binaryPath = buildDarwin()
+    const binaryPath = buildDirect()
     run(binaryPath, passthroughArgs, { cwd: daemonRoot })
     break
   }
   case 'check': {
-    const binaryPath = buildDarwin()
+    const binaryPath = buildDirect()
     run(binaryPath, ['--check'], { cwd: daemonRoot })
     break
   }

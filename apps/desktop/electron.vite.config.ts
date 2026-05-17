@@ -50,7 +50,12 @@ function copyTaodBinary() {
       outDir = config.build.outDir
     },
     closeBundle() {
-      const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
+      if (process.platform === 'win32') {
+        console.warn('[copy-taod-binary] Skipping taod copy on Windows; taod is POSIX-only')
+        return
+      }
+
+      const exeName = 'taod'
       const taodSource = resolve(__dirname, '../daemon/zig-out/bin', exeName)
       const taodDestDir = resolve(outDir, '../bin')
       const taodDest = resolve(taodDestDir, exeName)
@@ -61,7 +66,7 @@ function copyTaodBinary() {
 
       mkdirSync(taodDestDir, { recursive: true })
       copyFileSync(taodSource, taodDest)
-      if (process.platform !== 'win32') chmodSync(taodDest, 0o755)
+      chmodSync(taodDest, 0o755)
       console.log('[copy-taod-binary] Copied taod to', taodDest)
 
       const adaptersSource = resolve(__dirname, '../daemon/adapters')
