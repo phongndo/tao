@@ -24,10 +24,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Add swap for Zig native compile
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo swapoff /mnt/tao-swapfile 2>/dev/null || true
+          sudo rm -f /mnt/tao-swapfile
+          sudo fallocate -l 8G /mnt/tao-swapfile
+          sudo chmod 600 /mnt/tao-swapfile
+          sudo mkswap /mnt/tao-swapfile
+          sudo swapon /mnt/tao-swapfile
           free -h
       - run: pnpm check
 
@@ -94,10 +96,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Add swap for Zig native compile
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo swapoff /mnt/tao-swapfile 2>/dev/null || true
+          sudo rm -f /mnt/tao-swapfile
+          sudo fallocate -l 8G /mnt/tao-swapfile
+          sudo chmod 600 /mnt/tao-swapfile
+          sudo mkswap /mnt/tao-swapfile
+          sudo swapon /mnt/tao-swapfile
           free -h
       - run: pnpm build
       - uses: actions/upload-artifact@v4
