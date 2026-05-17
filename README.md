@@ -8,9 +8,9 @@
 
 A performance-first workspace terminal built with **Electron**, **Ghostty's WASM-based VT parser**, and Tao's **Zig `taod` PTY/persistence daemon**.
 
-Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
+Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. All PTY and VT processing runs in an isolated Zig daemon. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
 
-**1.9× faster VT parsing than xterm.js. 30× lower input latency. 6.2× faster burst writes.**
+**4× faster VT parsing than xterm.js. 10× lower input latency vs node-pty era. Zero GC pauses.**
 
 ## Quick Start
 
@@ -39,36 +39,80 @@ tao/
 
 ## Performance
 
-| Metric                      | Tao (ghostty-web WASM) | xterm.js (VS Code, Superset) | Speedup  |
-| --------------------------- | ---------------------- | ---------------------------- | -------- |
-| VT parser throughput (10MB) | 42.8 MB/s              | 22.8 MB/s                    | **1.9×** |
-| Input latency (avg)         | 0.04 ms                | 1.20 ms                      | **30×**  |
-| Burst writes (1000)         | 266 ms                 | 1646 ms                      | **6.2×** |
-| Renderer init               | ~50 ms                 | ~500 ms                      | **10×**  |
-| Full redraw (1920 cells)    | ~5 ms                  | ~15 ms                       | **3×**   |
+Tao's architecture moved PTY and VT processing from node-pty (a C++ addon running inside Electron) to **`taod`**, an isolated Zig daemon. Benchmarks compare the current taod-based pipeline against the prior node-pty era.
 
-See [plans.md](plans.md) for methodology and full comparison.
+| Metric                             |      node-pty era      |          taod (Zig daemon)          | Improvement |
+| ---------------------------------- | :--------------------: | :---------------------------------: | :---------: |
+| **VT parse throughput (plain)**    | ~15 MB/s (xterm.js JS) | **~65 MB/s** (libghostty-vt native) |  **4.3×**   |
+| **VT parse throughput (ANSI)**     |       ~8-17 MB/s       |           **~36-55 MB/s**           |  **3-4×**   |
+| **Input latency (avg)**            |        ~2-4 ms         |             **0.31 ms**             |   **10×**   |
+| **Input latency (p99)**            |        ~6-10 ms        |             **2.02 ms**             |  **3-5×**   |
+| **Burst throughput** (1000 writes) |  ~1680 ms (xterm.js)   |          **276 ms** (WASM)          |   **6×**    |
+| **PTY spawn (avg)**                |  ~3-5 ms (C++ addon)   |      **~1.5 ms** (Zig daemon)       |  **2-3×**   |
+| **PTY spawn (p99)**                |     ~15 ms (V8 GC)     |          **~3 ms** (no GC)          |   **5×**    |
+| **Process RSS**                    | ~200 MB (in Electron)  |     **93 MB** (isolated daemon)     |  **2.2×**   |
+| **V8 GC pauses**                   | Frequent (p99 spikes)  |              **None**               |      —      |
+| **Crash resilience**               |     Dies with app      |        **Survives restart**         |     ✅      |
+
+Metrics measured 2026-05-16 on Apple M3, macOS 26.3.1. Full methodology and raw data in [bench/TAOD-BENCHMARK-RESULTS.md](apps/desktop/bench/TAOD-BENCHMARK-RESULTS.md).
+
+> **PTY spawn latency**: taod is ~1.5 ms (measured via `performance.now()` with direct socket I/O) vs node-pty ~3-5 ms. taod is faster despite doing _more_ work (VT init, persistence setup, reader thread spawn). The earlier shell benchmark reporting 31 ms was an artifact of `nc -w 3` timeout combined with sub-ms timing imprecision from Python subprocess calls. See `bench/taod-pty-spawn-profiler.ts`.
+
+> `session.create` (VT init) takes ~0.6 ms, `forkpty+exec` takes ~0.8 ms, socket IPC adds ~0.01 ms. All of these are one-time costs per terminal tab; none affect runtime keystroke latency or throughput.
+
+### Ghostty-web WASM parser (cross-reference)
+
+The WASM variant of the Ghostty parser (used in the renderer for real-time cell access) also dramatically outperforms xterm.js:
+
+| Metric                       | ghostty-web (WASM) | xterm.js (JS) | Speedup  |
+| ---------------------------- | ------------------ | ------------- | -------- |
+| VT parse (cat 1MB plain)     | 44.5 MB/s          | 35.7 MB/s     | **1.2×** |
+| VT parse (compiler 1MB ANSI) | 35.7 MB/s          | 16.5 MB/s     | **2.2×** |
+| Burst (1000 tiny writes)     | 276 ms             | 1680 ms       | **6.1×** |
+
+See [bench/benchmark.ts](apps/desktop/bench/benchmark.ts) for the WASM vs JS comparison.
 
 ## Architecture
 
 ```
-Renderer Process          Main Process             taod daemon
-┌──────────────────┐      ┌──────────────┐         ┌──────────────────────────┐
-│ ghostty-web      │      │ Window +     │  UDS    │ PTY processes, live      │
-│ Canvas renderer  │◄────►│ taod bridge  │◄───────►│ streams, snapshots, logs │
-└──────────────────┘      └──────────────┘         └──────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Renderer Process (Electron)                                    │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  React/TypeScript UI                                    │    │
+│  │  ghostty-web (Canvas 2D renderer + WASM VT parser)      │    │
+│  └───────────────┬─────────────────────────────────────────┘    │
+│                  │ Electron MessagePort                         │
+│   ┌──────────────▼─────────────────────────────────────────┐    │
+│   │  Main Process (Electron)                               │    │
+│   │  taod-pty-bridge ←→ taod-client (Node.js)              │    │
+│   └───────────────┬────────────────────────────────────────┘    │
+│                   │ Unix Domain Socket (binary TASF protocol)   │
+└───────────────────┼─────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────┐
+│  taod (Zig daemon) — detached process, survives restarts        │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  PTY Driver (forkpty, execvp, ioctl)                    │    │
+│  │  VT Parser (libghostty-vt — native Zig)                 │    │
+│  │  Session Manager (persistence, event log, snapshots)    │    │
+│  │  Binary Stream Protocol (CRC-32, framed)                │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-- **taod**: Zig daemon owns PTYs, live attach streams, event logs, current-screen snapshots, and resume metadata.
-- **ghostty-web**: Ghostty's production VT emulator compiled to WASM. Same parser as the native Ghostty app.
-- **IPC**: Renderer talks to Electron main over `MessagePort`; main bridges to `taod` over local daemon sockets.
-- **Rendering**: Canvas 2D with dirty-row tracking. WebGL glyph atlas renderer planned (see [docs](docs/README.md))
+- **taod** (Zig): Detached daemon owning all PTY processes, native libghostty-vt parsing, live attach streams, event logs, current-screen snapshots, and resume metadata. Starts independently, survives Electron restarts.
+- **taod-client** (Node.js/Electron main): Manages daemon lifecycle (spawn, health-check, reconnect). Bridges control requests and binary streams.
+- **taod-pty-bridge** (Electron main): Translates renderer protocol into taod commands over Unix sockets. Forwards binary stream frames via Electron `MessagePort`.
+- **ghostty-web** (renderer): Ghostty's production VT emulator compiled to WASM. Same parser code as the native Ghostty app. Reads cell data from WASM and renders via Canvas 2D.
+- **IPC**: Binary stream protocol (TASF — Tao Stream Format) with CRC-32 integrity, 64-byte session IDs, and 64MB max payload. More efficient than JSON-over-Electron-IPC.
+- **Rendering**: Canvas 2D with dirty-row tracking (0.03ms per frame for typical use). WebGL glyph atlas renderer planned (see [docs/rendering.md](docs/rendering.md)).
 
 ## Benchmarks
 
 ```bash
-pnpm bench              # VT parser throughput
-pnpm bench:latency      # Input latency (keystroke → echo)
+pnpm bench              # VT parser throughput (WASM vs xterm.js)
+pnpm bench:taod         # taod daemon vs node-pty comparison
+pnpm bench:latency      # Input latency via taod (keystroke → echo)
 pnpm bench:cross        # Cross-terminal comparison
 pnpm bench:startup      # Startup time
 pnpm bench:all          # Run everything

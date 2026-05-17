@@ -18,29 +18,34 @@ echo -e "${BOLD}║            Tao — Complete Benchmark Suite               �
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# 1. Parser benchmark (Node.js, headless)
-echo -e "${CYAN}▶ Bench 1/5: VT Parser Throughput${NC}"
-pnpm bench || echo "  (parser benchmark completed with warnings)"
+# 1. taod daemon benchmark (Zig vs node-pty comparison)
+echo -e "${CYAN}▶ Bench 1/6: taod daemon vs node-pty${NC}"
+bash "$SCRIPT_DIR/taod-vs-node-pty.sh" || echo "  (taod benchmark skipped)"
 
-# 2. Latency benchmark
+# 2. Latency benchmark (via taod)
 echo ""
-echo -e "${CYAN}▶ Bench 2/5: Input Latency${NC}"
-bash "$SCRIPT_DIR/latency-bench.sh" || echo "  (latency benchmark skipped)"
+echo -e "${CYAN}▶ Bench 2/6: Input Latency (taod)${NC}"
+npx tsx "$SCRIPT_DIR/latency-taod.ts" || echo "  (latency benchmark skipped)"
 
-# 3. Cross-terminal throughput
+# 3. VT Parser benchmark (Node.js, headless)
 echo ""
-echo -e "${CYAN}▶ Bench 3/5: Cross-Terminal Throughput${NC}"
+echo -e "${CYAN}▶ Bench 3/6: VT Parser Throughput${NC}"
+npx tsx "$SCRIPT_DIR/benchmark.ts" || echo "  (parser benchmark skipped)"
+
+# 4. Cross-terminal throughput
+echo ""
+echo -e "${CYAN}▶ Bench 4/6: Cross-Terminal Throughput${NC}"
 bash "$SCRIPT_DIR/cross-terminal.sh" || echo "  (cross-terminal benchmark skipped)"
 
-# 4. Startup time
+# 5. Startup time
 echo ""
-echo -e "${CYAN}▶ Bench 4/5: Startup Time${NC}"
+echo -e "${CYAN}▶ Bench 5/6: Startup Time${NC}"
 bash "$SCRIPT_DIR/startup-bench.sh" || echo "  (startup benchmark skipped)"
 
-# 5. Electron IPC transport
+# 6. Electron IPC transport
 echo ""
-echo -e "${CYAN}▶ Bench 5/5: Electron IPC Transport${NC}"
-pnpm bench:ipc || echo "  (IPC benchmark skipped)"
+echo -e "${CYAN}▶ Bench 6/6: Electron IPC Transport${NC}"
+npx tsx "$SCRIPT_DIR/run-electron.ts" "$SCRIPT_DIR/ipc-benchmark.ts" || echo "  (IPC benchmark skipped)"
 
 echo ""
 echo -e "${GREEN}${BOLD}All benchmarks complete.${NC}"

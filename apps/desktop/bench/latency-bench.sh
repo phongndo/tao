@@ -13,16 +13,16 @@ echo -e "${BOLD}║   (PTY → parser → output, ${RUNS} samples)       ║${NC
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
-echo -e "${BOLD}─── Tao (ghostty-web WASM) ───${NC}"
+echo -e "${BOLD}─── Tao (taod Zig daemon) ───${NC}"
 echo -ne "  Measuring... "
-npx tsx "$SCRIPT_DIR/latency-tao.ts" "$RUNS" 2>/dev/null
+npx tsx "$SCRIPT_DIR/latency-taod.ts" "$RUNS" 2>/dev/null
 
 echo ""
-echo -e "${BOLD}─── xterm.js (JS parser) ───${NC}"
+echo -e "${BOLD}─── VT Parser Comparison (WASM vs JS) ───${NC}"
 echo -ne "  Measuring... "
-npx tsx "$SCRIPT_DIR/latency-xterm.ts" "$RUNS" 2>/dev/null
-
+npx tsx "$SCRIPT_DIR/benchmark.ts" 2>/dev/null
 echo ""
 echo -e "${GREEN}${BOLD}Done.${NC}"
 echo ""
-echo -e "Note: Headless PTY→parser only. Real-world adds GPU + display (~8-16ms)."
+echo -e "Note: taod benchmark measures full pipeline (write → socket → daemon →"
+echo -e "PTY → echo → daemon → binary stream). WASM benchmark from bench/benchmark.ts."
