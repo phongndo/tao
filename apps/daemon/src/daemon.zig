@@ -480,13 +480,20 @@ test "daemon drops failed stream subscribers without blocking pending output" {
     defer std.testing.allocator.free(created);
 
     const item = daemon.sessions.find("stream-session").?;
-    try item.subscribers.append(std.testing.allocator, -1);
-
-    try daemon.broadcastStreamFrameLocked(item, .output, 1, "live output");
+    {
+        daemon.lock();
+        defer daemon.unlock();
+        try item.subscribers.append(std.testing.allocator, -1);
+        try daemon.broadcastStreamFrameLocked(item, .output, 1, "live output");
+    }
     try std.testing.expectEqual(@as(usize, 0), item.subscribers.items.len);
     try std.testing.expectEqual(@as(usize, 0), item.pending_output.items.len);
 
-    try daemon.broadcastStreamFrameLocked(item, .output, 2, "detached output");
+    {
+        daemon.lock();
+        defer daemon.unlock();
+        try daemon.broadcastStreamFrameLocked(item, .output, 2, "detached output");
+    }
     try std.testing.expectEqual(@as(usize, 1), item.pending_output.items.len);
     try std.testing.expectEqualStrings("detached output", item.pending_output.items[0].payload);
 }

@@ -88,8 +88,6 @@ pub fn Context(comptime Daemon: type) type {
                 const item = daemon.sessions.find(session_id) orelse return false;
                 item.assertInvariants();
                 if (!isLiveAttachable(item)) return false;
-                if (!try daemon.sessions.addSubscriber(session_id, socket_fd)) return false;
-                item.assertInvariants();
             }
 
             // Initial reattach hydration must be reliable. Current-screen snapshots for full-screen
@@ -100,19 +98,24 @@ pub fn Context(comptime Daemon: type) type {
             // clients can still be dropped without stalling the daemon.
             screen_mod.sendCurrentScreenSnapshotToSubscriber(daemon, session_id, socket_fd) catch |err| {
                 std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ session_id, err });
-                _ = self.removeSubscriber(session_id, socket_fd);
                 return false;
             };
             self.flushPendingOutputToSubscriber(session_id, socket_fd) catch |err| {
                 std.log.warn("failed to flush pending output for {s}: {t}", .{ session_id, err });
-                _ = self.removeSubscriber(session_id, socket_fd);
                 return false;
             };
             setNonBlockingFd(socket_fd) catch |err| {
                 std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ session_id, err });
-                _ = self.removeSubscriber(session_id, socket_fd);
                 return false;
             };
+
+            daemon.lock();
+            defer daemon.unlock();
+            const item = daemon.sessions.find(session_id) orelse return false;
+            item.assertInvariants();
+            if (!isLiveAttachable(item)) return false;
+            if (!try daemon.sessions.addSubscriber(session_id, socket_fd)) return false;
+            item.assertInvariants();
             return true;
         }
 
@@ -226,7 +229,7 @@ pub fn Context(comptime Daemon: type) type {
                 const fd = item.subscribers.items[index];
                 writeAllFdNonBlocking(fd, encoded) catch |err| {
                     std.log.warn("dropping slow taod subscriber for {s}: {t}", .{ item.id, err });
-                    _ = item.subscribers.orderedRemove(index);
+                    self.removeSubscriberAtLocked(item, index);
                     continue;
                 };
                 index += 1;
@@ -280,11 +283,12 @@ pub fn Context(comptime Daemon: type) type {
 
                 const item = daemon.sessions.find(session_id) orelse return error.SessionNotFound;
                 item.assertInvariants();
-                if (!daemon.sessions.hasSubscriber(session_id, socket_fd)) return error.SessionNotAttached;
+                if (!isLiveAttachable(item)) return error.SessionNotAttached;
                 if (item.pending_output.items.len == 0) break :frames null;
 
                 var out: std.ArrayList(u8) = .empty;
                 errdefer out.deinit(daemon.allocator);
+                var last_flushed_seq: u64 = 0;
                 for (item.pending_output.items) |frame| {
                     const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
                     var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
@@ -298,20 +302,48 @@ pub fn Context(comptime Daemon: type) type {
                     };
                     const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
                     try out.appendSlice(daemon.allocator, encoded);
+                    last_flushed_seq = frame.seq;
                 }
-                break :frames try out.toOwnedSlice(daemon.allocator);
+                break :frames .{ .data = try out.toOwnedSlice(daemon.allocator), .last_seq = last_flushed_seq };
             };
 
             const encoded_frames = frames orelse return;
-            defer daemon.allocator.free(encoded_frames);
-            try writeAllFd(socket_fd, encoded_frames);
+            defer daemon.allocator.free(encoded_frames.data);
+            try writeAllFd(socket_fd, encoded_frames.data);
 
             daemon.lock();
             defer daemon.unlock();
             const item = daemon.sessions.find(session_id) orelse return;
             item.assertInvariants();
-            if (!daemon.sessions.hasSubscriber(session_id, socket_fd)) return;
-            item.clearPendingOutput(daemon.allocator);
+            if (!isLiveAttachable(item)) return;
+            self.clearPendingOutputThroughSeqLocked(item, encoded_frames.last_seq);
+        }
+
+        fn removeSubscriberAtLocked(self: Self, item: *session.TerminalSession, index: usize) void {
+            item.assertInvariants();
+            assert(index < item.subscribers.items.len);
+
+            const daemon = self.daemon;
+            _ = item.subscribers.orderedRemove(index);
+            if (item.subscribers.items.len == 0 and item.status == .live) {
+                item.transitionTo(.detached);
+                daemon.checkpointCurrentScreenLocked(item);
+            }
+            daemon.recordTerminalSessionLocked(item, null);
+            item.assertInvariants();
+        }
+
+        fn clearPendingOutputThroughSeqLocked(self: Self, item: *session.TerminalSession, seq: u64) void {
+            item.assertInvariants();
+
+            const daemon = self.daemon;
+            while (item.pending_output.items.len > 0 and item.pending_output.items[0].seq <= seq) {
+                var frame = item.pending_output.orderedRemove(0);
+                assert(item.pending_output_bytes >= frame.payload.len);
+                item.pending_output_bytes -= frame.payload.len;
+                frame.deinit(daemon.allocator);
+            }
+            item.assertInvariants();
         }
 
         const ClientFrameVisitor = struct {
