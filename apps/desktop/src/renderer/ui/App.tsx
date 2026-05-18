@@ -33,9 +33,11 @@ import {
   type Tab,
   useTaoStore,
   type Workspace,
+  worktreeContextId,
 } from '../state/store'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
+import type { WorkspaceRecord } from '@tao/shared/workspace'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
 const SIDEBAR_COLLAPSED_WIDTH = 48
@@ -267,6 +269,18 @@ function workspaceInitials(name: string): string {
   return initials || name.slice(0, 2).toUpperCase() || '•'
 }
 
+function workspaceFromRecord(record: WorkspaceRecord): Workspace {
+  return {
+    id: record.id,
+    name: record.name,
+    projectPath: record.rootPath,
+    branch: record.branch ?? record.defaultBranch ?? undefined,
+    worktrees: [...record.worktrees],
+    lastActiveTabId: record.lastActiveTabId ?? undefined,
+    order: record.orderIndex,
+  }
+}
+
 function normalizeSidebarWidth(nextWidth: number): number {
   return nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
     ? SIDEBAR_COLLAPSED_WIDTH
@@ -301,66 +315,203 @@ function WorkspaceItem({
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
+  const selectWorktree = useTaoStore((state) => state.selectWorktree)
+  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
+  const upsertWorktree = useTaoStore((state) => state.upsertWorktree)
+  const removeWorktree = useTaoStore((state) => state.removeWorktree)
   const removeWorkspace = useTaoStore((state) => state.removeWorkspace)
+  const [isCreatingWorktree, setIsCreatingWorktree] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(true)
+  const [worktreeError, setWorktreeError] = useState<string | null>(null)
   const isActive = activeWorkspaceId === workspace.id
-  const branch = useGitBranch(workspace.projectPath, isActive)
+  const hasActiveWorktree = (workspace.worktrees ?? []).some(
+    (worktree) => activeWorkspaceId === worktreeContextId(worktree.id),
+  )
+  const branch = useGitBranch(workspace.projectPath, isExpanded || isActive || hasActiveWorktree)
   const branchLabel = branch.isError
     ? 'git error'
     : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
-  const label = `${workspace.name} — ${branchLabel}`
+  const label = `${workspace.name} — local branch ${branchLabel}`
+
+  async function handleCreateWorktree() {
+    if (isCreatingWorktree) return
+    setIsCreatingWorktree(true)
+    setWorktreeError(null)
+    setIsExpanded(true)
+    try {
+      const workspaceResponse = await window.electronAPI.addWorkspace({
+        rootPath: workspace.projectPath,
+        workspaceId: workspace.id,
+        name: workspace.name,
+        orderIndex: workspace.order,
+      })
+      if (!workspaceResponse.ok) {
+        setWorktreeError(workspaceResponse.error.message)
+        console.warn('[worktree] Failed to register workspace:', workspaceResponse.error.message)
+        return
+      }
+
+      upsertWorkspace(workspaceFromRecord(workspaceResponse.value))
+
+      const response = await window.electronAPI.createWorktree({
+        workspaceId: workspaceResponse.value.id,
+      })
+      if (!response.ok) {
+        setWorktreeError(response.error.message)
+        console.warn('[worktree] Failed to create worktree:', response.error.message)
+        return
+      }
+      setIsExpanded(true)
+      upsertWorktree(workspaceResponse.value.id, response.value)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWorktreeError(message)
+      console.warn('[worktree] Failed to create worktree:', error)
+    } finally {
+      setIsCreatingWorktree(false)
+    }
+  }
+
+  async function handleRemoveWorktree(worktreeId: string) {
+    try {
+      const response = await window.electronAPI.removeWorktree({ worktreeId })
+      if (!response.ok) {
+        setWorktreeError(response.error.message)
+        console.warn('[worktree] Failed to remove worktree:', response.error.message)
+        return
+      }
+      removeWorktree(workspace.id, worktreeId)
+    } catch (error) {
+      console.warn('[worktree] Failed to remove worktree:', error)
+    }
+  }
 
   return (
-    <div
-      className={isActive ? 'workspace-item workspace-item-active' : 'workspace-item'}
-      draggable
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = 'move'
-        event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
-        event.dataTransfer.setData('text/plain', workspace.id)
-      }}
-      onDragOver={(event) => {
-        if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = 'move'
-      }}
-      onDrop={(event) => {
-        const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
-        if (!workspaceId || workspaceId === workspace.id) return
-        event.preventDefault()
-        onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
-      }}
-    >
-      <button
-        type="button"
-        className="workspace-select-button"
-        onClick={() => selectWorkspace(workspace.id)}
-        aria-pressed={isActive}
-        aria-label={label}
-        title={label}
-      >
-        <span className="workspace-avatar" aria-hidden="true">
-          {workspaceInitials(workspace.name)}
-        </span>
-        <span className="workspace-details">
-          <span className="workspace-title">{workspace.name}</span>
-          <span className="workspace-branch-pill">
-            <FiGitBranch size={12} />
-            <span>{branchLabel}</span>
-          </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        className="icon-button workspace-danger-button"
-        aria-label={`Remove ${workspace.name}`}
-        title="Remove workspace"
-        onClick={(event) => {
-          event.stopPropagation()
-          removeWorkspace(workspace.id)
+    <div className="workspace-group">
+      <div
+        className="workspace-item"
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move'
+          event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
+          event.dataTransfer.setData('text/plain', workspace.id)
+        }}
+        onDragOver={(event) => {
+          if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={(event) => {
+          const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
+          if (!workspaceId || workspaceId === workspace.id) return
+          event.preventDefault()
+          onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
         }}
       >
-        <FiTrash2 size={13} />
-      </button>
+        <button
+          type="button"
+          className="workspace-select-button workspace-dropdown-button"
+          onClick={() => setIsExpanded((expanded) => !expanded)}
+          aria-expanded={isExpanded}
+          aria-label={label}
+          title={label}
+        >
+          <span className="workspace-avatar" aria-hidden="true">
+            {workspaceInitials(workspace.name)}
+          </span>
+          <span className="workspace-details">
+            <span className="workspace-title">{workspace.name}</span>
+            <FiChevronRight
+              className={
+                isExpanded ? 'workspace-chevron workspace-chevron-expanded' : 'workspace-chevron'
+              }
+              size={13}
+            />
+          </span>
+        </button>
+        <button
+          type="button"
+          className="icon-button workspace-worktree-button"
+          aria-label={`New worktree for ${workspace.name}`}
+          title="New Worktree"
+          disabled={isCreatingWorktree}
+          onClick={(event) => {
+            event.stopPropagation()
+            void handleCreateWorktree()
+          }}
+        >
+          <FiPlus size={13} />
+        </button>
+        <button
+          type="button"
+          className="icon-button workspace-danger-button"
+          aria-label={`Remove ${workspace.name}`}
+          title="Remove workspace"
+          onClick={(event) => {
+            event.stopPropagation()
+            removeWorkspace(workspace.id)
+          }}
+        >
+          <FiTrash2 size={13} />
+        </button>
+      </div>
+      {isExpanded ? (
+        <div className="workspace-branch-list">
+          <button
+            type="button"
+            className={isActive ? 'local-branch-row local-branch-row-active' : 'local-branch-row'}
+            aria-pressed={isActive}
+            title={`Local checkout — ${branchLabel}`}
+            onClick={() => selectWorkspace(workspace.id)}
+          >
+            <span className="worktree-state worktree-state-active" />
+            <span className="worktree-details">
+              <span className="worktree-title">{branchLabel}</span>
+              <span className="worktree-branch-pill">
+                <FiGitBranch size={11} />
+                <span>local checkout</span>
+              </span>
+            </span>
+          </button>
+          {(workspace.worktrees ?? []).map((worktree) => {
+            const isWorktreeActive = activeWorkspaceId === worktreeContextId(worktree.id)
+            const title = worktree.branch
+            return (
+              <div
+                key={worktree.id}
+                className={isWorktreeActive ? 'worktree-row worktree-row-active' : 'worktree-row'}
+              >
+                <button
+                  type="button"
+                  className="worktree-item"
+                  aria-pressed={isWorktreeActive}
+                  title={`${title} — ${worktree.branch}`}
+                  onClick={() => selectWorktree(worktree.id)}
+                >
+                  <span className={`worktree-state worktree-state-${worktree.state}`} />
+                  <span className="worktree-details">
+                    <span className="worktree-title">{title}</span>
+                    <span className="worktree-branch-pill">
+                      <FiGitBranch size={11} />
+                      <span>{worktree.branch}</span>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-button worktree-danger-button"
+                  aria-label={`Remove ${title}`}
+                  title="Remove worktree"
+                  onClick={() => void handleRemoveWorktree(worktree.id)}
+                >
+                  <FiTrash2 size={11} />
+                </button>
+              </div>
+            )
+          })}
+          {worktreeError ? <div className="worktree-error">{worktreeError}</div> : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -698,6 +849,8 @@ const HeaderNavigation = memo(function HeaderNavigation({
 const PaneTile = memo(function PaneTile({
   pane,
   terminalCwd,
+  terminalWorkspaceId,
+  terminalWorktreeId,
   isActive,
   focusToken,
   onSelect,
@@ -707,6 +860,8 @@ const PaneTile = memo(function PaneTile({
 }: {
   pane: Pane
   terminalCwd?: string
+  terminalWorkspaceId?: string
+  terminalWorktreeId?: string
   isActive: boolean
   focusToken: number
   onSelect(): void
@@ -743,6 +898,8 @@ const PaneTile = memo(function PaneTile({
         <TerminalPane
           sessionId={pane.lastSessionId ?? pane.id}
           terminalId={pane.terminalId}
+          workspaceId={terminalWorkspaceId}
+          worktreeId={terminalWorktreeId}
           cwd={pane.cwd ?? terminalCwd}
           isActive={isActive}
           focusToken={focusToken}
@@ -762,6 +919,8 @@ const PaneTile = memo(function PaneTile({
 const PaneGrid = memo(function PaneGrid({
   tab,
   terminalCwd,
+  terminalWorkspaceId,
+  terminalWorktreeId,
   panesById,
   activePaneId,
   terminalFocusTokens,
@@ -773,6 +932,8 @@ const PaneGrid = memo(function PaneGrid({
 }: {
   tab: Tab
   terminalCwd?: string
+  terminalWorkspaceId?: string
+  terminalWorktreeId?: string
   panesById: Map<string, Pane>
   activePaneId: string | null
   terminalFocusTokens: ReadonlyMap<string, number>
@@ -816,6 +977,8 @@ const PaneGrid = memo(function PaneGrid({
         <PaneTile
           pane={pane}
           terminalCwd={terminalCwd}
+          terminalWorkspaceId={terminalWorkspaceId}
+          terminalWorktreeId={terminalWorktreeId}
           isActive={pane.id === activePaneId}
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
           onSelect={() => onSelectPane(pane.id)}
@@ -833,6 +996,8 @@ const PaneGrid = memo(function PaneGrid({
       onSelectPane,
       panesById,
       terminalCwd,
+      terminalWorkspaceId,
+      terminalWorktreeId,
       terminalFocusTokens,
     ],
   )
@@ -889,6 +1054,7 @@ export function App() {
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
+  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
   const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
@@ -939,10 +1105,19 @@ export function App() {
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
   )
-  const workspacePathById = useMemo(
-    () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
-    [workspaces],
-  )
+  const contextMetadataById = useMemo(() => {
+    const entries: Array<[string, { workspaceId?: string; worktreeId?: string; cwd?: string }]> = []
+    for (const workspace of workspaces) {
+      entries.push([workspace.id, { workspaceId: workspace.id, cwd: workspace.projectPath }])
+      for (const worktree of workspace.worktrees ?? []) {
+        entries.push([
+          worktreeContextId(worktree.id),
+          { workspaceId: workspace.id, worktreeId: worktree.id, cwd: worktree.path },
+        ])
+      }
+    }
+    return new Map(entries)
+  }, [workspaces])
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
   const archivedTabIds = useMemo(
     () => new Set(panes.filter((pane) => pane.status === 'archived').map((pane) => pane.tabId)),
@@ -977,6 +1152,44 @@ export function App() {
       cancelled = true
     }
   }, [hydrateLayout])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
+    let cancelled = false
+
+    async function syncDaemonWorkspaces() {
+      const currentWorkspaces = useTaoStore.getState().workspaces
+      for (const workspace of currentWorkspaces) {
+        try {
+          const response = await window.electronAPI.addWorkspace({
+            rootPath: workspace.projectPath,
+            workspaceId: workspace.id,
+            name: workspace.name,
+            orderIndex: workspace.order,
+          })
+          if (!cancelled && response.ok) upsertWorkspace(workspaceFromRecord(response.value))
+        } catch (error) {
+          console.warn('[workspace] Failed to import workspace into taod:', error)
+        }
+      }
+
+      try {
+        const response = await window.electronAPI.listWorkspaces()
+        if (!cancelled && response.ok) {
+          for (const workspace of response.value) upsertWorkspace(workspaceFromRecord(workspace))
+        }
+      } catch (error) {
+        console.warn('[workspace] Failed to list daemon workspaces:', error)
+      }
+    }
+
+    void syncDaemonWorkspaces()
+
+    return () => {
+      cancelled = true
+    }
+  }, [layoutLoaded, upsertWorkspace])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -1103,6 +1316,18 @@ export function App() {
     )
       return
 
+    const response = await window.electronAPI.addWorkspace({
+      rootPath: projectPath,
+      name: workspaceNameFromPath(projectPath),
+      orderIndex: workspaces.length,
+    })
+    if (response.ok) {
+      addWorkspace(workspaceFromRecord(response.value))
+      return
+    }
+
+    console.warn('[workspace] Failed to add daemon workspace:', response.error.message)
+
     addWorkspace({
       id: projectPath,
       name: workspaceNameFromPath(projectPath),
@@ -1224,6 +1449,7 @@ export function App() {
             {mountedTabs.length > 0 ? (
               mountedTabs.map((tab) => {
                 const isTabActive = tab.id === activeTab?.id
+                const metadata = contextMetadataById.get(tab.workspaceId) ?? {}
                 return (
                   <div
                     className={
@@ -1234,7 +1460,9 @@ export function App() {
                   >
                     <PaneGrid
                       tab={tab}
-                      terminalCwd={workspacePathById.get(tab.workspaceId)}
+                      terminalCwd={metadata.cwd}
+                      terminalWorkspaceId={metadata.workspaceId}
+                      terminalWorktreeId={metadata.worktreeId}
                       panesById={panesById}
                       activePaneId={isTabActive ? activePaneId : null}
                       terminalFocusTokens={terminalFocusTokens}

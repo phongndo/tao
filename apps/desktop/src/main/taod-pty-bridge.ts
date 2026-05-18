@@ -58,6 +58,12 @@ function sanitizeCwd(cwd: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined
 }
 
+function sanitizeId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
 function isValidSize(cols: number, rows: number): boolean {
   return Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0
 }
@@ -229,6 +235,8 @@ export class TaodPtyBridge {
           {
             forceCreate: true,
             argv: sanitizeArgv(message.argv),
+            workspaceId: sanitizeId(message.workspaceId),
+            worktreeId: sanitizeId(message.worktreeId),
           },
         )
         break
@@ -242,6 +250,8 @@ export class TaodPtyBridge {
           sanitizeCwd(message.cwd),
           {
             forceCreate: false,
+            workspaceId: sanitizeId(message.workspaceId),
+            worktreeId: sanitizeId(message.worktreeId),
           },
         )
         break
@@ -271,7 +281,12 @@ export class TaodPtyBridge {
     cols: number,
     rows: number,
     cwd: string | undefined,
-    options: { forceCreate: boolean; argv?: readonly string[] },
+    options: {
+      forceCreate: boolean
+      argv?: readonly string[]
+      workspaceId?: string
+      worktreeId?: string
+    },
   ): Promise<void> {
     const existing = this.sessions.get(sessionId)
     if (existing?.stream) {
@@ -290,11 +305,13 @@ export class TaodPtyBridge {
     let stream: TaodSessionStream
     let attachMode: AttachSessionMode = 'live'
     if (options.forceCreate) {
-      await this.createShellSession(sessionId, terminalId, cols, rows, cwd, options.argv)
+      await this.createShellSession(sessionId, terminalId, cols, rows, cwd, options)
       attachMode = 'fresh'
       ;({ response: attachResponse, stream } = await this.client.attachSession({
         sessionId,
         terminalId,
+        workspaceId: options.workspaceId,
+        worktreeId: options.worktreeId,
         cols,
         rows,
         cwd,
@@ -307,14 +324,18 @@ export class TaodPtyBridge {
           cols,
           rows,
           cwd,
+          workspaceId: options.workspaceId,
+          worktreeId: options.worktreeId,
         }))
       } catch (error) {
         if (!isNotFoundError(error)) throw error
-        await this.createShellSession(sessionId, terminalId, cols, rows, cwd)
+        await this.createShellSession(sessionId, terminalId, cols, rows, cwd, options)
         attachMode = 'fresh'
         ;({ response: attachResponse, stream } = await this.client.attachSession({
           sessionId,
           terminalId,
+          workspaceId: options.workspaceId,
+          worktreeId: options.worktreeId,
           cols,
           rows,
           cwd,
@@ -358,15 +379,20 @@ export class TaodPtyBridge {
     cols: number,
     rows: number,
     cwd?: string,
-    argv?: readonly string[],
+    options: { argv?: readonly string[]; workspaceId?: string; worktreeId?: string } = {},
   ): Promise<TaodControlResponse> {
     return this.client.createSession({
       sessionId,
       terminalId,
+      workspaceId: options.workspaceId,
+      worktreeId: options.worktreeId,
       cols,
       rows,
       cwd,
-      argv: argv && argv.length > 0 ? [...argv] : defaultShellArgv(this.defaultShell),
+      argv:
+        options.argv && options.argv.length > 0
+          ? [...options.argv]
+          : defaultShellArgv(this.defaultShell),
     })
   }
 

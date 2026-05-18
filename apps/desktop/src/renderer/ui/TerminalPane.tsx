@@ -1,37 +1,11 @@
 import type { Terminal } from 'ghostty-web'
 import { useEffect, useRef, useState } from 'react'
-import type { AttachSessionResult } from '@tao/shared/taod-protocol'
 import { createTerminal, forceTerminalRender, setTerminalCursorVisible } from '../terminal'
 
 type TerminalError = {
   title?: string
   message: string
   detail?: string
-}
-
-type ResumeNotice = {
-  label: string
-  detail: string
-}
-
-function resumeNoticeFromAttach(result: AttachSessionResult): ResumeNotice | null {
-  if (result.attachMode === 'agent-resume') {
-    const provider = result.agentProvider ? `${result.agentProvider} ` : ''
-    const nativeId = result.nativeSessionId ? ` (${result.nativeSessionId})` : ''
-    return {
-      label: 'Agent resumed',
-      detail: `Started ${provider}via native resume${nativeId}.`,
-    }
-  }
-
-  if (result.attachMode === 'command-resume') {
-    return {
-      label: 'Command relaunched',
-      detail: 'The previous live process was gone, so Tao restarted the saved command.',
-    }
-  }
-
-  return null
 }
 
 function renderAfterWindowShown(terminal: Terminal, isCurrent: () => boolean): () => void {
@@ -70,6 +44,8 @@ function renderAfterWindowShown(terminal: Terminal, isCurrent: () => boolean): (
 export function TerminalPane({
   sessionId,
   terminalId,
+  workspaceId,
+  worktreeId,
   cwd,
   isActive,
   focusToken,
@@ -79,6 +55,8 @@ export function TerminalPane({
 }: {
   sessionId: string
   terminalId?: string
+  workspaceId?: string
+  worktreeId?: string
   cwd?: string
   isActive: boolean
   focusToken: number
@@ -94,7 +72,6 @@ export function TerminalPane({
   const terminalReadyRef = useRef(false)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
   const [isArchived, setIsArchived] = useState(false)
-  const [resumeNotice, setResumeNotice] = useState<ResumeNotice | null>(null)
 
   useEffect(() => {
     onTitleChangeRef.current = onTitleChange
@@ -127,10 +104,11 @@ export function TerminalPane({
       try {
         setTerminalError(null)
         setIsArchived(false)
-        setResumeNotice(null)
         onArchiveStateChangeRef.current?.(false)
         const terminal = await createTerminal(surface, sessionId, {
           terminalId,
+          workspaceId,
+          worktreeId,
           cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
           onArchived: () => {
@@ -138,9 +116,6 @@ export function TerminalPane({
               setIsArchived(true)
               onArchiveStateChangeRef.current?.(true)
             }
-          },
-          onAttach: (result) => {
-            if (!disposed) setResumeNotice(resumeNoticeFromAttach(result))
           },
         })
         if (disposed) {
@@ -185,7 +160,7 @@ export function TerminalPane({
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
-  }, [sessionId, terminalId])
+  }, [sessionId, terminalId, workspaceId, worktreeId])
 
   useEffect(() => {
     const terminal = terminalRef.current
@@ -223,12 +198,6 @@ export function TerminalPane({
           <button type="button" onClick={onRestartSession} disabled={!onRestartSession}>
             Start fresh shell
           </button>
-        </div>
-      ) : null}
-      {resumeNotice && !isArchived && !terminalError ? (
-        <div className="terminal-resume-banner">
-          <span className="terminal-resume-label">{resumeNotice.label}</span>
-          <span className="terminal-resume-detail">{resumeNotice.detail}</span>
         </div>
       ) : null}
     </div>

@@ -30,6 +30,7 @@ import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { defaultSettings, readSettings, writeSettings } from './settings-store'
 import { TaodPtyBridge } from './taod-pty-bridge'
+import { TaodClient } from './taod-client'
 import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
 import {
@@ -44,7 +45,9 @@ import {
   errorMessageFromUnknown,
   workspaceIpcFailure,
   workspaceIpcSuccess,
+  type WorkspaceRecord,
   type WorkspaceIpcResponse,
+  type WorkspaceWorktree,
 } from '@tao/shared/workspace'
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
@@ -116,6 +119,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 let mainWindow: BrowserWindow | null = null
 let taodBridge: TaodPtyBridge | null = null
+let taodWorkspaceClient: TaodClient | null = null
 
 // ─── Window Creation ───
 
@@ -278,6 +282,11 @@ function ensureTaodBridge(): TaodPtyBridge {
   return taodBridge
 }
 
+function ensureTaodWorkspaceClient(): TaodClient {
+  taodWorkspaceClient ??= new TaodClient()
+  return taodWorkspaceClient
+}
+
 function warmSessionBackend() {
   void ensureTaodBridge()
     .ensureReady()
@@ -289,6 +298,8 @@ function warmSessionBackend() {
 function disposeSessionBackends() {
   taodBridge?.dispose()
   taodBridge = null
+  taodWorkspaceClient?.dispose()
+  taodWorkspaceClient = null
 }
 
 function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, WorkspaceError> {
@@ -373,6 +384,25 @@ function pickWorkspaceDirectoryRequest(event: IpcMainInvokeEvent): Promise<strin
   })
 }
 
+async function runTaodWorkspaceRequest<A>(
+  event: IpcMainInvokeEvent,
+  run: (client: TaodClient) => Promise<A>,
+): Promise<WorkspaceIpcResponse<A>> {
+  if (event.sender !== mainWindow?.webContents) {
+    return workspaceIpcFailure(
+      new WorkspaceError('unauthorized', 'IPC request came from an unknown sender'),
+    )
+  }
+
+  try {
+    const client = ensureTaodWorkspaceClient()
+    const value = await run(client)
+    return workspaceIpcSuccess(value)
+  } catch (error) {
+    return workspaceIpcFailure(error, 'ipc-failed')
+  }
+}
+
 // ─── IPC Handlers ───
 
 ipcMain.on('renderer:ready', (event) => {
@@ -390,6 +420,64 @@ ipcMain.on('pty:requestPort', (event) => {
 })
 
 ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
+
+ipcMain.handle('workspace:list', (event) =>
+  runTaodWorkspaceRequest<readonly WorkspaceRecord[]>(event, (client) => client.listWorkspaces()),
+)
+
+ipcMain.handle('workspace:add', (event, input: unknown) =>
+  runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) => {
+    const data =
+      typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
+    const rootPath = typeof data.rootPath === 'string' ? data.rootPath : ''
+    const workspaceId = typeof data.workspaceId === 'string' ? data.workspaceId : undefined
+    const name = typeof data.name === 'string' ? data.name : undefined
+    const orderIndex = typeof data.orderIndex === 'number' ? data.orderIndex : undefined
+    return client.addWorkspace({ rootPath, workspaceId, name, orderIndex })
+  }),
+)
+
+ipcMain.handle('workspace:refresh', (event, workspaceId: unknown) =>
+  runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) =>
+    client.refreshWorkspace(typeof workspaceId === 'string' ? workspaceId : ''),
+  ),
+)
+
+ipcMain.handle('worktree:create', (event, input: unknown) =>
+  runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) => {
+    const data =
+      typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
+    const workspaceId = typeof data.workspaceId === 'string' ? data.workspaceId : ''
+    return client.createWorktree({
+      workspaceId,
+      baseBranch: typeof data.baseBranch === 'string' ? data.baseBranch : undefined,
+      targetBranch: typeof data.targetBranch === 'string' ? data.targetBranch : undefined,
+      branch: typeof data.branch === 'string' ? data.branch : undefined,
+      folderName: typeof data.folderName === 'string' ? data.folderName : undefined,
+      startPoint: typeof data.startPoint === 'string' ? data.startPoint : undefined,
+      title: typeof data.title === 'string' ? data.title : undefined,
+    })
+  }),
+)
+
+ipcMain.handle('worktree:refresh', (event, worktreeId: unknown) =>
+  runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) =>
+    client.refreshWorktree(typeof worktreeId === 'string' ? worktreeId : ''),
+  ),
+)
+
+ipcMain.handle('worktree:remove', (event, input: unknown) =>
+  runTaodWorkspaceRequest<void>(event, (client) => {
+    const data =
+      typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
+    const worktreeId = typeof data.worktreeId === 'string' ? data.worktreeId : ''
+    return client.removeWorktree({
+      worktreeId,
+      force: data.force === true,
+      deleteBranch: data.deleteBranch === true,
+    })
+  }),
+)
 
 ipcMain.handle('layout:read', async (event) => {
   if (event.sender !== mainWindow?.webContents) return null

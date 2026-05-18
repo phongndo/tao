@@ -24,8 +24,12 @@ import {
   type WorkspaceGitBranchResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
+  type WorkspaceIpcResponse,
+  type WorkspaceListResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
+  type WorkspaceRecordResponse,
+  type WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
@@ -516,6 +520,8 @@ const electronAPI = {
       type: 'spawn',
       sessionId,
       terminalId: input.terminalId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
       cols: input.cols,
       rows: input.rows,
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
@@ -541,10 +547,14 @@ const electronAPI = {
     const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
+    const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : ''
+    const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
     queuePtyMessage({
       type: 'attach',
       sessionId,
       ...(terminalId.length > 0 ? { terminalId } : {}),
+      ...(workspaceId.length > 0 ? { workspaceId } : {}),
+      ...(worktreeId.length > 0 ? { worktreeId } : {}),
       cols,
       rows,
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
@@ -773,6 +783,53 @@ const electronAPI = {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getPullRequestInfo(workspacePath))
   },
 
+  listWorkspaces(): Promise<WorkspaceListResponse> {
+    return invokeWorkspaceDaemon('workspace:list') as Promise<WorkspaceListResponse>
+  },
+
+  addWorkspace(input: {
+    rootPath: string
+    workspaceId?: string
+    name?: string
+    orderIndex?: number
+  }): Promise<WorkspaceRecordResponse> {
+    return invokeWorkspaceDaemon('workspace:add', input) as Promise<WorkspaceRecordResponse>
+  },
+
+  refreshWorkspace(workspaceId: string): Promise<WorkspaceRecordResponse> {
+    return invokeWorkspaceDaemon(
+      'workspace:refresh',
+      workspaceId,
+    ) as Promise<WorkspaceRecordResponse>
+  },
+
+  createWorktree(input: {
+    workspaceId: string
+    baseBranch?: string
+    targetBranch?: string
+    branch?: string
+    folderName?: string
+    startPoint?: string
+    title?: string
+  }): Promise<WorkspaceWorktreeResponse> {
+    return invokeWorkspaceDaemon('worktree:create', input) as Promise<WorkspaceWorktreeResponse>
+  },
+
+  refreshWorktree(worktreeId: string): Promise<WorkspaceWorktreeResponse> {
+    return invokeWorkspaceDaemon(
+      'worktree:refresh',
+      worktreeId,
+    ) as Promise<WorkspaceWorktreeResponse>
+  },
+
+  removeWorktree(input: {
+    worktreeId: string
+    force?: boolean
+    deleteBranch?: boolean
+  }): Promise<WorkspaceIpcResponse<void>> {
+    return invokeWorkspaceDaemon('worktree:remove', input) as Promise<WorkspaceIpcResponse<void>>
+  },
+
   readLayout(): Promise<PaneLayoutData | null> {
     return ipcRenderer.invoke('layout:read') as Promise<PaneLayoutData | null>
   },
@@ -793,6 +850,12 @@ const electronAPI = {
 function runWorkspaceIpc<T>(program: WorkspaceIpcProgram<T>): Promise<T> {
   return runPreloadEffect(PreloadWorkspaceIpc.use(program)).catch(
     (error) => workspaceIpcFailure(error, 'ipc-failed') as T,
+  )
+}
+
+function invokeWorkspaceDaemon(channel: string, input?: unknown): Promise<unknown> {
+  return (ipcRenderer.invoke(channel, input) as Promise<unknown>).catch((error) =>
+    workspaceIpcFailure(error, 'ipc-failed'),
   )
 }
 
