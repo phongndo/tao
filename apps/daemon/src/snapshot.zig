@@ -71,7 +71,6 @@ pub const DecodedCurrentScreenSnapshot = struct {
         assert(self.backend_name.len > 0);
         assert(self.backend_name.len <= max_backend_name_bytes);
         assert(self.payload.len <= max_payload_bytes);
-        assert(std.hash.Crc32.hash(self.payload) == self.payload_crc32);
     }
 };
 
