@@ -262,6 +262,8 @@ pub fn recordTerminalSessionLocked(self: anytype, item: *const session.TerminalS
     database.recordTerminalSession(.{
         .id = item.id,
         .terminal_id = item.terminal_id,
+        .workspace_id = item.workspace_id,
+        .worktree_id = item.worktree_id,
         .cwd = item.cwd,
         .argv_json = argv_json,
         .status = item.status.text(),

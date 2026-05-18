@@ -22,6 +22,12 @@ extern "c" fn forkpty(
 ) std.c.pid_t;
 
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
+pub const EnvPair = struct {
+    name: []const u8,
+    value: []const u8,
+};
 
 pub const Child = struct {
     pid: std.c.pid_t,
@@ -51,6 +57,7 @@ pub const ExitStatus = struct {
 
 pub const SpawnOptions = struct {
     argv: []const []const u8,
+    env: []const EnvPair = &.{},
     cwd: ?[]const u8 = null,
     cols: u16,
     rows: u16,
@@ -79,12 +86,29 @@ pub const Driver = struct {
         var argv_c = try self.allocator.alloc(?[*:0]const u8, options.argv.len + 1);
         defer self.allocator.free(argv_c);
 
+        var env_name_storage = try self.allocator.alloc([:0]u8, options.env.len);
+        defer {
+            for (env_name_storage) |name| self.allocator.free(name);
+            self.allocator.free(env_name_storage);
+        }
+        var env_value_storage = try self.allocator.alloc([:0]u8, options.env.len);
+        defer {
+            for (env_value_storage) |value| self.allocator.free(value);
+            self.allocator.free(env_value_storage);
+        }
+
         for (options.argv, 0..) |arg, index| {
             if (arg.len == 0) return error.EmptyArgv;
             argv_storage[index] = try self.allocator.dupeZ(u8, arg);
             argv_c[index] = argv_storage[index].ptr;
         }
         argv_c[options.argv.len] = null;
+
+        for (options.env, 0..) |pair, index| {
+            if (pair.name.len == 0) return error.SpawnFailed;
+            env_name_storage[index] = try self.allocator.dupeZ(u8, pair.name);
+            env_value_storage[index] = try self.allocator.dupeZ(u8, pair.value);
+        }
 
         const cwd_z = if (options.cwd) |cwd| try self.allocator.dupeZ(u8, cwd) else null;
         defer if (cwd_z) |cwd| self.allocator.free(cwd);
@@ -103,6 +127,9 @@ pub const Driver = struct {
         if (pid == 0) {
             if (cwd_z) |cwd| {
                 if (std.c.chdir(cwd.ptr) != 0) std.c._exit(125);
+            }
+            for (env_name_storage, env_value_storage) |name, value| {
+                if (setenv(name.ptr, value.ptr, 1) != 0) std.c._exit(126);
             }
             _ = execvp(argv_c[0].?, @ptrCast(argv_c.ptr));
             std.c._exit(127);

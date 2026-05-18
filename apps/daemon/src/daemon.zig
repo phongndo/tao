@@ -6,6 +6,8 @@ const rpc = @import("rpc.zig");
 const session = @import("session.zig");
 const snapshot = @import("snapshot.zig");
 const vt = @import("vt.zig");
+const workspace_mod = @import("workspace.zig");
+const worktree_mod = @import("worktree.zig");
 
 const daemon_config = @import("daemon/config.zig");
 const fd_io = @import("daemon/fd_io.zig");
@@ -43,6 +45,8 @@ test {
     _ = stream_mod;
     _ = agent_index;
     _ = screen;
+    _ = workspace_mod;
+    _ = worktree_mod;
 }
 
 pub const Daemon = struct {
@@ -127,6 +131,50 @@ pub const Daemon = struct {
 
     pub fn handleConfigurePersistenceLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         return control.handleConfigurePersistenceLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceListLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleListLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceAddLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleAddLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceRemoveLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleRemoveLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceRefreshLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleRefreshLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceReorderLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleReorderLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeListLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleListLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeCreateLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleCreateLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeRemoveLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleRemoveLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeAdoptLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleAdoptLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeRefreshLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleRefreshLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeReorderLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleReorderLocked(self, allocator, request);
     }
 
     pub fn restoreSessionFromDatabaseLocked(

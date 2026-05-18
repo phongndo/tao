@@ -32,11 +32,13 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     const created = if (self.sessions.find(session_id)) |existing| blk: {
         existing.transitionTo(.live);
-        try existing.updateCreateMetadata(self.allocator, terminal_id, request.cwd, cols, rows);
+        try existing.updateCreateMetadata(self.allocator, terminal_id, request.requestWorkspaceId(), request.requestWorktreeId(), request.cwd, cols, rows);
         break :blk existing;
     } else try self.sessions.create(.{
         .session_id = session_id,
         .terminal_id = terminal_id,
+        .workspace_id = request.requestWorkspaceId(),
+        .worktree_id = request.requestWorktreeId(),
         .cols = cols,
         .rows = rows,
         .cwd = request.cwd,

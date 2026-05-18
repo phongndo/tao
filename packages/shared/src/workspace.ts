@@ -16,6 +16,47 @@ export const GitStatusSchema = Schema.Struct({
   staged: Schema.Number,
 })
 
+export const WorkspaceWorktreeStateSchema = Schema.Union([
+  Schema.Literal('creating'),
+  Schema.Literal('active'),
+  Schema.Literal('missing'),
+  Schema.Literal('removing'),
+  Schema.Literal('archived'),
+  Schema.Literal('error'),
+  Schema.Literal('untracked'),
+])
+
+export const WorkspaceWorktreeSchema = Schema.Struct({
+  id: Schema.String,
+  workspaceId: Schema.String,
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  folderName: Schema.String,
+  path: Schema.String,
+  branch: Schema.String,
+  baseBranch: Schema.optional(Schema.NullOr(Schema.String)),
+  targetBranch: Schema.optional(Schema.NullOr(Schema.String)),
+  state: WorkspaceWorktreeStateSchema,
+  orderIndex: Schema.Number,
+  lastActiveTabId: Schema.optional(Schema.NullOr(Schema.String)),
+  lastError: Schema.optional(Schema.NullOr(Schema.String)),
+  createdBy: Schema.optional(Schema.String),
+  gitStatus: Schema.optional(Schema.NullOr(GitStatusSchema)),
+})
+
+export const WorkspaceRecordSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  rootPath: Schema.String,
+  gitCommonDir: Schema.optional(Schema.NullOr(Schema.String)),
+  workspaceSlug: Schema.String,
+  defaultBranch: Schema.optional(Schema.NullOr(Schema.String)),
+  branch: Schema.optional(Schema.NullOr(Schema.String)),
+  orderIndex: Schema.Number,
+  lastActiveTabId: Schema.optional(Schema.NullOr(Schema.String)),
+  gitStatus: Schema.optional(Schema.NullOr(GitStatusSchema)),
+  worktrees: Schema.Array(WorkspaceWorktreeSchema),
+})
+
 export const PortInfoSchema = Schema.Struct({
   port: Schema.Number,
   processName: Schema.optional(Schema.String),
@@ -31,6 +72,14 @@ export const PullRequestInfoSchema = Schema.Struct({
 
 export const WorkspaceErrorKindSchema = Schema.Union([
   Schema.Literal('invalid-path'),
+  Schema.Literal('invalid-name'),
+  Schema.Literal('invalid-workspace'),
+  Schema.Literal('invalid-worktree'),
+  Schema.Literal('branch-exists'),
+  Schema.Literal('branch-checked-out'),
+  Schema.Literal('worktree-dirty'),
+  Schema.Literal('git-failed'),
+  Schema.Literal('state-conflict'),
   Schema.Literal('command-failed'),
   Schema.Literal('parse-failed'),
   Schema.Literal('unauthorized'),
@@ -71,10 +120,28 @@ export const WorkspacePullRequestResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
 ])
 
+export const WorkspaceListResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: Schema.Array(WorkspaceRecordSchema) }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+
+export const WorkspaceRecordResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: WorkspaceRecordSchema }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+
+export const WorkspaceWorktreeResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: WorkspaceWorktreeSchema }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+
 export const WorkspacePickDirectoryResponseSchema = Schema.NullOr(WorkspacePathSchema)
 
 export type WorktreeInfo = Schema.Schema.Type<typeof WorktreeInfoSchema>
 export type GitStatus = Schema.Schema.Type<typeof GitStatusSchema>
+export type WorkspaceWorktreeState = Schema.Schema.Type<typeof WorkspaceWorktreeStateSchema>
+export type WorkspaceWorktree = Schema.Schema.Type<typeof WorkspaceWorktreeSchema>
+export type WorkspaceRecord = Schema.Schema.Type<typeof WorkspaceRecordSchema>
 export type PortInfo = Schema.Schema.Type<typeof PortInfoSchema>
 export type PullRequestInfo = Schema.Schema.Type<typeof PullRequestInfoSchema>
 
@@ -89,6 +156,9 @@ export type WorkspacePortsResponse = Schema.Schema.Type<typeof WorkspacePortsRes
 export type WorkspacePullRequestResponse = Schema.Schema.Type<
   typeof WorkspacePullRequestResponseSchema
 >
+export type WorkspaceListResponse = Schema.Schema.Type<typeof WorkspaceListResponseSchema>
+export type WorkspaceRecordResponse = Schema.Schema.Type<typeof WorkspaceRecordResponseSchema>
+export type WorkspaceWorktreeResponse = Schema.Schema.Type<typeof WorkspaceWorktreeResponseSchema>
 export type WorkspacePickDirectoryResponse = Schema.Schema.Type<
   typeof WorkspacePickDirectoryResponseSchema
 >

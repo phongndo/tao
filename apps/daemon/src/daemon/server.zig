@@ -19,6 +19,9 @@ pub fn prepareStorage(self: anytype) !void {
     try std.fs.cwd().makePath(self.config.run_dir);
     try std.fs.cwd().makePath(self.config.sessions_dir);
     try std.fs.cwd().makePath(self.config.adapters_dir);
+    const worktrees_dir = try std.fs.path.join(self.allocator, &.{ self.config.root_dir, "worktrees" });
+    defer self.allocator.free(worktrees_dir);
+    try std.fs.cwd().makePath(worktrees_dir);
     self.reloadPersistencePolicyFromSettingsLocked();
     if (self.database == null) self.database = try db.Database.open(self.allocator, self.config.database_path);
     try self.writePidFile();
@@ -105,6 +108,17 @@ pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request
         .clear_history => self.handleClearHistoryLocked(allocator, request),
         .cleanup => self.handleCleanupLocked(allocator, request),
         .configure_persistence => self.handleConfigurePersistenceLocked(allocator, request),
+        .workspace_list => self.handleWorkspaceListLocked(allocator, request),
+        .workspace_add => self.handleWorkspaceAddLocked(allocator, request),
+        .workspace_remove => self.handleWorkspaceRemoveLocked(allocator, request),
+        .workspace_refresh => self.handleWorkspaceRefreshLocked(allocator, request),
+        .workspace_reorder => self.handleWorkspaceReorderLocked(allocator, request),
+        .worktree_list => self.handleWorktreeListLocked(allocator, request),
+        .worktree_create => self.handleWorktreeCreateLocked(allocator, request),
+        .worktree_remove => self.handleWorktreeRemoveLocked(allocator, request),
+        .worktree_adopt => self.handleWorktreeAdoptLocked(allocator, request),
+        .worktree_refresh => self.handleWorktreeRefreshLocked(allocator, request),
+        .worktree_reorder => self.handleWorktreeReorderLocked(allocator, request),
         .ping => rpc.responseJsonAlloc(allocator, .{
             .id = request.requestId(),
             .ok = true,

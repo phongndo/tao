@@ -25,8 +25,33 @@ pub fn Context(comptime Daemon: type) type {
             }
             if (argv.len == 0) return;
 
+            var env_pairs: std.ArrayList(pty.EnvPair) = .empty;
+            defer env_pairs.deinit(daemon.allocator);
+            var workspace_row: ?@import("../db.zig").WorkspaceRow = null;
+            defer if (workspace_row) |*row| row.deinit(daemon.allocator);
+            var worktree_row: ?@import("../db.zig").WorktreeRow = null;
+            defer if (worktree_row) |*row| row.deinit(daemon.allocator);
+            if (daemon.database) |*database| {
+                if (item.workspace_id) |workspace_id| {
+                    workspace_row = database.findWorkspaceById(daemon.allocator, workspace_id) catch null;
+                }
+                if (item.worktree_id) |worktree_id| {
+                    worktree_row = database.findWorktreeById(daemon.allocator, worktree_id) catch null;
+                }
+            }
+            if (item.workspace_id) |workspace_id| try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKSPACE_ID", .value = workspace_id });
+            if (workspace_row) |row| try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKSPACE_ROOT", .value = row.root_path });
+            if (worktree_row) |row| {
+                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_ID", .value = row.id });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_PATH", .value = row.path });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_BRANCH", .value = row.branch });
+                if (row.base_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAO_BASE_BRANCH", .value = value });
+                if (row.target_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAO_TARGET_BRANCH", .value = value });
+            }
+
             item.pty_child = try daemon.pty_driver.spawn(.{
                 .argv = argv,
+                .env = env_pairs.items,
                 .cwd = item.cwd,
                 .cols = item.cols,
                 .rows = item.rows,

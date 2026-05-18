@@ -92,10 +92,64 @@ pub const migration_003_terminal_search =
     \\);
 ;
 
+pub const migration_004_workspace_worktrees =
+    \\CREATE TABLE workspaces (
+    \\    id TEXT PRIMARY KEY,
+    \\    name TEXT NOT NULL,
+    \\    root_path TEXT NOT NULL UNIQUE,
+    \\    git_common_dir TEXT,
+    \\    workspace_slug TEXT NOT NULL,
+    \\    default_branch TEXT,
+    \\    order_index INTEGER NOT NULL DEFAULT 0,
+    \\    last_active_tab_id TEXT,
+    \\    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    \\    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    \\    archived_at TEXT
+    \\) STRICT;
+    \\CREATE INDEX idx_workspaces_order ON workspaces(order_index);
+    \\CREATE TRIGGER update_workspaces_updated_at
+    \\    AFTER UPDATE ON workspaces
+    \\    BEGIN
+    \\        UPDATE workspaces SET updated_at = datetime('now') WHERE id = NEW.id;
+    \\    END;
+    \\CREATE TABLE worktrees (
+    \\    id TEXT PRIMARY KEY,
+    \\    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    \\    title TEXT,
+    \\    folder_name TEXT NOT NULL,
+    \\    path TEXT NOT NULL UNIQUE,
+    \\    branch TEXT NOT NULL,
+    \\    base_branch TEXT,
+    \\    target_branch TEXT,
+    \\    state TEXT NOT NULL CHECK(state IN (
+    \\        'creating', 'active', 'missing', 'removing', 'archived', 'error'
+    \\    )),
+    \\    order_index INTEGER NOT NULL DEFAULT 0,
+    \\    last_active_tab_id TEXT,
+    \\    last_error TEXT,
+    \\    created_by TEXT NOT NULL DEFAULT 'tao',
+    \\    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    \\    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    \\    archived_at TEXT
+    \\) STRICT;
+    \\CREATE UNIQUE INDEX idx_worktrees_workspace_folder ON worktrees(workspace_id, folder_name);
+    \\CREATE INDEX idx_worktrees_workspace_order ON worktrees(workspace_id, order_index);
+    \\CREATE INDEX idx_worktrees_state ON worktrees(state);
+    \\CREATE INDEX idx_worktrees_branch ON worktrees(workspace_id, branch);
+    \\CREATE TRIGGER update_worktrees_updated_at
+    \\    AFTER UPDATE ON worktrees
+    \\    BEGIN
+    \\        UPDATE worktrees SET updated_at = datetime('now') WHERE id = NEW.id;
+    \\    END;
+    \\ALTER TABLE terminal_sessions ADD COLUMN worktree_id TEXT REFERENCES worktrees(id);
+    \\CREATE INDEX idx_terminal_sessions_worktree ON terminal_sessions(worktree_id);
+;
+
 pub const migrations = [_][]const u8{
     migration_001_terminal_sessions,
     migration_002_agent_sessions,
     migration_003_terminal_search,
+    migration_004_workspace_worktrees,
 };
 
 const create_migrations_table_sql =
@@ -107,14 +161,15 @@ const create_migrations_table_sql =
 
 const upsert_terminal_session_sql =
     \\INSERT INTO terminal_sessions (
-    \\    id, terminal_id, workspace_id, cwd, argv_json, status, daemon_id, pid,
+    \\    id, terminal_id, workspace_id, worktree_id, cwd, argv_json, status, daemon_id, pid,
     \\    cols, rows, title, event_log_path, last_seq,
     \\    snapshot_path, snapshot_seq, snapshot_crc32, snapshot_size,
     \\    started_at, last_activity_at
-    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     \\ON CONFLICT(id) DO UPDATE SET
     \\    terminal_id = excluded.terminal_id,
     \\    workspace_id = excluded.workspace_id,
+    \\    worktree_id = excluded.worktree_id,
     \\    cwd = excluded.cwd,
     \\    argv_json = COALESCE(excluded.argv_json, terminal_sessions.argv_json),
     \\    status = excluded.status,
@@ -222,10 +277,133 @@ const search_terminal_excerpts_sql =
     \\LIMIT ?;
 ;
 
+const insert_workspace_sql =
+    \\INSERT INTO workspaces (
+    \\    id, name, root_path, git_common_dir, workspace_slug, default_branch,
+    \\    order_index, last_active_tab_id
+    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+;
+
+const update_workspace_sql =
+    \\UPDATE workspaces
+    \\SET name = ?, git_common_dir = ?, workspace_slug = ?, default_branch = ?,
+    \\    order_index = ?, last_active_tab_id = ?, archived_at = NULL
+    \\WHERE id = ?;
+;
+
+const archive_workspace_sql =
+    \\UPDATE workspaces SET archived_at = datetime('now') WHERE id = ?;
+;
+
+const find_workspace_by_id_sql =
+    \\SELECT id, name, root_path, git_common_dir, workspace_slug, default_branch,
+    \\       order_index, last_active_tab_id, created_at, updated_at, archived_at
+    \\FROM workspaces WHERE id = ? LIMIT 1;
+;
+
+const find_workspace_by_root_sql =
+    \\SELECT id, name, root_path, git_common_dir, workspace_slug, default_branch,
+    \\       order_index, last_active_tab_id, created_at, updated_at, archived_at
+    \\FROM workspaces WHERE root_path = ? LIMIT 1;
+;
+
+const list_workspaces_sql =
+    \\SELECT id, name, root_path, git_common_dir, workspace_slug, default_branch,
+    \\       order_index, last_active_tab_id, created_at, updated_at, archived_at
+    \\FROM workspaces
+    \\WHERE archived_at IS NULL
+    \\ORDER BY order_index ASC, created_at ASC;
+;
+
+const count_workspaces_sql =
+    \\SELECT COUNT(*) FROM workspaces;
+;
+
+const next_workspace_order_sql =
+    \\SELECT COALESCE(MAX(order_index), -1) + 1 FROM workspaces WHERE archived_at IS NULL;
+;
+
+const reorder_workspace_sql =
+    \\UPDATE workspaces SET order_index = ? WHERE id = ?;
+;
+
+const insert_worktree_sql =
+    \\INSERT INTO worktrees (
+    \\    id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\    target_branch, state, order_index, last_active_tab_id, last_error, created_by
+    \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+;
+
+const update_worktree_state_sql =
+    \\UPDATE worktrees
+    \\SET state = ?, last_error = ?
+    \\WHERE id = ?;
+;
+
+const update_worktree_git_sql =
+    \\UPDATE worktrees
+    \\SET branch = ?, state = ?, last_error = NULL, archived_at = NULL
+    \\WHERE id = ?;
+;
+
+const archive_worktree_sql =
+    \\UPDATE worktrees
+    \\SET state = 'archived', archived_at = datetime('now')
+    \\WHERE id = ?;
+;
+
+const find_worktree_by_id_sql =
+    \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\       target_branch, state, order_index, last_active_tab_id, last_error,
+    \\       created_by, created_at, updated_at, archived_at
+    \\FROM worktrees WHERE id = ? LIMIT 1;
+;
+
+const find_worktree_by_path_sql =
+    \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\       target_branch, state, order_index, last_active_tab_id, last_error,
+    \\       created_by, created_at, updated_at, archived_at
+    \\FROM worktrees WHERE path = ? LIMIT 1;
+;
+
+const list_worktrees_for_workspace_sql =
+    \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\       target_branch, state, order_index, last_active_tab_id, last_error,
+    \\       created_by, created_at, updated_at, archived_at
+    \\FROM worktrees
+    \\WHERE workspace_id = ? AND archived_at IS NULL
+    \\ORDER BY order_index ASC, created_at ASC;
+;
+
+const count_worktrees_sql =
+    \\SELECT COUNT(*) FROM worktrees;
+;
+
+const worktree_path_exists_sql =
+    \\SELECT 1 FROM worktrees WHERE path = ? LIMIT 1;
+;
+
+const worktree_branch_exists_sql =
+    \\SELECT 1 FROM worktrees WHERE workspace_id = ? AND branch = ? AND archived_at IS NULL LIMIT 1;
+;
+
+const worktree_folder_exists_sql =
+    \\SELECT 1 FROM worktrees WHERE workspace_id = ? AND folder_name = ? LIMIT 1;
+;
+
+const next_worktree_order_sql =
+    \\SELECT COALESCE(MAX(order_index), -1) + 1 FROM worktrees WHERE workspace_id = ? AND archived_at IS NULL;
+;
+
+const reorder_worktree_sql =
+    \\UPDATE worktrees SET order_index = ? WHERE id = ?;
+;
+
 pub const TerminalSessionRecord = struct {
     id: []const u8,
     terminal_id: []const u8,
     workspace_id: ?[]const u8 = null,
+    worktree_id: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
     argv_json: ?[]const u8 = null,
     status: []const u8,
@@ -336,6 +514,99 @@ pub const TerminalSearchResult = struct {
     }
 };
 
+pub const WorkspaceRecord = struct {
+    id: []const u8,
+    name: []const u8,
+    root_path: []const u8,
+    git_common_dir: ?[]const u8 = null,
+    workspace_slug: []const u8,
+    default_branch: ?[]const u8 = null,
+    order_index: i64 = 0,
+    last_active_tab_id: ?[]const u8 = null,
+};
+
+pub const WorkspaceRow = struct {
+    id: []u8,
+    name: []u8,
+    root_path: []u8,
+    git_common_dir: ?[]u8,
+    workspace_slug: []u8,
+    default_branch: ?[]u8,
+    order_index: i64,
+    last_active_tab_id: ?[]u8,
+    created_at: []u8,
+    updated_at: []u8,
+    archived_at: ?[]u8,
+
+    pub fn deinit(self: *WorkspaceRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.name);
+        allocator.free(self.root_path);
+        if (self.git_common_dir) |value| allocator.free(value);
+        allocator.free(self.workspace_slug);
+        if (self.default_branch) |value| allocator.free(value);
+        if (self.last_active_tab_id) |value| allocator.free(value);
+        allocator.free(self.created_at);
+        allocator.free(self.updated_at);
+        if (self.archived_at) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
+pub const WorktreeRecord = struct {
+    id: []const u8,
+    workspace_id: []const u8,
+    title: ?[]const u8 = null,
+    folder_name: []const u8,
+    path: []const u8,
+    branch: []const u8,
+    base_branch: ?[]const u8 = null,
+    target_branch: ?[]const u8 = null,
+    state: []const u8,
+    order_index: i64 = 0,
+    last_active_tab_id: ?[]const u8 = null,
+    last_error: ?[]const u8 = null,
+    created_by: []const u8 = "tao",
+};
+
+pub const WorktreeRow = struct {
+    id: []u8,
+    workspace_id: []u8,
+    title: ?[]u8,
+    folder_name: []u8,
+    path: []u8,
+    branch: []u8,
+    base_branch: ?[]u8,
+    target_branch: ?[]u8,
+    state: []u8,
+    order_index: i64,
+    last_active_tab_id: ?[]u8,
+    last_error: ?[]u8,
+    created_by: []u8,
+    created_at: []u8,
+    updated_at: []u8,
+    archived_at: ?[]u8,
+
+    pub fn deinit(self: *WorktreeRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.workspace_id);
+        if (self.title) |value| allocator.free(value);
+        allocator.free(self.folder_name);
+        allocator.free(self.path);
+        allocator.free(self.branch);
+        if (self.base_branch) |value| allocator.free(value);
+        if (self.target_branch) |value| allocator.free(value);
+        allocator.free(self.state);
+        if (self.last_active_tab_id) |value| allocator.free(value);
+        if (self.last_error) |value| allocator.free(value);
+        allocator.free(self.created_by);
+        allocator.free(self.created_at);
+        allocator.free(self.updated_at);
+        if (self.archived_at) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
 pub const Database = struct {
     allocator: std.mem.Allocator,
     handle: sqlite.Db,
@@ -428,6 +699,7 @@ pub const Database = struct {
             record.id,
             record.terminal_id,
             record.workspace_id,
+            record.worktree_id,
             record.cwd,
             record.argv_json,
             record.status,
@@ -586,8 +858,193 @@ pub const Database = struct {
         return results.toOwnedSlice(allocator);
     }
 
+    pub fn insertWorkspace(self: *Database, record: WorkspaceRecord) !void {
+        var stmt = try self.handle.prepareDynamic(insert_workspace_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{
+            record.id,
+            record.name,
+            record.root_path,
+            record.git_common_dir,
+            record.workspace_slug,
+            record.default_branch,
+            record.order_index,
+            record.last_active_tab_id,
+        });
+    }
+
+    pub fn updateWorkspace(self: *Database, record: WorkspaceRecord) !void {
+        var stmt = try self.handle.prepareDynamic(update_workspace_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{
+            record.name,
+            record.git_common_dir,
+            record.workspace_slug,
+            record.default_branch,
+            record.order_index,
+            record.last_active_tab_id,
+            record.id,
+        });
+    }
+
+    pub fn archiveWorkspace(self: *Database, workspace_id: []const u8) !void {
+        var stmt = try self.handle.prepareDynamic(archive_workspace_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{workspace_id});
+    }
+
+    pub fn findWorkspaceById(self: *Database, allocator: std.mem.Allocator, workspace_id: []const u8) !?WorkspaceRow {
+        var stmt = try self.handle.prepareDynamic(find_workspace_by_id_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorkspaceRow, allocator, .{}, .{workspace_id});
+    }
+
+    pub fn findWorkspaceByRoot(self: *Database, allocator: std.mem.Allocator, root_path: []const u8) !?WorkspaceRow {
+        var stmt = try self.handle.prepareDynamic(find_workspace_by_root_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorkspaceRow, allocator, .{}, .{root_path});
+    }
+
+    pub fn listWorkspaces(self: *Database, allocator: std.mem.Allocator) ![]WorkspaceRow {
+        var stmt = try self.handle.prepareDynamic(list_workspaces_sql);
+        defer stmt.deinit();
+        var iter = try stmt.iteratorAlloc(WorkspaceRow, allocator, .{});
+
+        var rows: std.ArrayList(WorkspaceRow) = .empty;
+        errdefer {
+            for (rows.items) |*row| row.deinit(allocator);
+            rows.deinit(allocator);
+        }
+
+        while (try iter.nextAlloc(allocator, .{})) |row_value| {
+            var row = row_value;
+            errdefer row.deinit(allocator);
+            try rows.append(allocator, row);
+        }
+
+        return rows.toOwnedSlice(allocator);
+    }
+
+    pub fn nextWorkspaceOrder(self: *Database) !i64 {
+        return (try self.handle.one(i64, next_workspace_order_sql, .{}, .{})) orelse error.SqliteUnexpectedNull;
+    }
+
+    pub fn reorderWorkspace(self: *Database, workspace_id: []const u8, order_index: i64) !void {
+        var stmt = try self.handle.prepareDynamic(reorder_workspace_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{ order_index, workspace_id });
+    }
+
+    pub fn insertWorktree(self: *Database, record: WorktreeRecord) !void {
+        var stmt = try self.handle.prepareDynamic(insert_worktree_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{
+            record.id,
+            record.workspace_id,
+            record.title,
+            record.folder_name,
+            record.path,
+            record.branch,
+            record.base_branch,
+            record.target_branch,
+            record.state,
+            record.order_index,
+            record.last_active_tab_id,
+            record.last_error,
+            record.created_by,
+        });
+    }
+
+    pub fn updateWorktreeState(self: *Database, worktree_id: []const u8, state: []const u8, last_error: ?[]const u8) !void {
+        var stmt = try self.handle.prepareDynamic(update_worktree_state_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{ state, last_error, worktree_id });
+    }
+
+    pub fn updateWorktreeGit(self: *Database, worktree_id: []const u8, branch: []const u8, state: []const u8) !void {
+        var stmt = try self.handle.prepareDynamic(update_worktree_git_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{ branch, state, worktree_id });
+    }
+
+    pub fn archiveWorktree(self: *Database, worktree_id: []const u8) !void {
+        var stmt = try self.handle.prepareDynamic(archive_worktree_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{worktree_id});
+    }
+
+    pub fn findWorktreeById(self: *Database, allocator: std.mem.Allocator, worktree_id: []const u8) !?WorktreeRow {
+        var stmt = try self.handle.prepareDynamic(find_worktree_by_id_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorktreeRow, allocator, .{}, .{worktree_id});
+    }
+
+    pub fn findWorktreeByPath(self: *Database, allocator: std.mem.Allocator, path: []const u8) !?WorktreeRow {
+        var stmt = try self.handle.prepareDynamic(find_worktree_by_path_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorktreeRow, allocator, .{}, .{path});
+    }
+
+    pub fn listWorktreesForWorkspace(self: *Database, allocator: std.mem.Allocator, workspace_id: []const u8) ![]WorktreeRow {
+        var stmt = try self.handle.prepareDynamic(list_worktrees_for_workspace_sql);
+        defer stmt.deinit();
+        var iter = try stmt.iteratorAlloc(WorktreeRow, allocator, .{workspace_id});
+
+        var rows: std.ArrayList(WorktreeRow) = .empty;
+        errdefer {
+            for (rows.items) |*row| row.deinit(allocator);
+            rows.deinit(allocator);
+        }
+
+        while (try iter.nextAlloc(allocator, .{})) |row_value| {
+            var row = row_value;
+            errdefer row.deinit(allocator);
+            try rows.append(allocator, row);
+        }
+
+        return rows.toOwnedSlice(allocator);
+    }
+
+    pub fn nextWorktreeOrder(self: *Database, workspace_id: []const u8) !i64 {
+        var stmt = try self.handle.prepareDynamic(next_worktree_order_sql);
+        defer stmt.deinit();
+        return (try stmt.one(i64, .{}, .{workspace_id})) orelse error.SqliteUnexpectedNull;
+    }
+
+    pub fn reorderWorktree(self: *Database, worktree_id: []const u8, order_index: i64) !void {
+        var stmt = try self.handle.prepareDynamic(reorder_worktree_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{ order_index, worktree_id });
+    }
+
+    pub fn worktreePathExists(self: *Database, path: []const u8) !bool {
+        var stmt = try self.handle.prepareDynamic(worktree_path_exists_sql);
+        defer stmt.deinit();
+        return (try stmt.one(u8, .{}, .{path})) != null;
+    }
+
+    pub fn worktreeBranchExists(self: *Database, workspace_id: []const u8, branch: []const u8) !bool {
+        var stmt = try self.handle.prepareDynamic(worktree_branch_exists_sql);
+        defer stmt.deinit();
+        return (try stmt.one(u8, .{}, .{ workspace_id, branch })) != null;
+    }
+
+    pub fn worktreeFolderExists(self: *Database, workspace_id: []const u8, folder_name: []const u8) !bool {
+        var stmt = try self.handle.prepareDynamic(worktree_folder_exists_sql);
+        defer stmt.deinit();
+        return (try stmt.one(u8, .{}, .{ workspace_id, folder_name })) != null;
+    }
+
     pub fn countTerminalSessions(self: *Database) !u64 {
         return (try self.handle.one(u64, "SELECT COUNT(*) FROM terminal_sessions;", .{}, .{})) orelse error.SqliteUnexpectedNull;
+    }
+
+    pub fn countWorkspaces(self: *Database) !u64 {
+        return (try self.handle.one(u64, count_workspaces_sql, .{}, .{})) orelse error.SqliteUnexpectedNull;
+    }
+
+    pub fn countWorktrees(self: *Database) !u64 {
+        return (try self.handle.one(u64, count_worktrees_sql, .{}, .{})) orelse error.SqliteUnexpectedNull;
     }
 
     pub fn countTerminalSessionsByStatus(self: *Database, status: []const u8) !u64 {
@@ -622,7 +1079,7 @@ pub const Database = struct {
 };
 
 test "sqlite migrations are registered in order" {
-    try std.testing.expectEqual(@as(usize, 3), migrations.len);
+    try std.testing.expectEqual(@as(usize, 4), migrations.len);
     try std.testing.expect(std.mem.indexOf(u8, migrations[0], "terminal_sessions") != null);
 }
 
@@ -735,4 +1192,55 @@ test "sqlite database records agent resume metadata and FTS excerpts" {
 
     try database.clearTerminalHistoryMetadata("session-agent");
     try std.testing.expectEqual(@as(u64, 0), try database.countSearchRows());
+}
+
+test "sqlite database records workspaces and worktrees" {
+    var database = try Database.openInMemory(std.testing.allocator);
+    defer database.deinit();
+
+    try database.insertWorkspace(.{
+        .id = "workspace-1",
+        .name = "tao",
+        .root_path = "/repo/tao",
+        .git_common_dir = "/repo/tao/.git",
+        .workspace_slug = "tao",
+        .default_branch = "main",
+        .order_index = 0,
+    });
+    try std.testing.expectEqual(@as(u64, 1), try database.countWorkspaces());
+
+    var workspace = (try database.findWorkspaceById(std.testing.allocator, "workspace-1")).?;
+    defer workspace.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("/repo/tao", workspace.root_path);
+
+    try database.insertWorktree(.{
+        .id = "worktree-1",
+        .workspace_id = "workspace-1",
+        .title = "New worktree",
+        .folder_name = "luminous-galileo-a13f",
+        .path = "/tmp/luminous-galileo-a13f",
+        .branch = "luminous-galileo-a13f",
+        .base_branch = "main",
+        .target_branch = "main",
+        .state = "creating",
+        .order_index = 0,
+    });
+    try database.updateWorktreeGit("worktree-1", "renamed", "active");
+    try std.testing.expectEqual(@as(u64, 1), try database.countWorktrees());
+    try std.testing.expect(try database.worktreePathExists("/tmp/luminous-galileo-a13f"));
+    try std.testing.expect(try database.worktreeBranchExists("workspace-1", "renamed"));
+
+    const worktrees = try database.listWorktreesForWorkspace(std.testing.allocator, "workspace-1");
+    defer {
+        for (worktrees) |*row| row.deinit(std.testing.allocator);
+        std.testing.allocator.free(worktrees);
+    }
+    try std.testing.expectEqual(@as(usize, 1), worktrees.len);
+    try std.testing.expectEqualStrings("active", worktrees[0].state);
+    try std.testing.expectEqualStrings("renamed", worktrees[0].branch);
+
+    try database.archiveWorktree("worktree-1");
+    const remaining = try database.listWorktreesForWorkspace(std.testing.allocator, "workspace-1");
+    defer std.testing.allocator.free(remaining);
+    try std.testing.expectEqual(@as(usize, 0), remaining.len);
 }
