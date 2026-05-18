@@ -31,6 +31,7 @@ import { disposeMainRuntime, runMainEffect } from './runtime'
 import { defaultSettings, readSettings, writeSettings } from './settings-store'
 import { TaodPtyBridge } from './taod-pty-bridge'
 import { TaodClient } from './taod-client'
+import { GitStateWatcher } from './git-state-watcher'
 import { WorkspaceService } from './workspace-service'
 import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
 import {
@@ -120,6 +121,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 let mainWindow: BrowserWindow | null = null
 let taodBridge: TaodPtyBridge | null = null
 let taodWorkspaceClient: TaodClient | null = null
+let gitStateWatcher: GitStateWatcher | null = null
 
 // ─── Window Creation ───
 
@@ -287,6 +289,14 @@ function ensureTaodWorkspaceClient(): TaodClient {
   return taodWorkspaceClient
 }
 
+function ensureGitStateWatcher(): GitStateWatcher {
+  gitStateWatcher ??= new GitStateWatcher(ensureTaodWorkspaceClient, (workspace) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send('workspace:changed', workspace)
+  })
+  return gitStateWatcher
+}
+
 function warmSessionBackend() {
   void ensureTaodBridge()
     .ensureReady()
@@ -296,6 +306,8 @@ function warmSessionBackend() {
 }
 
 function disposeSessionBackends() {
+  gitStateWatcher?.dispose()
+  gitStateWatcher = null
   taodBridge?.dispose()
   taodBridge = null
   taodWorkspaceClient?.dispose()
@@ -421,12 +433,16 @@ ipcMain.on('pty:requestPort', (event) => {
 
 ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
 
-ipcMain.handle('workspace:list', (event) =>
-  runTaodWorkspaceRequest<readonly WorkspaceRecord[]>(event, (client) => client.listWorkspaces()),
-)
+ipcMain.handle('workspace:list', async (event) => {
+  const response = await runTaodWorkspaceRequest<readonly WorkspaceRecord[]>(event, (client) =>
+    client.listWorkspaces(),
+  )
+  if (response.ok) ensureGitStateWatcher().syncWorkspaces(response.value)
+  return response
+})
 
-ipcMain.handle('workspace:add', (event, input: unknown) =>
-  runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) => {
+ipcMain.handle('workspace:add', async (event, input: unknown) => {
+  const response = await runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) => {
     const data =
       typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
     const rootPath = typeof data.rootPath === 'string' ? data.rootPath : ''
@@ -434,20 +450,23 @@ ipcMain.handle('workspace:add', (event, input: unknown) =>
     const name = typeof data.name === 'string' ? data.name : undefined
     const orderIndex = typeof data.orderIndex === 'number' ? data.orderIndex : undefined
     return client.addWorkspace({ rootPath, workspaceId, name, orderIndex })
-  }),
-)
+  })
+  if (response.ok) ensureGitStateWatcher().trackWorkspace(response.value)
+  return response
+})
 
-ipcMain.handle('workspace:refresh', (event, workspaceId: unknown) =>
-  runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) =>
+ipcMain.handle('workspace:refresh', async (event, workspaceId: unknown) => {
+  const response = await runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) =>
     client.refreshWorkspace(typeof workspaceId === 'string' ? workspaceId : ''),
-  ),
-)
+  )
+  if (response.ok) ensureGitStateWatcher().trackWorkspace(response.value)
+  return response
+})
 
-ipcMain.handle('worktree:create', (event, input: unknown) =>
-  runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) => {
-    const data =
-      typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
-    const workspaceId = typeof data.workspaceId === 'string' ? data.workspaceId : ''
+ipcMain.handle('worktree:create', async (event, input: unknown) => {
+  const data = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
+  const workspaceId = typeof data.workspaceId === 'string' ? data.workspaceId : ''
+  const response = await runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) => {
     return client.createWorktree({
       workspaceId,
       baseBranch: typeof data.baseBranch === 'string' ? data.baseBranch : undefined,
@@ -457,8 +476,10 @@ ipcMain.handle('worktree:create', (event, input: unknown) =>
       startPoint: typeof data.startPoint === 'string' ? data.startPoint : undefined,
       title: typeof data.title === 'string' ? data.title : undefined,
     })
-  }),
-)
+  })
+  if (response.ok) ensureGitStateWatcher().refreshWorkspaceSoon(workspaceId)
+  return response
+})
 
 ipcMain.handle('worktree:refresh', (event, worktreeId: unknown) =>
   runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) =>
@@ -466,18 +487,27 @@ ipcMain.handle('worktree:refresh', (event, worktreeId: unknown) =>
   ),
 )
 
-ipcMain.handle('worktree:remove', (event, input: unknown) =>
-  runTaodWorkspaceRequest<void>(event, (client) => {
+ipcMain.handle('worktree:remove', async (event, input: unknown) => {
+  let workspaceId: string | undefined
+  const response = await runTaodWorkspaceRequest<void>(event, async (client) => {
     const data =
       typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
     const worktreeId = typeof data.worktreeId === 'string' ? data.worktreeId : ''
+    try {
+      const worktree = await client.refreshWorktree(worktreeId)
+      workspaceId = worktree.workspaceId
+    } catch {
+      // The worktree may already be missing; removal below is still authoritative.
+    }
     return client.removeWorktree({
       worktreeId,
       force: data.force === true,
       deleteBranch: data.deleteBranch === true,
     })
-  }),
-)
+  })
+  if (response.ok && workspaceId) ensureGitStateWatcher().refreshWorkspaceSoon(workspaceId)
+  return response
+})
 
 ipcMain.handle('layout:read', async (event) => {
   if (event.sender !== mainWindow?.webContents) return null

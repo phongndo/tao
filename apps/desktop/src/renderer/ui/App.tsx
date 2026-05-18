@@ -35,6 +35,8 @@ import {
   type Workspace,
   worktreeContextId,
 } from '../state/store'
+import { runRendererEffect } from '../runtime'
+import { WorkspaceMetadataCache } from '../workspace-service'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 import type { WorkspaceRecord } from '@tao/shared/workspace'
@@ -1190,6 +1192,17 @@ export function App() {
       cancelled = true
     }
   }, [layoutLoaded, upsertWorkspace])
+
+  useEffect(() => {
+    return window.electronAPI.onWorkspaceChanged((workspace) => {
+      upsertWorkspace(workspaceFromRecord(workspace))
+      void runRendererEffect(
+        WorkspaceMetadataCache.use((cache) => cache.invalidateWorkspace(workspace.rootPath)),
+      ).catch((error) => {
+        console.warn('[workspace] Failed to invalidate Git metadata cache:', error)
+      })
+    })
+  }, [upsertWorkspace])
 
   useEffect(() => {
     if (!layoutLoaded) return

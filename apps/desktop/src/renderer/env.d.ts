@@ -23,6 +23,7 @@ import type {
   WorkspaceListResponse,
   WorkspacePortsResponse,
   WorkspacePullRequestResponse,
+  WorkspaceRecord,
   WorkspaceRecordResponse,
   WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
@@ -63,6 +64,7 @@ export interface ElectronAPI {
   ): () => void
   signalReady(): Promise<void>
   onAppCommand(callback: (command: AppCommand) => void): () => void
+  onWorkspaceChanged(callback: (workspace: WorkspaceRecord) => void): () => void
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse>

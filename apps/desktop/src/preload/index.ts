@@ -18,6 +18,7 @@ import type {
 import {
   WorkspaceError,
   WorkspacePickDirectoryResponseSchema,
+  WorkspaceRecordSchema,
   decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
   workspaceErrorFromUnknown,
@@ -28,6 +29,7 @@ import {
   type WorkspaceListResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
+  type WorkspaceRecord,
   type WorkspaceRecordResponse,
   type WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
@@ -43,6 +45,7 @@ type AgentStatusCallback = (status: AgentStatus) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
+type WorkspaceChangedCallback = (workspace: WorkspaceRecord) => void
 type WorkspaceIpcProgram<T> = (
   workspaceIpc: typeof PreloadWorkspaceIpc.Service,
 ) => Effect.Effect<T, WorkspaceError>
@@ -756,6 +759,17 @@ const electronAPI = {
     ipcRenderer.on('app:command', listener)
     return () => {
       ipcRenderer.removeListener('app:command', listener)
+    }
+  },
+
+  onWorkspaceChanged(callback: WorkspaceChangedCallback): () => void {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const decoded = Schema.decodeUnknownOption(WorkspaceRecordSchema)(payload)
+      if (decoded._tag === 'Some') callback(decoded.value)
+    }
+    ipcRenderer.on('workspace:changed', listener)
+    return () => {
+      ipcRenderer.removeListener('workspace:changed', listener)
     }
   },
 
