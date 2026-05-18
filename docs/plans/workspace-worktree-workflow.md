@@ -36,7 +36,7 @@ worktrees, session cwd/env metadata, and filesystem/Git lifecycle operations.
 - The Git branch is allowed to change later; the user or AI agent can rename it after the task is
   known.
 - The display title/task name is separate from both the folder and branch.
-- Default branch namespace is `work/<generated-folder-name>` for the first slice.
+- Default generated branch name is the generated folder name with no namespace prefix.
 - No automatic `git fetch`, branch deletion, force removal, or destructive cleanup as hidden side
   effects.
 - Renderer/UI worktree code should use plain TypeScript/Promises; Effect can remain an internal
@@ -245,8 +245,8 @@ turing
 Collision handling:
 
 1. Generate `<adjective>-<name>-<hex4>`.
-2. Validate folder and branch names against an allowlist: lowercase letters, numbers, and `-` for the
-   folder; Git-safe `work/<folder>` for the generated branch.
+2. Validate folder and generated branch names against an allowlist: lowercase letters, numbers, and
+   `-`.
 3. Check the filesystem path, SQLite path/branch records, and Git refs.
 4. Retry with a new random suffix on collision.
 5. After several collisions, use a longer suffix.
@@ -254,14 +254,14 @@ Collision handling:
 Default branch name mirrors the folder without a Tao prefix:
 
 ```text
-work/<generated-folder-name>
+<generated-folder-name>
 ```
 
 Example:
 
 ```text
 folder: luminous-galileo-a13f
-branch: work/luminous-galileo-a13f
+branch: luminous-galileo-a13f
 ```
 
 If the user provides a branch name, Tao should still auto-generate a safe folder name unless the user
@@ -298,13 +298,13 @@ Why Tao should create the branch by default:
 - The user gets an instant terminal/agent and can decide the task name later.
 
 Git has a convenience mode where `git worktree add <path>` can infer a branch from the basename of the
-path. Tao should avoid relying on that because our folder names are generated implementation details
-and we want branch names under an explicit namespace like `work/<folder-name>`.
+path. Tao should avoid relying on that inference and pass the generated branch name explicitly, even
+though the default generated branch name matches the folder.
 
 Supported creation modes:
 
 ```text
-auto branch, auto folder       default: branch = work/<generated-folder>
+auto branch, auto folder       default: branch = <generated-folder>
 manual branch, auto folder     user supplies branch; Tao generates folder
 existing branch, auto folder   advanced: checkout an existing branch if not checked out elsewhere
 detached worktree              advanced/later: no branch, agent/user may create one manually
@@ -349,11 +349,11 @@ Suggested naming lifecycle:
 
 ```text
 initial folder:  luminous-galileo-a13f
-initial branch:  work/luminous-galileo-a13f
+initial branch:  luminous-galileo-a13f
 initial title:   luminous-galileo-a13f or "New worktree"
 
 after prompt:    "fix login redirect loop"
-branch renamed:  work/fix-login-redirect-loop
+branch renamed:  fix-login-redirect-loop
 title updated:   Fix login redirect loop
 folder remains:  luminous-galileo-a13f
 ```
@@ -482,7 +482,7 @@ Recommended list shape:
           "title": "New worktree",
           "folder_name": "luminous-galileo-a13f",
           "path": "/Users/dp/.tao/worktrees/tao/luminous-galileo-a13f",
-          "branch": "work/luminous-galileo-a13f",
+          "branch": "luminous-galileo-a13f",
           "state": "active",
           "git_status": { "changed": 2, "staged": 0 }
         }
@@ -517,7 +517,7 @@ Creation semantics:
 - `target_branch` is metadata for future review/merge intent and should default to `base_branch`.
 - `start_point`, if supplied, overrides the Git start point while leaving `base_branch` as user intent
   metadata.
-- `branch = null` means generate `work/<folder_name>`.
+- `branch = null` means generate `<folder_name>`.
 - User-provided branches should fail if already checked out elsewhere unless an explicit
   `checkout_existing` option is added later.
 
@@ -530,7 +530,7 @@ Creation output:
   "title": "New worktree",
   "folder_name": "luminous-galileo-a13f",
   "path": "/Users/dp/.tao/worktrees/tao/luminous-galileo-a13f",
-  "branch": "work/luminous-galileo-a13f",
+  "branch": "luminous-galileo-a13f",
   "base_branch": "main",
   "target_branch": "main",
   "state": "active"
@@ -660,9 +660,9 @@ Sidebar should group worktrees under their workspace:
 ```text
 tao
   main                         main
-  luminous-galileo-a13f        work/luminous-galileo-a13f
-  orbital-copernicus-82bd      work/orbital-copernicus-82bd
-  logical-aristotle-09ce       work/logical-aristotle-09ce
+  luminous-galileo-a13f        luminous-galileo-a13f
+  orbital-copernicus-82bd      orbital-copernicus-82bd
+  logical-aristotle-09ce       logical-aristotle-09ce
 ```
 
 Primary control:
@@ -830,7 +830,7 @@ TypeScript guideline:
 
 - Adding a Git repository creates one workspace in SQLite.
 - Pressing **New Worktree** creates a worktree under `~/.tao/worktrees/<workspace>/<name>`.
-- The new branch defaults to `work/<name>`.
+- The new branch defaults to `<name>`.
 - The sidebar immediately selects the new worktree and opens a terminal or selected AI CLI there.
 - Restarting Tao preserves workspaces, worktrees, and session associations.
 - Removing a clean Tao-managed worktree deletes only the worktree path and archives its worktree row.
@@ -841,7 +841,7 @@ TypeScript guideline:
 
 ## Deferred decisions after the first slice
 
-- Whether branch namespace should become user-configurable beyond the first-slice default `work/`.
+- Whether a generated-branch namespace should be added later.
 - Whether `git fetch` should be offered as an explicit create option or background action.
 - Whether non-Git directories should become daemon workspaces or remain layout-only entries.
 - Whether force-removal belongs in the first visible UI or only in an advanced/command-palette flow.

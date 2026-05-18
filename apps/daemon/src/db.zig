@@ -197,14 +197,16 @@ const update_terminal_ended_sql =
 ;
 
 const find_terminal_by_id_sql =
-    \\SELECT id, terminal_id, cwd, argv_json, status, cols, rows, event_log_path, last_seq
+    \\SELECT id, terminal_id, workspace_id, worktree_id, cwd, argv_json, status,
+    \\       cols, rows, event_log_path, last_seq
     \\FROM terminal_sessions
     \\WHERE id = ?
     \\LIMIT 1;
 ;
 
 const find_terminal_by_terminal_id_sql =
-    \\SELECT id, terminal_id, cwd, argv_json, status, cols, rows, event_log_path, last_seq
+    \\SELECT id, terminal_id, workspace_id, worktree_id, cwd, argv_json, status,
+    \\       cols, rows, event_log_path, last_seq
     \\FROM terminal_sessions
     \\WHERE terminal_id = ?
     \\ORDER BY updated_at DESC
@@ -433,6 +435,8 @@ pub const TerminalEndedRecord = struct {
 pub const TerminalSessionLookup = struct {
     id: []u8,
     terminal_id: []u8,
+    workspace_id: ?[]u8,
+    worktree_id: ?[]u8,
     cwd: ?[]u8,
     argv_json: ?[]u8,
     status: []u8,
@@ -444,6 +448,8 @@ pub const TerminalSessionLookup = struct {
     pub fn deinit(self: *TerminalSessionLookup, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.terminal_id);
+        if (self.workspace_id) |value| allocator.free(value);
+        if (self.worktree_id) |value| allocator.free(value);
         if (self.cwd) |value| allocator.free(value);
         if (self.argv_json) |value| allocator.free(value);
         allocator.free(self.status);

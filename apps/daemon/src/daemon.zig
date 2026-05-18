@@ -189,13 +189,15 @@ pub const Daemon = struct {
         self: *Daemon,
         session_id: []const u8,
         terminal_id: []const u8,
+        workspace_id: ?[]const u8,
+        worktree_id: ?[]const u8,
         cwd: ?[]const u8,
         cols: u16,
         rows: u16,
         argv_json: []const u8,
         agent_status: []const u8,
     ) !?*session.TerminalSession {
-        return persistence.restoreSessionWithArgvJsonLocked(self, session_id, terminal_id, cwd, cols, rows, argv_json, agent_status);
+        return persistence.restoreSessionWithArgvJsonLocked(self, session_id, terminal_id, workspace_id, worktree_id, cwd, cols, rows, argv_json, agent_status);
     }
 
     pub fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
@@ -564,9 +566,32 @@ test "daemon falls back to saved command when agent resume metadata is corrupt" 
     try daemon.prepareStorage();
 
     if (daemon.database) |*database| {
+        try database.insertWorkspace(.{
+            .id = "workspace-resume",
+            .name = "resume",
+            .root_path = home,
+            .git_common_dir = null,
+            .workspace_slug = "resume",
+            .default_branch = null,
+            .order_index = 0,
+        });
+        try database.insertWorktree(.{
+            .id = "worktree-resume",
+            .workspace_id = "workspace-resume",
+            .title = "Resume worktree",
+            .folder_name = "resume-worktree-a13f",
+            .path = home,
+            .branch = "resume-worktree-a13f",
+            .base_branch = "main",
+            .target_branch = "main",
+            .state = "active",
+            .order_index = 0,
+        });
         try database.recordTerminalSession(.{
             .id = "resume-session",
             .terminal_id = "resume-terminal",
+            .workspace_id = "workspace-resume",
+            .worktree_id = "worktree-resume",
             .argv_json = "[\"/bin/sh\",\"-c\",\"sleep 2\"]",
             .status = "exited",
             .cols = 80,
@@ -591,7 +616,9 @@ test "daemon falls back to saved command when agent resume metadata is corrupt" 
 
     try std.testing.expect(std.mem.indexOf(u8, attached, "\"ok\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, attached, "\"attach_kind\":\"command-resume\"") != null);
-    try std.testing.expect(daemon.sessions.find("resume-session") != null);
+    const restored = daemon.sessions.find("resume-session").?;
+    try std.testing.expectEqualStrings("workspace-resume", restored.workspace_id.?);
+    try std.testing.expectEqualStrings("worktree-resume", restored.worktree_id.?);
 
     const killed = try daemon.handleControlPayload(std.testing.allocator,
         \\{"id":"kill","type":"kill","sessionId":"resume-session"}

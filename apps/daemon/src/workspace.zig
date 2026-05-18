@@ -325,13 +325,13 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
     for (known_rows) |known| {
         if (findGitWorktree(self.allocator, entries, known.path)) |entry| {
             if (entry.prunable or !pathExists(known.path)) {
-                try database.archiveWorktree(known.id);
+                try database.updateWorktreeState(known.id, "missing", null);
                 continue;
             }
             const branch = entry.branch orelse if (entry.detached) "detached" else known.branch;
             try database.updateWorktreeGit(known.id, branch, "active");
         } else if (!pathExists(known.path)) {
-            try database.archiveWorktree(known.id);
+            try database.updateWorktreeState(known.id, "missing", null);
         } else {
             try database.updateWorktreeState(known.id, "missing", null);
         }
