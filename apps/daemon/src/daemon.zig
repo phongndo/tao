@@ -487,15 +487,16 @@ test "daemon drops failed stream subscribers without blocking pending output" {
         try daemon.broadcastStreamFrameLocked(item, .output, 1, "live output");
     }
     try std.testing.expectEqual(@as(usize, 0), item.subscribers.items.len);
-    try std.testing.expectEqual(@as(usize, 0), item.pending_output.items.len);
+    try std.testing.expectEqual(@as(usize, 1), item.pending_output.items.len);
+    try std.testing.expectEqualStrings("live output", item.pending_output.items[0].payload);
 
     {
         daemon.lock();
         defer daemon.unlock();
         try daemon.broadcastStreamFrameLocked(item, .output, 2, "detached output");
     }
-    try std.testing.expectEqual(@as(usize, 1), item.pending_output.items.len);
-    try std.testing.expectEqualStrings("detached output", item.pending_output.items[0].payload);
+    try std.testing.expectEqual(@as(usize, 2), item.pending_output.items.len);
+    try std.testing.expectEqualStrings("detached output", item.pending_output.items[1].payload);
 }
 
 test "daemon falls back to saved command when agent resume metadata is corrupt" {

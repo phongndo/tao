@@ -100,23 +100,28 @@ pub fn Context(comptime Daemon: type) type {
                 std.log.warn("failed to send current-screen snapshot for {s}: {t}", .{ session_id, err });
                 return false;
             };
-            self.flushPendingOutputToSubscriber(session_id, socket_fd) catch |err| {
-                std.log.warn("failed to flush pending output for {s}: {t}", .{ session_id, err });
-                return false;
-            };
-            setNonBlockingFd(socket_fd) catch |err| {
-                std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ session_id, err });
-                return false;
-            };
 
-            daemon.lock();
-            defer daemon.unlock();
-            const item = daemon.sessions.find(session_id) orelse return false;
-            item.assertInvariants();
-            if (!isLiveAttachable(item)) return false;
-            if (!try daemon.sessions.addSubscriber(session_id, socket_fd)) return false;
-            item.assertInvariants();
-            return true;
+            while (true) {
+                self.flushPendingOutputToSubscriber(session_id, socket_fd) catch |err| {
+                    std.log.warn("failed to flush pending output for {s}: {t}", .{ session_id, err });
+                    return false;
+                };
+
+                daemon.lock();
+                defer daemon.unlock();
+                const item = daemon.sessions.find(session_id) orelse return false;
+                item.assertInvariants();
+                if (!isLiveAttachable(item)) return false;
+                if (item.pending_output.items.len != 0) continue;
+
+                setNonBlockingFd(socket_fd) catch |err| {
+                    std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ session_id, err });
+                    return false;
+                };
+                if (!try daemon.sessions.addSubscriber(session_id, socket_fd)) return false;
+                item.assertInvariants();
+                return true;
+            }
         }
 
         pub fn removeSubscriber(self: Self, session_id: []const u8, socket_fd: std.c.fd_t) bool {
@@ -230,6 +235,12 @@ pub fn Context(comptime Daemon: type) type {
                 writeAllFdNonBlocking(fd, encoded) catch |err| {
                     std.log.warn("dropping slow taod subscriber for {s}: {t}", .{ item.id, err });
                     self.removeSubscriberAtLocked(item, index);
+                    if (item.subscribers.items.len == 0) {
+                        if (kind == .output) item.bufferPendingOutput(daemon.allocator, seq, payload) catch |buffer_err| {
+                            std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, buffer_err });
+                        };
+                        return;
+                    }
                     continue;
                 };
                 index += 1;
@@ -244,18 +255,20 @@ pub fn Context(comptime Daemon: type) type {
 
             const daemon = self.daemon;
             for (item.pending_output.items) |frame| {
-                const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
-                var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
-                var heap_buffer: ?[]u8 = null;
-                defer if (heap_buffer) |buffer| daemon.allocator.free(buffer);
-                const buffer = if (encoded_len <= stack_buffer.len)
-                    stack_buffer[0..encoded_len]
-                else blk: {
-                    heap_buffer = try daemon.allocator.alloc(u8, encoded_len);
-                    break :blk heap_buffer.?;
-                };
-                const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
-                try writeAllFd(socket_fd, encoded);
+                {
+                    const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
+                    var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
+                    var heap_buffer: ?[]u8 = null;
+                    defer if (heap_buffer) |buffer| daemon.allocator.free(buffer);
+                    const buffer = if (encoded_len <= stack_buffer.len)
+                        stack_buffer[0..encoded_len]
+                    else blk: {
+                        heap_buffer = try daemon.allocator.alloc(u8, encoded_len);
+                        break :blk heap_buffer.?;
+                    };
+                    const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
+                    try writeAllFd(socket_fd, encoded);
+                }
             }
 
             item.clearPendingOutput(daemon.allocator);
@@ -290,19 +303,21 @@ pub fn Context(comptime Daemon: type) type {
                 errdefer out.deinit(daemon.allocator);
                 var last_flushed_seq: u64 = 0;
                 for (item.pending_output.items) |frame| {
-                    const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
-                    var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
-                    var heap_buffer: ?[]u8 = null;
-                    defer if (heap_buffer) |buffer| daemon.allocator.free(buffer);
-                    const buffer = if (encoded_len <= stack_buffer.len)
-                        stack_buffer[0..encoded_len]
-                    else blk: {
-                        heap_buffer = try daemon.allocator.alloc(u8, encoded_len);
-                        break :blk heap_buffer.?;
-                    };
-                    const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
-                    try out.appendSlice(daemon.allocator, encoded);
-                    last_flushed_seq = frame.seq;
+                    {
+                        const encoded_len = rpc.encodedStreamFrameSize(frame.payload.len);
+                        var stack_buffer: [stack_stream_frame_bytes]u8 = undefined;
+                        var heap_buffer: ?[]u8 = null;
+                        defer if (heap_buffer) |buffer| daemon.allocator.free(buffer);
+                        const buffer = if (encoded_len <= stack_buffer.len)
+                            stack_buffer[0..encoded_len]
+                        else blk: {
+                            heap_buffer = try daemon.allocator.alloc(u8, encoded_len);
+                            break :blk heap_buffer.?;
+                        };
+                        const encoded = try rpc.encodeStreamFrame(buffer, .output, item.id, frame.seq, frame.payload);
+                        try out.appendSlice(daemon.allocator, encoded);
+                        last_flushed_seq = frame.seq;
+                    }
                 }
                 break :frames .{ .data = try out.toOwnedSlice(daemon.allocator), .last_seq = last_flushed_seq };
             };
