@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const assert = std.debug.assert;
+
 pub const PtyError = error{
     InvalidSize,
     EmptyArgv,
@@ -27,7 +29,14 @@ pub const Child = struct {
     cols: u16,
     rows: u16,
 
+    pub fn assertInvariants(self: *const Child) void {
+        assert(self.cols > 0);
+        assert(self.rows > 0);
+        assert(self.pid >= 0);
+    }
+
     pub fn close(self: *Child) void {
+        self.assertInvariants();
         if (self.master_fd >= 0) {
             _ = std.c.close(self.master_fd);
             self.master_fd = -1;
@@ -99,16 +108,20 @@ pub const Driver = struct {
             std.c._exit(127);
         }
 
-        return .{
+        const child: Child = .{
             .pid = pid,
             .master_fd = master_fd,
             .cols = options.cols,
             .rows = options.rows,
         };
+        child.assertInvariants();
+        return child;
     }
 
     pub fn resize(_: *Driver, child: *Child, cols: u16, rows: u16) PtyError!void {
+        child.assertInvariants();
         try validateSize(cols, rows);
+        if (child.master_fd < 0) return error.ResizeFailed;
 
         var winsize: std.c.winsize = .{
             .row = rows,
@@ -120,9 +133,13 @@ pub const Driver = struct {
 
         child.cols = cols;
         child.rows = rows;
+        child.assertInvariants();
     }
 
     pub fn writeAll(_: *Driver, child: *Child, data: []const u8) PtyError!void {
+        child.assertInvariants();
+        if (child.master_fd < 0) return error.WriteFailed;
+
         var offset: usize = 0;
         while (offset < data.len) {
             const written = std.c.write(child.master_fd, data[offset..].ptr, data.len - offset);
@@ -138,6 +155,10 @@ pub const Driver = struct {
     }
 
     pub fn read(_: *Driver, child: *Child, buffer: []u8) PtyError!usize {
+        child.assertInvariants();
+        if (child.master_fd < 0) return error.ReadFailed;
+        if (buffer.len == 0) return 0;
+
         while (true) {
             const amount = std.c.read(child.master_fd, buffer.ptr, buffer.len);
             if (amount < 0) {
@@ -151,11 +172,13 @@ pub const Driver = struct {
     }
 
     pub fn terminate(_: *Driver, child: *Child) PtyError!void {
+        child.assertInvariants();
         defer child.close();
         if (child.pid > 0 and std.c.kill(child.pid, std.c.SIG.TERM) != 0) return error.KillFailed;
     }
 
     pub fn tryWait(_: *Driver, child: *Child) PtyError!?ExitStatus {
+        child.assertInvariants();
         if (child.pid <= 0) return null;
 
         var status: c_int = 0;

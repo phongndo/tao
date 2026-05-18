@@ -60,6 +60,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
 
+  zig-hardened:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - run: zig build test:fmt
+        working-directory: apps/daemon
+      - run: zig build test:compile -Dfuzz=true
+        working-directory: apps/daemon
+
   check-windows:
     runs-on: windows-latest
     defaults:

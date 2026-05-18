@@ -24,6 +24,8 @@
     "zig:lint": "pnpm --filter @tao/daemon lint",
     "zig:fmt": "pnpm --filter @tao/daemon fmt",
     "zig:fmt:check": "pnpm --filter @tao/daemon fmt:check",
+    "zig:hardened:compile": "pnpm --filter @tao/daemon hardened:compile",
+    "zig:hardened:fmt": "pnpm --filter @tao/daemon hardened:fmt",
     "zig:lsp": "pnpm --filter @tao/daemon lsp",
     "zig:check": "pnpm zig:lint && pnpm zig:fmt:check && pnpm zig:test",
     "zig:leak-check": "pnpm --filter @tao/daemon leak-check",

@@ -7,6 +7,7 @@ const vt = @import("../vt.zig");
 
 const fd_io = @import("fd_io.zig");
 const types = @import("types.zig");
+const util = @import("util.zig");
 
 const CurrentScreenCheckpoint = types.CurrentScreenCheckpoint;
 
@@ -114,7 +115,7 @@ pub fn sendCurrentScreenSnapshotToSubscriber(self: anytype, session_id: []const 
         defer self.unlock();
 
         const item = self.sessions.find(session_id) orelse return error.SessionNotFound;
-        if (!self.sessions.hasSubscriber(session_id, socket_fd)) return error.SessionNotAttached;
+        if (!util.isLiveAttachable(item)) return error.SessionNotAttached;
         const snapshot_payload = (try item.currentScreenSnapshotAlloc(self.allocator)) orelse break :frame null;
         defer self.allocator.free(snapshot_payload);
 

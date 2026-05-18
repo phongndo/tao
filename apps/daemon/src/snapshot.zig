@@ -1,11 +1,40 @@
 const std = @import("std");
+const limits = @import("limits.zig");
+
+const assert = std.debug.assert;
 
 pub const file_name = "current-screen.state";
 pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x53, 0x4e, 0x50, 0x01, 0x00 }; // TAOSNP\1\0
 pub const file_version: u16 = 1;
 pub const file_header_size: usize = 34;
-pub const max_backend_name_bytes: usize = 128;
-pub const max_payload_bytes: usize = 16 * 1024 * 1024;
+pub const max_backend_name_bytes: usize = limits.snapshot_backend_name_bytes_max;
+pub const max_payload_bytes: usize = limits.snapshot_payload_bytes_max;
+
+/// Current-screen snapshot layout:
+/// 8-byte magic, version, cols/rows, backend-name length, reserved bytes,
+/// sequence, payload length, payload CRC32, backend name, then backend payload.
+/// Snapshots are best-effort hydration hints; corrupt snapshots are rejected and
+/// the session can still continue from its event log or live PTY stream.
+pub const SnapshotCodecError = error{
+    InvalidSnapshot,
+    InvalidSnapshotPath,
+    UnsupportedSnapshotVersion,
+    SnapshotTooLarge,
+    FileOpenFailed,
+    FileStatFailed,
+    FileTooBig,
+    FileReadFailed,
+    FileWriteFailed,
+    FileDeleteFailed,
+    OutOfMemory,
+};
+
+comptime {
+    assert(file_magic.len == 8);
+    assert(file_header_size == 34);
+    assert(max_backend_name_bytes > 0);
+    assert(max_payload_bytes > 0);
+}
 
 pub const Metadata = struct {
     seq: u64,
@@ -30,17 +59,28 @@ pub const DecodedCurrentScreenSnapshot = struct {
     payload_crc32: u32,
 
     pub fn deinit(self: *DecodedCurrentScreenSnapshot, allocator: std.mem.Allocator) void {
+        self.assertInvariants();
         allocator.free(self.backend_name);
         allocator.free(self.payload);
         self.* = undefined;
     }
+
+    pub fn assertInvariants(self: *const DecodedCurrentScreenSnapshot) void {
+        assert(self.cols > 0);
+        assert(self.rows > 0);
+        assert(self.backend_name.len > 0);
+        assert(self.backend_name.len <= max_backend_name_bytes);
+        assert(self.payload.len <= max_payload_bytes);
+    }
 };
 
 pub fn metadata(seq: u64, bytes: []const u8) Metadata {
+    assert(bytes.len <= file_header_size + max_backend_name_bytes + max_payload_bytes);
     return .{ .seq = seq, .crc32 = std.hash.Crc32.hash(bytes), .size = bytes.len };
 }
 
 pub fn pathAlloc(allocator: std.mem.Allocator, session_dir: []const u8) ![]u8 {
+    if (session_dir.len == 0) return error.InvalidSnapshotPath;
     return std.fs.path.join(allocator, &.{ session_dir, file_name });
 }
 
@@ -66,6 +106,8 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, input: CurrentScreenSnapshot) !
     @memcpy(out[backend_start..payload_start], input.backend_name);
     @memcpy(out[payload_start..total_len], input.payload);
 
+    assert(total_len == file_header_size + input.backend_name.len + input.payload.len);
+
     return out;
 }
 
@@ -86,6 +128,8 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, bytes: []const u8) !DecodedCurr
     if (cols == 0 or rows == 0) return error.InvalidSnapshot;
     if (backend_len == 0 or backend_len > max_backend_name_bytes) return error.InvalidSnapshot;
     if (payload_len > max_payload_bytes) return error.SnapshotTooLarge;
+    if (backend_len > bytes.len - file_header_size) return error.InvalidSnapshot;
+    if (payload_len > bytes.len - file_header_size - backend_len) return error.InvalidSnapshot;
     if (bytes.len != file_header_size + backend_len + payload_len) return error.InvalidSnapshot;
 
     const backend_start = file_header_size;
@@ -98,7 +142,7 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, bytes: []const u8) !DecodedCurr
     const owned_payload = try allocator.dupe(u8, payload);
     errdefer allocator.free(owned_payload);
 
-    return .{
+    const decoded: DecodedCurrentScreenSnapshot = .{
         .seq = seq,
         .cols = cols,
         .rows = rows,
@@ -106,6 +150,8 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, bytes: []const u8) !DecodedCurr
         .payload = owned_payload,
         .payload_crc32 = payload_crc32,
     };
+    decoded.assertInvariants();
+    return decoded;
 }
 
 pub fn writeCurrentScreenPath(
@@ -251,6 +297,28 @@ test "current-screen snapshot rejects corrupt payload CRC" {
 
     encoded[encoded.len - 1] ^= 0xff;
     try std.testing.expectError(error.InvalidSnapshot, decodeAlloc(std.testing.allocator, encoded));
+}
+
+test "current-screen snapshot deterministic malformed-input sweep" {
+    var prng = std.Random.DefaultPrng.init(0x54414f5f534e4150);
+    const random = prng.random();
+
+    var buffer: [256]u8 = undefined;
+    var case_index: usize = 0;
+    while (case_index < 256) : (case_index += 1) {
+        const len = random.uintLessThan(usize, buffer.len + 1);
+        random.bytes(buffer[0..len]);
+
+        var decoded = decodeAlloc(std.testing.allocator, buffer[0..len]) catch |err| switch (err) {
+            error.InvalidSnapshot,
+            error.UnsupportedSnapshotVersion,
+            error.SnapshotTooLarge,
+            => continue,
+            else => return err,
+        };
+        defer decoded.deinit(std.testing.allocator);
+        decoded.assertInvariants();
+    }
 }
 
 test "current-screen snapshot file store reads and deletes state" {
