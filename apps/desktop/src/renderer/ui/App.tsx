@@ -135,12 +135,10 @@ function borderLineClassName(isActive: boolean): string {
 function getTwoPaneBorderLines(
   layout: MosaicNode<string>,
   activePaneId: string,
-  bounds: PaneBounds = { left: 0, top: 0, right: 100, bottom: 100 },
-  keyPrefix = 'root',
 ): ActivePaneBorderLine[] {
   if (typeof layout === 'string') return []
 
-  const split = (layout.splitPercentage ?? 50) / 100
+  const splitPercentage = layout.splitPercentage ?? 50
   const firstIsActive = layoutContainsPane(layout.first, activePaneId)
   const secondIsActive = layoutContainsPane(layout.second, activePaneId)
   if (!firstIsActive && !secondIsActive) return []
@@ -151,61 +149,47 @@ function getTwoPaneBorderLines(
   // to the bottom pane. That makes two-pane layouts directional instead of
   // showing the same full active divider for either focused pane.
   if (layout.direction === 'row') {
-    const splitX = bounds.left + (bounds.right - bounds.left) * split
-    const midY = bounds.top + (bounds.bottom - bounds.top) / 2
-    const firstBounds = { ...bounds, right: splitX }
-    const secondBounds = { ...bounds, left: splitX }
-
     return [
       {
-        key: `${keyPrefix}-first`,
+        key: 'root-first',
         className: `${borderLineClassName(firstIsActive)} active-pane-border-line-vertical`,
         style: {
-          top: `${bounds.top}%`,
-          left: `${splitX}%`,
-          height: `${midY - bounds.top}%`,
+          top: '0%',
+          left: `${splitPercentage}%`,
+          height: '50%',
         },
       },
       {
-        key: `${keyPrefix}-second`,
+        key: 'root-second',
         className: `${borderLineClassName(secondIsActive)} active-pane-border-line-vertical`,
         style: {
-          top: `${midY}%`,
-          left: `${splitX}%`,
-          height: `${bounds.bottom - midY}%`,
+          top: '50%',
+          left: `${splitPercentage}%`,
+          height: '50%',
         },
       },
-      ...getTwoPaneBorderLines(layout.first, activePaneId, firstBounds, `${keyPrefix}-a`),
-      ...getTwoPaneBorderLines(layout.second, activePaneId, secondBounds, `${keyPrefix}-b`),
     ]
   }
 
-  const splitY = bounds.top + (bounds.bottom - bounds.top) * split
-  const midX = bounds.left + (bounds.right - bounds.left) / 2
-  const firstBounds = { ...bounds, bottom: splitY }
-  const secondBounds = { ...bounds, top: splitY }
-
   return [
     {
-      key: `${keyPrefix}-first`,
+      key: 'root-first',
       className: `${borderLineClassName(firstIsActive)} active-pane-border-line-horizontal`,
       style: {
-        top: `${splitY}%`,
-        left: `${bounds.left}%`,
-        width: `${midX - bounds.left}%`,
+        top: `${splitPercentage}%`,
+        left: '0%',
+        width: '50%',
       },
     },
     {
-      key: `${keyPrefix}-second`,
+      key: 'root-second',
       className: `${borderLineClassName(secondIsActive)} active-pane-border-line-horizontal`,
       style: {
-        top: `${splitY}%`,
-        left: `${midX}%`,
-        width: `${bounds.right - midX}%`,
+        top: `${splitPercentage}%`,
+        left: '50%',
+        width: '50%',
       },
     },
-    ...getTwoPaneBorderLines(layout.first, activePaneId, firstBounds, `${keyPrefix}-a`),
-    ...getTwoPaneBorderLines(layout.second, activePaneId, secondBounds, `${keyPrefix}-b`),
   ]
 }
 
