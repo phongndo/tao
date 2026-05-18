@@ -829,7 +829,7 @@ TypeScript guideline:
 ## Acceptance criteria for the first shippable slice
 
 - Adding a Git repository creates one workspace in SQLite.
-- Pressing **New Worktree** creates a worktree under `~/.tao/worktrees/<slug>/<name>`.
+- Pressing **New Worktree** creates a worktree under `~/.tao/worktrees/<workspace>/<name>`.
 - The new branch defaults to `work/<name>`.
 - The sidebar immediately selects the new worktree and opens a terminal or selected AI CLI there.
 - Restarting Tao preserves workspaces, worktrees, and session associations.
