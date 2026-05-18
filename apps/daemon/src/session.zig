@@ -57,7 +57,7 @@ pub const Status = enum {
         if (self == next) return true;
         return switch (self) {
             .live => next == .detached or next == .exited or next == .crashed or next == .killed,
-            .detached => next == .live or next == .archived or next == .killed,
+            .detached => next == .live or next == .exited or next == .crashed or next == .archived or next == .killed,
             .exited => next == .live or next == .archived or next == .killed,
             .crashed => next == .live or next == .archived or next == .killed,
             .archived => next == .live or next == .killed,
@@ -368,8 +368,9 @@ pub const Manager = struct {
             if (existing == fd) return true;
         }
         if (item.subscribers.items.len >= subscribers_per_session_max) return error.TooManySubscribers;
+        try item.subscribers.ensureUnusedCapacity(self.allocator, 1);
         if (item.status == .detached) item.transitionTo(.live);
-        try item.subscribers.append(self.allocator, fd);
+        item.subscribers.appendAssumeCapacity(fd);
         item.assertInvariants();
         return true;
     }
@@ -456,6 +457,8 @@ test "terminal session lifecycle transition table is explicit" {
         .{ .from = .live, .to = .crashed },
         .{ .from = .live, .to = .killed },
         .{ .from = .detached, .to = .live },
+        .{ .from = .detached, .to = .exited },
+        .{ .from = .detached, .to = .crashed },
         .{ .from = .detached, .to = .archived },
         .{ .from = .detached, .to = .killed },
         .{ .from = .exited, .to = .live },

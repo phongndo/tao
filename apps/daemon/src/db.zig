@@ -484,7 +484,9 @@ pub const Database = struct {
             refs.deinit(allocator);
         }
 
-        while (try iter.nextAlloc(allocator, .{})) |row| {
+        while (try iter.nextAlloc(allocator, .{})) |row_value| {
+            var row = row_value;
+            errdefer row.deinit(allocator);
             if (refs.items.len >= event_log_refs_max) return error.TooManyEventLogRefs;
             try refs.append(allocator, row);
         }
@@ -574,7 +576,9 @@ pub const Database = struct {
             results.deinit(allocator);
         }
 
-        while (try iter.nextAlloc(allocator, .{})) |row| {
+        while (try iter.nextAlloc(allocator, .{})) |row_value| {
+            var row = row_value;
+            errdefer row.deinit(allocator);
             if (results.items.len >= search_results_max) return error.TooManySearchResults;
             try results.append(allocator, row);
         }

@@ -762,7 +762,7 @@ test "event log rejects corrupt CRC payloads without treating tails as valid" {
     try std.testing.expectEqual(@as(usize, 0), result.valid_bytes);
 }
 
-test "event log append commits sequence only after durable append succeeds" {
+test "event log durable append failure does not advance sequence" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 
@@ -774,9 +774,10 @@ test "event log append commits sequence only after durable append succeeds" {
     defer std.testing.allocator.free(missing_path);
 
     var last_seq: u64 = 0;
+    const seq = try nextSequence(&last_seq);
     try std.testing.expectError(
         error.FileOpenFailed,
-        appendOutput(std.testing.allocator, missing_path, null, &last_seq, "not-written"),
+        appendFramePathDurable(std.testing.allocator, missing_path, .output, seq, "not-written"),
     );
     try std.testing.expectEqual(@as(u64, 0), last_seq);
 }
