@@ -594,7 +594,6 @@ body {
   --pane-divider: #28282c;
   --pane-divider-hover: #4a4a50;
   --pane-divider-active: #aca1cf;
-  --pane-divider-active-glow: rgb(172 161 207 / 24%);
 
   min-height: 0;
   flex: 1 1 auto;
@@ -743,18 +742,24 @@ body {
 .active-pane-border-line {
   position: absolute;
   display: block;
+}
+
+.active-pane-border-line-active {
   background: var(--pane-divider-active);
-  box-shadow: 0 0 8px var(--pane-divider-active-glow);
+}
+
+.active-pane-border-line-inactive {
+  background: var(--pane-divider);
 }
 
 .active-pane-border-line-vertical {
-  width: 2px;
-  transform: translateX(-1px);
+  width: 1px;
+  transform: translateX(-0.5px);
 }
 
 .active-pane-border-line-horizontal {
-  height: 2px;
-  transform: translateY(-1px);
+  height: 1px;
+  transform: translateY(-0.5px);
 }
 
 .pane-tile-archived::after {

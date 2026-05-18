@@ -74,25 +74,38 @@ function clearLegacyLocalStorageLayout(): void {
 // React 19's JSX constructor check. Keep the runtime component and narrow only the JSX type.
 const MosaicView = Mosaic as unknown as ComponentType<MosaicProps<string>>
 
-type PaneRect = {
-  id: string
-  left: number
-  top: number
-  right: number
-  bottom: number
-}
-
 type ActivePaneBorderLine = {
   key: string
   className: string
   style: CSSProperties
 }
 
+type PaneBounds = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+type PaneRect = PaneBounds & {
+  id: string
+}
+
 const PANE_BORDER_EPSILON = 0.0001
+
+function layoutContainsPane(layout: MosaicNode<string>, paneId: string): boolean {
+  if (typeof layout === 'string') return layout === paneId
+  return layoutContainsPane(layout.first, paneId) || layoutContainsPane(layout.second, paneId)
+}
+
+function getPaneCount(layout: MosaicNode<string>): number {
+  if (typeof layout === 'string') return 1
+  return getPaneCount(layout.first) + getPaneCount(layout.second)
+}
 
 function getPaneRects(
   layout: MosaicNode<string>,
-  bounds: Omit<PaneRect, 'id'> = { left: 0, top: 0, right: 100, bottom: 100 },
+  bounds: PaneBounds = { left: 0, top: 0, right: 100, bottom: 100 },
 ): PaneRect[] {
   if (typeof layout === 'string') return [{ id: layout, ...bounds }]
 
@@ -112,12 +125,78 @@ function getPaneRects(
   ]
 }
 
-function getActivePaneBorderLines(
-  layout: MosaicNode<string> | null,
-  activePaneId: string | null,
-): ActivePaneBorderLine[] {
-  if (!layout || !activePaneId) return []
+function borderLineClassName(isActive: boolean): string {
+  return [
+    'active-pane-border-line',
+    isActive ? 'active-pane-border-line-active' : 'active-pane-border-line-inactive',
+  ].join(' ')
+}
 
+function getTwoPaneBorderLines(
+  layout: MosaicNode<string>,
+  activePaneId: string,
+): ActivePaneBorderLine[] {
+  if (typeof layout === 'string') return []
+
+  const splitPercentage = layout.splitPercentage ?? 50
+  const firstIsActive = layoutContainsPane(layout.first, activePaneId)
+  const secondIsActive = layoutContainsPane(layout.second, activePaneId)
+  if (!firstIsActive && !secondIsActive) return []
+
+  // Tmux-style split ownership: for a side-by-side split, the top half of the
+  // shared border belongs to the left pane and the bottom half to the right pane.
+  // For a stacked split, the left half belongs to the top pane and the right half
+  // to the bottom pane. That makes two-pane layouts directional instead of
+  // showing the same full active divider for either focused pane.
+  if (layout.direction === 'row') {
+    return [
+      {
+        key: 'root-first',
+        className: `${borderLineClassName(firstIsActive)} active-pane-border-line-vertical`,
+        style: {
+          top: '0%',
+          left: `${splitPercentage}%`,
+          height: '50%',
+        },
+      },
+      {
+        key: 'root-second',
+        className: `${borderLineClassName(secondIsActive)} active-pane-border-line-vertical`,
+        style: {
+          top: '50%',
+          left: `${splitPercentage}%`,
+          height: '50%',
+        },
+      },
+    ]
+  }
+
+  return [
+    {
+      key: 'root-first',
+      className: `${borderLineClassName(firstIsActive)} active-pane-border-line-horizontal`,
+      style: {
+        top: `${splitPercentage}%`,
+        left: '0%',
+        width: '50%',
+      },
+    },
+    {
+      key: 'root-second',
+      className: `${borderLineClassName(secondIsActive)} active-pane-border-line-horizontal`,
+      style: {
+        top: `${splitPercentage}%`,
+        left: '50%',
+        width: '50%',
+      },
+    },
+  ]
+}
+
+function getMultiPaneBorderLines(
+  layout: MosaicNode<string>,
+  activePaneId: string,
+): ActivePaneBorderLine[] {
   const rect = getPaneRects(layout).find((candidate) => candidate.id === activePaneId)
   if (!rect) return []
 
@@ -126,11 +205,12 @@ function getActivePaneBorderLines(
   const left = `${rect.left}%`
   const width = `${rect.right - rect.left}%`
   const height = `${rect.bottom - rect.top}%`
+  const className = borderLineClassName(true)
 
   if (rect.left > PANE_BORDER_EPSILON) {
     lines.push({
       key: 'left',
-      className: 'active-pane-border-line active-pane-border-line-vertical',
+      className: `${className} active-pane-border-line-vertical`,
       style: { top, left, height },
     })
   }
@@ -138,7 +218,7 @@ function getActivePaneBorderLines(
   if (rect.right < 100 - PANE_BORDER_EPSILON) {
     lines.push({
       key: 'right',
-      className: 'active-pane-border-line active-pane-border-line-vertical',
+      className: `${className} active-pane-border-line-vertical`,
       style: { top, left: `${rect.right}%`, height },
     })
   }
@@ -146,7 +226,7 @@ function getActivePaneBorderLines(
   if (rect.top > PANE_BORDER_EPSILON) {
     lines.push({
       key: 'top',
-      className: 'active-pane-border-line active-pane-border-line-horizontal',
+      className: `${className} active-pane-border-line-horizontal`,
       style: { top, left, width },
     })
   }
@@ -154,12 +234,22 @@ function getActivePaneBorderLines(
   if (rect.bottom < 100 - PANE_BORDER_EPSILON) {
     lines.push({
       key: 'bottom',
-      className: 'active-pane-border-line active-pane-border-line-horizontal',
+      className: `${className} active-pane-border-line-horizontal`,
       style: { top: `${rect.bottom}%`, left, width },
     })
   }
 
   return lines
+}
+
+function getActivePaneBorderLines(
+  layout: MosaicNode<string> | null,
+  activePaneId: string | null,
+): ActivePaneBorderLine[] {
+  if (!layout || !activePaneId) return []
+  return getPaneCount(layout) === 2
+    ? getTwoPaneBorderLines(layout, activePaneId)
+    : getMultiPaneBorderLines(layout, activePaneId)
 }
 
 function workspaceNameFromPath(projectPath: string): string {
