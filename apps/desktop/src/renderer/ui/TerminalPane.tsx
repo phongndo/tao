@@ -33,10 +33,7 @@ function resumeNoticeFromAttach(result: AttachSessionResult): ResumeNotice | nul
   }
 
   if (result.attachMode === 'command-resume') {
-    return {
-      label: 'Command relaunched',
-      detail: 'The previous live process was gone, so Tao restarted the saved command.',
-    }
+    return null
   }
 
   return null

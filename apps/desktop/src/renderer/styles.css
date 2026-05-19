@@ -1010,6 +1010,10 @@ body {
   height: 100%;
 }
 
+.terminal-surface .xterm-viewport {
+  background-color: #151515;
+}
+
 .terminal-surface .xterm-screen,
 .terminal-surface .xterm-helpers {
   outline: none;
