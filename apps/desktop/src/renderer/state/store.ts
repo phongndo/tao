@@ -928,7 +928,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
       const tabs = state.tabs.filter((tab) => !removedContextIds.has(tab.workspaceId))
       const panes = state.panes.filter((pane) => !removedTabIds.has(pane.tabId))
       const activeWorkspaceId =
-        state.activeWorkspaceId === workspaceId
+        state.activeWorkspaceId !== null && removedContextIds.has(state.activeWorkspaceId)
           ? (workspaces.find(({ order }) => order === 0)?.id ?? null)
           : state.activeWorkspaceId
 
