@@ -99,9 +99,12 @@ function ensureGhosttyWasm(): string {
   )
     .trim()
     .split('\n')
+    .filter((line) => line.endsWith('.tgz'))
     .at(-1)
 
-  if (!tarball) throw new Error(`Failed to pack ghostty-web@${GHOSTTY_WEB_VERSION}`)
+  if (!tarball) {
+    throw new Error(`npm pack did not produce a .tgz file for ghostty-web@${GHOSTTY_WEB_VERSION}`)
+  }
 
   fs.rmSync(packageDir, { recursive: true, force: true })
   fs.mkdirSync(path.dirname(packageDir), { recursive: true })
@@ -112,6 +115,8 @@ function ensureGhosttyWasm(): string {
   if (!fs.existsSync(cachedWasm)) {
     throw new Error(`ghostty-web package did not contain ${cachedWasm}`)
   }
+
+  fs.rmSync(path.join(cacheRoot, tarball), { force: true })
 
   return cachedWasm
 }
