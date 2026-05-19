@@ -3,7 +3,6 @@ import {
   FiChevronRight,
   FiArchive,
   FiFolderPlus,
-  FiGitBranch,
   FiMenu,
   FiPlus,
   FiTerminal,
@@ -42,11 +41,7 @@ import { TerminalPane } from './TerminalPane'
 import type { WorkspaceRecord } from '@tao/shared/workspace'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
-const SIDEBAR_COLLAPSED_WIDTH = 48
 const SIDEBAR_EXPANDED_MIN_WIDTH = 220
-const SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD = 156
-const SIDEBAR_COMPACT_THRESHOLD = 64
-const SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD = 148
 const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tao-tab'
@@ -284,9 +279,7 @@ function workspaceFromRecord(record: WorkspaceRecord): Workspace {
 }
 
 function normalizeSidebarWidth(nextWidth: number): number {
-  return nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
-    ? SIDEBAR_COLLAPSED_WIDTH
-    : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
 }
 
 function getDropPlacement(
@@ -466,13 +459,8 @@ function WorkspaceItem({
             title={`Local checkout — ${branchLabel}`}
             onClick={() => selectWorkspace(workspace.id)}
           >
-            <span className="worktree-state worktree-state-active" />
             <span className="worktree-details">
               <span className="worktree-title">{branchLabel}</span>
-              <span className="worktree-branch-pill">
-                <FiGitBranch size={11} />
-                <span>local checkout</span>
-              </span>
             </span>
           </button>
           {(workspace.worktrees ?? []).map((worktree) => {
@@ -490,13 +478,8 @@ function WorkspaceItem({
                   title={`${title} — ${worktree.branch}`}
                   onClick={() => selectWorktree(worktree.id)}
                 >
-                  <span className={`worktree-state worktree-state-${worktree.state}`} />
                   <span className="worktree-details">
                     <span className="worktree-title">{title}</span>
-                    <span className="worktree-branch-pill">
-                      <FiGitBranch size={11} />
-                      <span>{worktree.branch}</span>
-                    </span>
                   </span>
                 </button>
                 <button
@@ -607,7 +590,7 @@ function ResizeShell({
       // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="separator"
       aria-orientation="vertical"
-      aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
+      aria-valuemin={SIDEBAR_EXPANDED_MIN_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
       aria-valuenow={displayWidth}
       aria-label="Resize sidebar"
@@ -633,16 +616,12 @@ function ResizeShell({
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
-          onResize(
-            displayWidth <= SIDEBAR_COMPACT_THRESHOLD
-              ? SIDEBAR_EXPANDED_MIN_WIDTH
-              : normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP),
-          )
+          onResize(normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP))
           return
         }
         if (event.key === 'Home') {
           event.preventDefault()
-          onResize(SIDEBAR_COLLAPSED_WIDTH)
+          onResize(SIDEBAR_EXPANDED_MIN_WIDTH)
           return
         }
         if (event.key === 'End') {
@@ -659,15 +638,7 @@ function ResizeShell({
     />
   )
 
-  const className = [
-    'tao-sidebar',
-    displayWidth <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
-    displayWidth <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD
-      ? 'tao-sidebar-header-actions-hidden'
-      : null,
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const className = ['tao-sidebar'].filter(Boolean).join(' ')
 
   return (
     <aside className={className} style={{ width: displayWidth }} aria-label="Workspaces">
@@ -1057,6 +1028,7 @@ export function App() {
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
+  const removeWorktree = useTaoStore((state) => state.removeWorktree)
   const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
@@ -1064,12 +1036,8 @@ export function App() {
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
   const sidebarSize = useMemo(
     () =>
-      Math.min(
-        SIDEBAR_MAX_WIDTH,
-        Math.max(
-          SIDEBAR_COLLAPSED_WIDTH,
-          sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_COLLAPSED_WIDTH,
-        ),
+      normalizeSidebarWidth(
+        sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_DEFAULT_WIDTH,
       ),
     [sidebarWidth],
   )
@@ -1132,6 +1100,28 @@ export function App() {
   const previousPaneSessionsRef = useRef(
     new Map(panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id])),
   )
+  const applyWorkspaceRecord = useCallback(
+    (record: WorkspaceRecord) => {
+      const nextWorkspace = workspaceFromRecord(record)
+      const previousWorkspace = useTaoStore
+        .getState()
+        .workspaces.find(
+          (workspace) =>
+            workspace.id === nextWorkspace.id ||
+            workspace.projectPath === nextWorkspace.projectPath,
+        )
+      const nextWorktreeIds = new Set(
+        (nextWorkspace.worktrees ?? []).map((worktree) => worktree.id),
+      )
+      const removedWorktrees = (previousWorkspace?.worktrees ?? []).filter(
+        (worktree) => !nextWorktreeIds.has(worktree.id),
+      )
+
+      upsertWorkspace(nextWorkspace)
+      for (const worktree of removedWorktrees) removeWorktree(nextWorkspace.id, worktree.id)
+    },
+    [removeWorktree, upsertWorkspace],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -1170,7 +1160,7 @@ export function App() {
             name: workspace.name,
             orderIndex: workspace.order,
           })
-          if (!cancelled && response.ok) upsertWorkspace(workspaceFromRecord(response.value))
+          if (!cancelled && response.ok) applyWorkspaceRecord(response.value)
         } catch (error) {
           console.warn('[workspace] Failed to import workspace into taod:', error)
         }
@@ -1179,7 +1169,7 @@ export function App() {
       try {
         const response = await window.electronAPI.listWorkspaces()
         if (!cancelled && response.ok) {
-          for (const workspace of response.value) upsertWorkspace(workspaceFromRecord(workspace))
+          for (const workspace of response.value) applyWorkspaceRecord(workspace)
         }
       } catch (error) {
         console.warn('[workspace] Failed to list daemon workspaces:', error)
@@ -1191,18 +1181,18 @@ export function App() {
     return () => {
       cancelled = true
     }
-  }, [layoutLoaded, upsertWorkspace])
+  }, [applyWorkspaceRecord, layoutLoaded])
 
   useEffect(() => {
     return window.electronAPI.onWorkspaceChanged((workspace) => {
-      upsertWorkspace(workspaceFromRecord(workspace))
+      applyWorkspaceRecord(workspace)
       void runRendererEffect(
         WorkspaceMetadataCache.use((cache) => cache.invalidateWorkspace(workspace.rootPath)),
       ).catch((error) => {
         console.warn('[workspace] Failed to invalidate Git metadata cache:', error)
       })
     })
-  }, [upsertWorkspace])
+  }, [applyWorkspaceRecord])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -1379,16 +1369,10 @@ export function App() {
   const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
     setSidebarResizePreviewWidth(nextWidth)
   }, [])
-  const isSidebarCompact =
-    sidebarExpanded && (sidebarResizePreviewWidth ?? sidebarSize) <= SIDEBAR_COMPACT_THRESHOLD
   const shellStyle = {
     '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
   } as CSSProperties & Record<'--tao-sidebar-width', string>
-  const shellClassName = [
-    'tao-shell',
-    sidebarExpanded ? null : 'tao-shell-sidebar-hidden',
-    isSidebarCompact ? 'tao-shell-sidebar-compact' : null,
-  ]
+  const shellClassName = ['tao-shell', sidebarExpanded ? null : 'tao-shell-sidebar-hidden']
     .filter(Boolean)
     .join(' ')
 
@@ -1404,16 +1388,14 @@ export function App() {
           onResize={handleResizeSidebar}
           onResizePreview={handleSidebarResizePreview}
         >
-          {!isSidebarCompact ? (
-            <HeaderNavigation
-              isSidebarVisible={sidebarExpanded}
-              canGoPreviousWorkspace={canGoPreviousWorkspace}
-              canGoNextWorkspace={canGoNextWorkspace}
-              onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
-              onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
-              onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            />
-          ) : null}
+          <HeaderNavigation
+            isSidebarVisible={sidebarExpanded}
+            canGoPreviousWorkspace={canGoPreviousWorkspace}
+            canGoNextWorkspace={canGoNextWorkspace}
+            onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+            onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
+            onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
+          />
           <div className="sidebar-top-actions">
             <button
               type="button"
@@ -1445,7 +1427,7 @@ export function App() {
           <TabBar
             tabs={workspaceTabs}
             activeTabId={activeTab?.id ?? null}
-            showHeaderNavigation={!sidebarExpanded || isSidebarCompact}
+            showHeaderNavigation={!sidebarExpanded}
             isSidebarVisible={sidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
             canGoNextWorkspace={canGoNextWorkspace}

@@ -1,10 +1,9 @@
-import { existsSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { existsSync, readdirSync, watch, type FSWatcher } from 'node:fs'
+import { isAbsolute, join, resolve, sep } from 'node:path'
 import type { WorkspaceRecord } from '@tao/shared/workspace'
 import type { TaodClient } from './taod-client'
 
-const GIT_REFRESH_DEBOUNCE_MS = 175
-const GIT_STATE_POLL_MS = 7_500
+const GIT_REFRESH_DEBOUNCE_MS = 75
 
 type WatchEntry = {
   record: WorkspaceRecord
@@ -16,7 +15,7 @@ type WatchEntry = {
   pending: boolean
 }
 
-function unrefTimer(timer: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>): void {
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   if (typeof timer === 'object' && timer !== null && 'unref' in timer) timer.unref()
 }
 
@@ -55,48 +54,39 @@ function existingPath(path: string): string | null {
   }
 }
 
+function appendExistingDirectory(paths: Set<string>, path: string): void {
+  const existing = existingPath(path)
+  if (!existing) return
+  try {
+    for (const entry of readdirSync(existing, { withFileTypes: true })) {
+      if (entry.isDirectory()) appendExistingDirectory(paths, join(existing, entry.name))
+    }
+    paths.add(existing)
+  } catch {
+    // Git may rewrite metadata while we are enumerating. The parent watcher will
+    // fire again and re-arm watchers after the next refresh.
+  }
+}
+
 function watchablePaths(gitCommonDir: string): string[] {
   const paths = new Set<string>()
-  for (const path of [
-    gitCommonDir,
-    join(gitCommonDir, 'HEAD'),
-    join(gitCommonDir, 'packed-refs'),
-    join(gitCommonDir, 'refs'),
-    join(gitCommonDir, 'refs', 'heads'),
-    join(gitCommonDir, 'refs', 'remotes'),
-    join(gitCommonDir, 'worktrees'),
-  ]) {
-    const existing = existingPath(path)
-    if (existing) paths.add(existing)
-  }
-
-  const worktreesDir = join(gitCommonDir, 'worktrees')
-  try {
-    for (const name of readdirSync(worktreesDir)) {
-      const path = join(worktreesDir, name)
-      if (statSync(path).isDirectory()) paths.add(path)
-    }
-  } catch {
-    // A repository with no linked worktrees simply has no .git/worktrees dir.
-  }
+  const root = existingPath(gitCommonDir)
+  if (root) paths.add(root)
+  appendExistingDirectory(paths, join(gitCommonDir, 'refs'))
+  appendExistingDirectory(paths, join(gitCommonDir, 'worktrees'))
 
   return [...paths]
 }
 
 export class GitStateWatcher {
   private readonly entries = new Map<string, WatchEntry>()
-  private readonly pollTimer: ReturnType<typeof setInterval>
 
   constructor(
     private readonly client: () => TaodClient,
     private readonly notifyWorkspaceChanged: (workspace: WorkspaceRecord) => void,
-  ) {
-    this.pollTimer = setInterval(() => this.poll(), GIT_STATE_POLL_MS)
-    unrefTimer(this.pollTimer)
-  }
+  ) {}
 
   dispose(): void {
-    clearInterval(this.pollTimer)
     for (const entry of this.entries.values()) this.disposeEntry(entry)
     this.entries.clear()
   }
@@ -168,23 +158,45 @@ export class GitStateWatcher {
     for (const watcher of entry.watchers) watcher.close()
     entry.watchers = []
 
-    try {
-      const watcher = watch(entry.gitCommonDir, { recursive: true }, () => this.queueRefresh(entry))
-      watcher.on('error', () => this.queueRefresh(entry))
-      entry.watchers.push(watcher)
-      return
-    } catch {
-      // Recursive watching is not available on every platform/filesystem. Fall back
-      // to selected Git metadata paths plus polling for correctness.
-    }
+    const watched = new Set<string>()
+    const watchDirectory = (path: string, recursive: boolean): boolean => {
+      const existing = existingPath(path)
+      if (!existing || watched.has(`${existing}\u0000${recursive}`)) return false
 
-    for (const path of watchablePaths(entry.gitCommonDir)) {
       try {
-        const watcher = watch(path, () => this.queueRefresh(entry))
+        const watcher = watch(existing, recursive ? { recursive: true } : {}, () =>
+          this.queueRefresh(entry),
+        )
         watcher.on('error', () => this.queueRefresh(entry))
         entry.watchers.push(watcher)
+        watched.add(`${existing}\u0000${recursive}`)
+        return true
       } catch {
-        // The path may disappear while Git rewrites metadata; polling will catch it.
+        return false
+      }
+    }
+
+    watchDirectory(entry.gitCommonDir, false)
+
+    const refsDir = join(entry.gitCommonDir, 'refs')
+    const worktreesDir = join(entry.gitCommonDir, 'worktrees')
+    const refsRecursive = watchDirectory(refsDir, true)
+    const worktreesRecursive = watchDirectory(worktreesDir, true)
+
+    // Recursive watching is not available on every platform/filesystem. Fall back
+    // to watching the existing Git metadata directory tree and re-arm it after
+    // every refresh so newly-created refs/worktree admin dirs are picked up.
+    if (!refsRecursive || !worktreesRecursive) {
+      for (const path of watchablePaths(entry.gitCommonDir)) {
+        if (path === entry.gitCommonDir) continue
+        if (refsRecursive && (path === refsDir || path.startsWith(`${refsDir}${sep}`))) continue
+        if (
+          worktreesRecursive &&
+          (path === worktreesDir || path.startsWith(`${worktreesDir}${sep}`))
+        ) {
+          continue
+        }
+        watchDirectory(path, false)
       }
     }
   }
@@ -223,9 +235,5 @@ export class GitStateWatcher {
         this.queueRefresh(entry)
       }
     }
-  }
-
-  private poll(): void {
-    for (const entry of this.entries.values()) this.queueRefresh(entry)
   }
 }

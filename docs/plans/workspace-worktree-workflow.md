@@ -51,8 +51,8 @@ worktrees, session cwd/env metadata, and filesystem/Git lifecycle operations.
 - Generated names that are pleasant, unique, and branch-safe.
 - The main workspace checkout and each worktree are selectable in the UI.
 - Worktree-aware terminal and agent sessions.
-- Read-only reconciliation with `git worktree list` so externally removed worktrees become visible as
-  `missing` instead of silently disappearing.
+- Read-only reconciliation with `git worktree list` so externally deleted worktrees are archived and
+  removed from the active sidebar without surfacing errors.
 
 ## Non-goals
 
@@ -636,7 +636,8 @@ Parsing notes:
 - Prefer `--porcelain -z` so paths with spaces are handled safely.
 - Track `worktree`, `HEAD`, `branch`, `detached`, `bare`, and `prunable` fields.
 - Treat worktrees known to Git but not SQLite as `untracked` candidates for adoption.
-- Treat SQLite worktrees missing from Git as `missing` until the user removes/archives the metadata.
+- Treat SQLite worktrees whose paths were externally deleted/pruned as archived and remove them from
+  the active UI. If the path still exists but Git no longer reports it, keep it as `missing`.
 
 Adoption should create a `worktrees` row with `created_by = 'external'`. Removing an adopted worktree
 from Tao should default to unregister/archive only unless the user explicitly asks Tao to remove it
@@ -650,7 +651,8 @@ from Git.
 - Never remove the workspace's main checkout through `worktree.remove`.
 - Refuse removal of dirty worktrees unless caller passes an explicit force flag.
 - Keep the original workspace checkout safe; never run destructive cleanup there.
-- If SQLite and Git disagree, show `missing` or `untracked` rather than guessing.
+- If SQLite and Git disagree but the path still exists, show `missing` or `untracked` rather than
+  guessing. If the path is gone/prunable, archive it automatically.
 - Do not run `git fetch`, branch deletion, or force removal as hidden side effects.
 
 ## UI workflow
@@ -719,7 +721,8 @@ Suggested sidebar behavior:
 - Clicking a worktree row opens that worktree (`workspace_id + worktree_id`).
 - The **+ Worktree** action lives on the workspace row and defaults to that workspace's current/default
   branch.
-- Missing worktrees remain visible with a repair/remove action instead of disappearing.
+- Missing-on-disk/prunable worktrees disappear from the active sidebar automatically. Git-disconnected
+  paths that still exist remain visible with a repair/remove action.
 
 ## Agent session environment
 
@@ -835,7 +838,8 @@ TypeScript guideline:
 - Restarting Tao preserves workspaces, worktrees, and session associations.
 - Removing a clean Tao-managed worktree deletes only the worktree path and archives its worktree row.
 - Dirty worktree removal requires explicit force.
-- External deletion shows `missing` after refresh instead of crashing or silently dropping metadata.
+- External deletion archives and removes the worktree from the active sidebar after refresh instead of
+  crashing or leaving a broken row.
 - If the branch is renamed inside the worktree, refresh updates Tao's branch metadata without renaming
   the folder.
 
