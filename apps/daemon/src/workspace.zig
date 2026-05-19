@@ -271,6 +271,7 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
     const database = if (self.database) |*database| database else return errorJsonAlloc(allocator, request, ErrorCode.state_conflict.text(), "database is unavailable");
     const workspace_id = request.requestWorkspaceId() orelse return errorJsonAlloc(allocator, request, ErrorCode.invalid_workspace.text(), "workspace_id is required");
     try database.archiveWorkspace(workspace_id);
+    try database.archiveWorktreesForWorkspace(workspace_id);
     return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
 }
 
@@ -379,7 +380,7 @@ fn findWorktreeByPathAny(allocator: std.mem.Allocator, database: *db.Database, p
     return try database.findWorktreeByPath(allocator, real_path);
 }
 
-fn adoptedFolderNameAlloc(allocator: std.mem.Allocator, database: *db.Database, workspace_id: []const u8, path: []const u8) ![]u8 {
+pub fn adoptedFolderNameAlloc(allocator: std.mem.Allocator, database: *db.Database, workspace_id: []const u8, path: []const u8) ![]u8 {
     const base = try worktree_name.workspaceSlugAlloc(allocator, std.fs.path.basename(path));
     defer allocator.free(base);
     const prefix = if (worktree_name.isValidFolderName(base)) base else "external-worktree";

@@ -137,7 +137,9 @@ pub const migration_004_workspace_worktrees =
     \\CREATE UNIQUE INDEX idx_worktrees_workspace_folder ON worktrees(workspace_id, folder_name) WHERE archived_at IS NULL;
     \\CREATE INDEX idx_worktrees_workspace_order ON worktrees(workspace_id, order_index);
     \\CREATE INDEX idx_worktrees_state ON worktrees(state);
-    \\CREATE INDEX idx_worktrees_branch ON worktrees(workspace_id, branch);
+    \\CREATE UNIQUE INDEX idx_worktrees_workspace_branch
+    \\    ON worktrees(workspace_id, branch)
+    \\    WHERE archived_at IS NULL;
     \\CREATE TRIGGER update_worktrees_updated_at
     \\    AFTER UPDATE ON worktrees
     \\    BEGIN
@@ -147,11 +149,19 @@ pub const migration_004_workspace_worktrees =
     \\CREATE INDEX idx_terminal_sessions_worktree ON terminal_sessions(worktree_id);
 ;
 
+pub const migration_005_worktree_branch_unique =
+    \\DROP INDEX IF EXISTS idx_worktrees_branch;
+    \\CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_workspace_branch
+    \\    ON worktrees(workspace_id, branch)
+    \\    WHERE archived_at IS NULL;
+;
+
 pub const migrations = [_][]const u8{
     migration_001_terminal_sessions,
     migration_002_agent_sessions,
     migration_003_terminal_search,
     migration_004_workspace_worktrees,
+    migration_005_worktree_branch_unique,
 };
 
 const create_migrations_table_sql =
@@ -354,6 +364,12 @@ const archive_worktree_sql =
     \\UPDATE worktrees
     \\SET state = 'archived', archived_at = datetime('now')
     \\WHERE id = ?;
+;
+
+const archive_worktrees_for_workspace_sql =
+    \\UPDATE worktrees
+    \\SET state = 'archived', archived_at = datetime('now')
+    \\WHERE workspace_id = ? AND archived_at IS NULL;
 ;
 
 const find_worktree_by_id_sql =
@@ -981,6 +997,12 @@ pub const Database = struct {
         try stmt.exec(.{}, .{worktree_id});
     }
 
+    pub fn archiveWorktreesForWorkspace(self: *Database, workspace_id: []const u8) !void {
+        var stmt = try self.handle.prepareDynamic(archive_worktrees_for_workspace_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{workspace_id});
+    }
+
     pub fn findWorktreeById(self: *Database, allocator: std.mem.Allocator, worktree_id: []const u8) !?WorktreeRow {
         var stmt = try self.handle.prepareDynamic(find_worktree_by_id_sql);
         defer stmt.deinit();
@@ -1087,7 +1109,7 @@ pub const Database = struct {
 };
 
 test "sqlite migrations are registered in order" {
-    try std.testing.expectEqual(@as(usize, 4), migrations.len);
+    try std.testing.expectEqual(@as(usize, 5), migrations.len);
     try std.testing.expect(std.mem.indexOf(u8, migrations[0], "terminal_sessions") != null);
 }
 
@@ -1206,6 +1228,14 @@ test "sqlite database records workspaces and worktrees" {
     var database = try Database.openInMemory(std.testing.allocator);
     defer database.deinit();
 
+    const branch_unique_index_count = (try database.handle.one(
+        u64,
+        "SELECT COUNT(*) FROM pragma_index_list('worktrees') WHERE name = 'idx_worktrees_workspace_branch' AND \"unique\" = 1;",
+        .{},
+        .{},
+    )) orelse error.SqliteUnexpectedNull;
+    try std.testing.expectEqual(@as(u64, 1), branch_unique_index_count);
+
     try database.insertWorkspace(.{
         .id = "workspace-1",
         .name = "tao",
@@ -1268,4 +1298,24 @@ test "sqlite database records workspaces and worktrees" {
     defer recreated.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("worktree-2", recreated.id);
     try std.testing.expectEqualStrings("untracked", recreated.state);
+
+    try database.archiveWorkspace("workspace-1");
+    try database.archiveWorktreesForWorkspace("workspace-1");
+    const archived_worktrees = try database.listWorktreesForWorkspace(std.testing.allocator, "workspace-1");
+    defer std.testing.allocator.free(archived_worktrees);
+    try std.testing.expectEqual(@as(usize, 0), archived_worktrees.len);
+    try std.testing.expect(!try database.worktreePathExists("/tmp/luminous-galileo-a13f"));
+    try std.testing.expect(!try database.worktreeFolderExists("workspace-1", "luminous-galileo-a13f"));
+    try std.testing.expect(!try database.worktreeBranchExists("workspace-1", "luminous-galileo-a13f"));
+
+    try database.insertWorktree(.{
+        .id = "worktree-3",
+        .workspace_id = "workspace-1",
+        .title = "Reused branch",
+        .folder_name = "luminous-galileo-a13f",
+        .path = "/tmp/luminous-galileo-a13f",
+        .branch = "luminous-galileo-a13f",
+        .state = "active",
+        .order_index = 3,
+    });
 }

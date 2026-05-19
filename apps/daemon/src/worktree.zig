@@ -234,7 +234,8 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
     const entry = findGitWorktree(self.allocator, entries, canonical) orelse return errorResponse(allocator, request, .invalid_path, "path is not a Git worktree for this workspace");
     const branch = entry.branch orelse "detached";
     const basename = std.fs.path.basename(canonical);
-    const folder_name = if (worktree_name.isValidFolderName(basename)) basename else "external-worktree";
+    const folder_name = try workspace.adoptedFolderNameAlloc(self.allocator, database, workspace_row.id, canonical);
+    defer self.allocator.free(folder_name);
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
     defer self.allocator.free(worktree_id);
     try database.insertWorktree(.{
