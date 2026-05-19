@@ -1,5 +1,5 @@
 ╔══════════════════════════════════════════════╗
-║   Renderer Baseline: Canvas 2D Performance  ║
+║   Historical Ghostty-web Canvas Baseline     ║
 ╚══════════════════════════════════════════════╝
 
 Measuring VT parser + cell grid update time.
@@ -35,5 +35,5 @@ Measuring VT parser + cell grid update time.
 ║   Per-cell (JS):           0.09 μs          ║
 ╚══════════════════════════════════════════════╝
 
-Save this output to: bench/baseline-canvas2d.txt
-After WebGL renderer is built, run again and compare.
+Historical baseline captured before the xterm.js WebGL migration.
+Run `pnpm bench:renderer` for the current DOM-vs-WebGL renderer benchmark.

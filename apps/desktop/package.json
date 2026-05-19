@@ -2,12 +2,12 @@
   "name": "@tao/desktop",
   "version": "1.0.0",
   "private": true,
-  "description": "A performance-first workspace terminal powered by Electron and Ghostty Web",
+  "description": "A performance-first workspace terminal powered by Electron and xterm.js WebGL",
   "keywords": [
     "electron",
     "emulator",
-    "ghostty",
-    "terminal"
+    "terminal",
+    "xterm"
   ],
   "license": "MIT",
   "author": "Tao Contributors",
@@ -24,6 +24,7 @@
     "bench": "tsx bench/benchmark.ts",
     "bench:taod": "bash bench/taod-vs-node-pty.sh",
     "bench:latency": "npx tsx bench/latency-taod.ts",
+    "bench:renderer": "tsx bench/run-electron.ts bench/xterm-webgl-benchmark.ts",
     "bench:ipc": "tsx bench/run-electron.ts bench/ipc-benchmark.ts",
     "bench:cross": "bash bench/cross-terminal.sh",
     "bench:startup": "bash bench/startup-bench.sh",
@@ -39,8 +40,10 @@
   },
   "dependencies": {
     "@tao/shared": "workspace:*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
     "effect": "4.0.0-beta.66",
-    "ghostty-web": "0.4.0-next.14.g6a1a50d",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-icons": "^5.6.0",
@@ -55,7 +58,6 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
-    "@xterm/xterm": "^6.0.0",
     "electron": "^42.0.1",
     "electron-vite": "^5.0.0",
     "oxfmt": "^0.49.0",

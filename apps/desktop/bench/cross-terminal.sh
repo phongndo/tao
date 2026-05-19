@@ -175,28 +175,7 @@ detect_and_bench() {
   echo ""
   echo -e "${BOLD}─── $desc ───${NC}"
 
-  # Tao (our app — electron, ghostty-web WASM)
-  # Launch via CLI: we need a headless way. For now, we use node-pty directly.
-  # This measures PARSER throughput (no rendering), same as bench/benchmark.ts
-  echo -e "  ${YELLOW}Note: 'tao (parser)' measures VT parser only (no canvas render).${NC}"
-  bench_terminal "tao (parser)" \
-    "cd '$PROJECT_ROOT' && node --expose-gc -e \"
-      const fs = require('fs');
-      const data = fs.readFileSync('$filepath');
-      const wasm = fs.readFileSync('node_modules/ghostty-web/ghostty-vt.wasm');
-      WebAssembly.instantiate(wasm, {env:{log:()=>{}}}).then(m => {
-        const e = m.instance.exports;
-        const mem = e.memory;
-        const t = e.ghostty_terminal_new(120, 40);
-        const enc = new TextEncoder().encode(data.toString());
-        const p = e.ghostty_wasm_alloc_u8_array(enc.length);
-        new Uint8Array(mem.buffer).set(enc, p);
-        e.ghostty_terminal_write(t, p, enc.length);
-        e.ghostty_wasm_free_u8_array(p, enc.length);
-        e.ghostty_terminal_free(t);
-      });
-    \"" \
-    "$testfile" "$desc"
+  echo -e "  ${YELLOW}Note: Tao renderer coverage lives in bench:renderer; this script compares external terminals and headless parser throughput.${NC}"
 
   # xterm.js parser (headless, Node.js)
   bench_terminal "xterm.js (parser)" \

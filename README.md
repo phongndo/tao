@@ -3,12 +3,12 @@
 <p align="center">
   <img src="https://img.shields.io/github/actions/workflow/status/phongndo/tao/ci.yml?branch=main&label=CI" alt="CI">
   <img src="https://img.shields.io/github/license/phongndo/tao?label=license" alt="License">
-  <img src="https://img.shields.io/badge/parser-Ghostty%20WASM%20(Zig)-blue" alt="Parser">
+  <img src="https://img.shields.io/badge/renderer-xterm.js%20WebGL-blue" alt="Renderer">
 </p>
 
-A performance-first workspace terminal built with **Electron**, **Ghostty's WASM-based VT parser**, and Tao's **Zig `taod` PTY/persistence daemon**.
+A performance-first workspace terminal built with **Electron**, **xterm.js + WebGL**, and Tao's **Zig `taod` PTY/persistence daemon**.
 
-Uses the exact same Zig parser as the native Ghostty terminal, compiled to WebAssembly. All PTY and VT processing runs in an isolated Zig daemon. Renders via Canvas 2D (WebGL glyph atlas renderer planned).
+All PTY and VT processing runs in an isolated Zig daemon backed by native `libghostty-vt`. The renderer consumes daemon output through Electron and presents the live terminal with xterm.js' WebGL renderer, falling back to xterm.js' default renderer if WebGL is unavailable or loses context.
 
 **4× faster VT parsing than xterm.js. 10× lower input latency vs node-pty era. Zero GC pauses.**
 
@@ -33,7 +33,7 @@ tao/
 ├── packages/       # Shared workspace packages
 ├── docs/           # Architecture notes and plans
 ├── scripts/        # Repo-level maintenance scripts
-├── patches/        # Future dependency patches, e.g. ghostty-web
+├── patches/        # Future dependency patches
 └── assets/         # Shared repo assets
 ```
 
@@ -60,9 +60,9 @@ Metrics measured 2026-05-16 on Apple M3, macOS 26.3.1. Full methodology and raw 
 
 > `session.create` (VT init) takes ~0.6 ms, `forkpty+exec` takes ~0.8 ms, socket IPC adds ~0.01 ms. All of these are one-time costs per terminal tab; none affect runtime keystroke latency or throughput.
 
-### Ghostty-web WASM parser (cross-reference)
+### Ghostty-web WASM parser (historical cross-reference)
 
-The WASM variant of the Ghostty parser (used in the renderer for real-time cell access) also dramatically outperforms xterm.js:
+The benchmark suite can still fetch the old `ghostty-web` package into `apps/desktop/.bench-cache/` for parser comparisons without keeping it in Tao's runtime dependency graph:
 
 | Metric                       | ghostty-web (WASM) | xterm.js (JS) | Speedup  |
 | ---------------------------- | ------------------ | ------------- | -------- |
@@ -70,7 +70,7 @@ The WASM variant of the Ghostty parser (used in the renderer for real-time cell 
 | VT parse (compiler 1MB ANSI) | 35.7 MB/s          | 16.5 MB/s     | **2.2×** |
 | Burst (1000 tiny writes)     | 276 ms             | 1680 ms       | **6.1×** |
 
-See [bench/benchmark.ts](apps/desktop/bench/benchmark.ts) for the WASM vs JS comparison.
+See [bench/benchmark.ts](apps/desktop/bench/benchmark.ts) for the WASM vs xterm.js parser comparison and `pnpm bench:renderer` for the current xterm.js DOM-vs-WebGL renderer benchmark.
 
 ## Architecture
 
@@ -79,7 +79,7 @@ See [bench/benchmark.ts](apps/desktop/bench/benchmark.ts) for the WASM vs JS com
 │  Renderer Process (Electron)                                    │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │  React/TypeScript UI                                    │    │
-│  │  ghostty-web (Canvas 2D renderer + WASM VT parser)      │    │
+│  │  xterm.js + WebGL renderer                              │    │
 │  └───────────────┬─────────────────────────────────────────┘    │
 │                  │ Electron MessagePort                         │
 │   ┌──────────────▼─────────────────────────────────────────┐    │
@@ -103,9 +103,9 @@ See [bench/benchmark.ts](apps/desktop/bench/benchmark.ts) for the WASM vs JS com
 - **taod** (Zig): Detached daemon owning all PTY processes, native libghostty-vt parsing, live attach streams, event logs, current-screen snapshots, and resume metadata. Starts independently, survives Electron restarts.
 - **taod-client** (Node.js/Electron main): Manages daemon lifecycle (spawn, health-check, reconnect). Bridges control requests and binary streams.
 - **taod-pty-bridge** (Electron main): Translates renderer protocol into taod commands over Unix sockets. Forwards binary stream frames via Electron `MessagePort`.
-- **ghostty-web** (renderer): Ghostty's production VT emulator compiled to WASM. Same parser code as the native Ghostty app. Reads cell data from WASM and renders via Canvas 2D.
+- **xterm.js + WebGL** (renderer): Browser terminal UI, input handling, scrollback, selection, and GPU-accelerated rendering. Falls back to xterm.js' default renderer on WebGL failure.
 - **IPC**: Binary stream protocol (TASF — Tao Stream Format) with CRC-32 integrity, 64-byte session IDs, and 64MB max payload. More efficient than JSON-over-Electron-IPC.
-- **Rendering**: Canvas 2D with dirty-row tracking (0.03ms per frame for typical use). WebGL glyph atlas renderer planned (see [docs/rendering.md](docs/rendering.md)).
+- **Rendering**: xterm.js WebGL in the Electron renderer, with focused DOM-vs-WebGL coverage in [bench/xterm-webgl-benchmark.ts](apps/desktop/bench/xterm-webgl-benchmark.ts).
 
 ## Benchmarks
 
@@ -113,6 +113,7 @@ See [bench/benchmark.ts](apps/desktop/bench/benchmark.ts) for the WASM vs JS com
 pnpm bench              # VT parser throughput (WASM vs xterm.js)
 pnpm bench:taod         # taod daemon vs node-pty comparison
 pnpm bench:latency      # Input latency via taod (keystroke → echo)
+pnpm bench:renderer     # xterm.js DOM vs WebGL renderer
 pnpm bench:cross        # Cross-terminal comparison
 pnpm bench:startup      # Startup time
 pnpm bench:all          # Run everything

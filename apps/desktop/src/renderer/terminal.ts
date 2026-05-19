@@ -1,4 +1,6 @@
-import { Ghostty, Terminal } from 'ghostty-web'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
+import { Terminal } from '@xterm/xterm'
 import {
   decodeCurrentScreenSnapshot,
   decodeFallbackCurrentScreenSnapshotPayload,
@@ -13,7 +15,6 @@ import type {
   CurrentScreenSnapshotFrame,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
-import { createOscTitleScanner } from './osc-title'
 
 type CreateTerminalOptions = {
   readonly terminalId?: string
@@ -57,6 +58,7 @@ const terminalFontFamily =
 
 const SIDEBAR_RESIZE_FIT_DELAY_MS = 80
 const STARTUP_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024
+const OUTPUT_BATCH_MAX_CHARS = 256 * 1024
 const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
 const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 const warnedSnapshotBackends = new Set<string>()
@@ -66,21 +68,13 @@ const MIN_TERMINAL_ROWS = 1
 
 let terminalFontsLoad: Promise<void> | null = null
 
-let ghosttyLoad: Promise<Ghostty> | null = null
+const terminalFitAddons = new WeakMap<Terminal, FitAddon>()
+const terminalWebglAddons = new WeakMap<Terminal, WebglAddon>()
 
 function updateStatus(msg: string) {
   if (window.location.protocol !== 'file:') {
     console.debug(`[terminal] ${msg}`)
   }
-}
-
-function loadGhostty(wasmUrl: string): Promise<Ghostty> {
-  ghosttyLoad ??= Ghostty.load(wasmUrl).catch((error) => {
-    ghosttyLoad = null
-    throw error
-  })
-
-  return ghosttyLoad
 }
 
 async function loadTerminalFonts(): Promise<void> {
@@ -146,17 +140,20 @@ function getContainerContentSize(container: HTMLElement): { width: number; heigh
 }
 
 function fitTerminalToContainer(container: HTMLElement, term: Terminal): boolean {
-  const metrics = term.renderer?.getMetrics()
-  if (!metrics || metrics.width <= 0 || metrics.height <= 0) return false
+  const fitAddon = terminalFitAddons.get(term)
+  if (!fitAddon) return false
 
   const { width, height } = getContainerContentSize(container)
   if (width <= 0 || height <= 0) return false
 
-  const cols = Math.max(MIN_TERMINAL_COLS, Math.floor(width / metrics.width))
-  const rows = Math.max(MIN_TERMINAL_ROWS, Math.floor(height / metrics.height))
+  const dimensions = fitAddon.proposeDimensions()
+  if (!dimensions) return false
+
+  const cols = Math.max(MIN_TERMINAL_COLS, dimensions.cols)
+  const rows = Math.max(MIN_TERMINAL_ROWS, dimensions.rows)
   if (cols === term.cols && rows === term.rows) return false
 
-  term.resize(cols, rows)
+  fitAddon.fit()
   return true
 }
 
@@ -175,7 +172,19 @@ function warnUnsupportedSnapshotBackend(backendName: string) {
   console.warn(`[terminal] current-screen snapshot backend is not renderable yet: ${backendName}`)
 }
 
-function tryApplyCurrentScreenSnapshot(term: Terminal, frame: CurrentScreenSnapshotFrame): number {
+function writeAndRefresh(term: Terminal, data: string): Promise<void> {
+  return new Promise((resolve) => {
+    term.write(data, () => {
+      forceTerminalRender(term)
+      resolve()
+    })
+  })
+}
+
+async function tryApplyCurrentScreenSnapshot(
+  term: Terminal,
+  frame: CurrentScreenSnapshotFrame,
+): Promise<number> {
   if (frame.live === false) return 0
 
   try {
@@ -188,8 +197,7 @@ function tryApplyCurrentScreenSnapshot(term: Terminal, frame: CurrentScreenSnaps
         term.resize(snapshot.cols, snapshot.rows)
       }
 
-      term.write(ghosttyNativeCurrentScreenSnapshotToAnsi(snapshot))
-      forceTerminalRender(term)
+      await writeAndRefresh(term, ghosttyNativeCurrentScreenSnapshotToAnsi(snapshot))
       return Math.max(frame.seq, envelope.seq)
     }
 
@@ -207,8 +215,7 @@ function tryApplyCurrentScreenSnapshot(term: Terminal, frame: CurrentScreenSnaps
 
     // This consumes only the daemon's live current-screen frame. It is deliberately not event-log
     // scrollback replay, and the daemon cold-start path does not feed persisted snapshots into it.
-    term.write(fallbackCurrentScreenSnapshotToAnsi(snapshot))
-    forceTerminalRender(term)
+    await writeAndRefresh(term, fallbackCurrentScreenSnapshotToAnsi(snapshot))
     return Math.max(frame.seq, envelope.seq)
   } catch (error) {
     console.warn('[terminal] ignored invalid current-screen snapshot:', error)
@@ -217,9 +224,7 @@ function tryApplyCurrentScreenSnapshot(term: Terminal, frame: CurrentScreenSnaps
 }
 
 export function forceTerminalRender(term: Terminal): void {
-  if (term.renderer && term.wasmTerm) {
-    term.renderer.render(term.wasmTerm, true, term.viewportY, term)
-  }
+  if (term.rows > 0) term.refresh(0, term.rows - 1)
 }
 
 async function revealTerminalAfterStableRender(
@@ -301,16 +306,99 @@ function observeTerminalResize(container: HTMLElement, term: Terminal): () => vo
   }
 }
 
-export function setTerminalCursorVisible(term: Terminal, visible: boolean) {
-  term.renderer?.setTheme({
-    ...THEME,
-    cursor: visible ? THEME.cursor : THEME.background,
-    cursorAccent: visible ? THEME.cursorAccent : THEME.background,
+function installWebglRenderer(term: Terminal): void {
+  const webglAddon = new WebglAddon()
+  const contextLoss = webglAddon.onContextLoss(() => {
+    console.warn(
+      '[terminal] WebGL renderer context lost; falling back to xterm.js default renderer',
+    )
+    contextLoss.dispose()
+    terminalWebglAddons.delete(term)
+    webglAddon.dispose()
+    forceTerminalRender(term)
   })
 
-  if (term.renderer && term.wasmTerm) {
-    term.renderer.render(term.wasmTerm, true, term.viewportY, term)
+  try {
+    term.loadAddon(webglAddon)
+    terminalWebglAddons.set(term, webglAddon)
+  } catch (error) {
+    contextLoss.dispose()
+    webglAddon.dispose()
+    console.warn('[terminal] WebGL renderer unavailable; using xterm.js default renderer:', error)
   }
+}
+
+function binaryStringToBytes(data: string): Uint8Array {
+  const bytes = new Uint8Array(data.length)
+  for (let index = 0; index < data.length; index++) {
+    bytes[index] = data.charCodeAt(index) & 0xff
+  }
+  return bytes
+}
+
+function createBatchedTerminalWriter(term: Terminal): {
+  write(data: string): void
+  flush(): void
+  dispose(): void
+} {
+  let chunks: string[] = []
+  let queuedChars = 0
+  let flushTimer: number | null = null
+  let disposed = false
+
+  function clearFlushTimer() {
+    if (flushTimer === null) return
+    window.clearTimeout(flushTimer)
+    flushTimer = null
+  }
+
+  function flush() {
+    clearFlushTimer()
+    if (disposed || chunks.length === 0) return
+
+    const data = chunks.join('')
+    chunks = []
+    queuedChars = 0
+    term.write(data)
+  }
+
+  function scheduleFlush() {
+    if (flushTimer !== null) return
+    flushTimer = window.setTimeout(flush, 0)
+  }
+
+  return {
+    write(data: string) {
+      if (disposed || data.length === 0) return
+      chunks.push(data)
+      queuedChars += data.length
+      if (queuedChars >= OUTPUT_BATCH_MAX_CHARS) {
+        flush()
+        return
+      }
+      scheduleFlush()
+    },
+    flush,
+    dispose() {
+      flush()
+      disposed = true
+      clearFlushTimer()
+      chunks = []
+      queuedChars = 0
+    },
+  }
+}
+
+export function setTerminalCursorVisible(term: Terminal, visible: boolean) {
+  term.options = {
+    cursorInactiveStyle: visible ? 'outline' : 'none',
+    theme: {
+      ...THEME,
+      cursor: visible ? THEME.cursor : THEME.background,
+      cursorAccent: visible ? THEME.cursorAccent : THEME.background,
+    },
+  }
+  forceTerminalRender(term)
 }
 
 export async function createTerminal(
@@ -318,25 +406,23 @@ export async function createTerminal(
   sessionId: string,
   options: CreateTerminalOptions = {},
 ): Promise<Terminal> {
-  // Step 1: Load Ghostty WASM/font metadata before starting the shell. The PTY must be
+  // Step 1: Load terminal fonts before starting the shell. The PTY must be
   // spawned at the fitted terminal size, otherwise shell prompts with right-side content
   // render against the initial 80x24 size and leave stale fragments after pane splits.
-  updateStatus('Loading Ghostty WASM...')
-  const wasmUrl = new URL('ghostty-vt.wasm', window.location.href).href
+  updateStatus('Loading terminal fonts...')
 
   const t0 = performance.now()
   const fontsReady = loadTerminalFonts()
   let term: Terminal | null = null
 
   try {
-    const [ghostty] = await Promise.all([loadGhostty(wasmUrl), fontsReady])
-    updateStatus(`Ghostty WASM + fonts ready in ${(performance.now() - t0).toFixed(0)}ms`)
+    await fontsReady
+    updateStatus(`Terminal fonts ready in ${(performance.now() - t0).toFixed(0)}ms`)
 
-    // Step 2: Create terminal instance (with pre-loaded Ghostty)
+    // Step 2: Create the xterm.js terminal and its fit addon.
     updateStatus('Creating terminal...')
 
     term = new Terminal({
-      ghostty, // Pass the pre-loaded Ghostty instance for instant open
       cols: 80,
       rows: 24,
       fontSize: 14,
@@ -344,9 +430,23 @@ export async function createTerminal(
       theme: THEME,
       cursorBlink: false,
       cursorStyle: 'block',
+      cursorInactiveStyle: 'none',
       scrollback: 10000,
       allowTransparency: false,
+      convertEol: false,
+      customGlyphs: true,
+      macOptionIsMeta: true,
+      macOptionClickForcesSelection: true,
+      minimumContrastRatio: 1,
+      rescaleOverlappingGlyphs: false,
+      screenReaderMode: false,
+      smoothScrollDuration: 0,
+      allowProposedApi: false,
+      logLevel: 'warn',
     })
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    terminalFitAddons.set(term, fitAddon)
 
     // Step 3: Clear container and open terminal
     updateStatus('Opening terminal...')
@@ -358,6 +458,7 @@ export async function createTerminal(
 
     container.classList.add('terminal-surface-restoring')
     term.open(container)
+    installWebglRenderer(term)
   } catch (err) {
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
@@ -373,7 +474,8 @@ export async function createTerminal(
   // Step 4: Wire IPC
   updateStatus('Wiring IPC...')
 
-  const scanTitle = options.onTitle ? createOscTitleScanner(options.onTitle) : null
+  const outputWriter = createBatchedTerminalWriter(openedTerm)
+  const titleSubscription = options.onTitle ? openedTerm.onTitleChange(options.onTitle) : null
   let stopResizeObserver: (() => void) | null = null
   let archived = false
   let bufferingStartupOutput = true
@@ -386,14 +488,12 @@ export async function createTerminal(
   fitTerminalToContainer(container, term)
 
   function writePtyData(data: string) {
-    if (scanTitle) {
-      try {
-        scanTitle(data)
-      } catch (error) {
-        console.error('[terminal] title scanner error:', error)
-      }
-    }
-    openedTerm.write(data)
+    outputWriter.write(data)
+  }
+
+  async function writePtyDataAndWait(data: string): Promise<void> {
+    outputWriter.flush()
+    await writeAndRefresh(openedTerm, data)
   }
 
   function bufferStartupFrame(frame: OutputFrame) {
@@ -420,7 +520,7 @@ export async function createTerminal(
     }
   }
 
-  function flushStartupOutput(skipThroughSeq: number) {
+  async function flushStartupOutput(skipThroughSeq: number): Promise<void> {
     bufferingStartupOutput = false
     if (bufferedStartupOutput.length === 0) return
 
@@ -430,7 +530,7 @@ export async function createTerminal(
       .join('')
     bufferedStartupOutput.length = 0
     bufferedStartupChars = 0
-    if (data.length > 0) writePtyData(data)
+    if (data.length > 0) await writePtyDataAndWait(data)
   }
 
   const unsubSessionOutput = window.electronAPI.onSessionOutput(sessionId, (frame) => {
@@ -470,6 +570,11 @@ export async function createTerminal(
     window.electronAPI.writeSessionInput(sessionId, new TextEncoder().encode(data))
   })
 
+  term.onBinary((data: string) => {
+    if (archived) return
+    window.electronAPI.writeSessionInput(sessionId, binaryStringToBytes(data))
+  })
+
   let pendingResize: { cols: number; rows: number } | null = null
   let resizeFrame: number | null = null
 
@@ -491,6 +596,7 @@ export async function createTerminal(
 
   const unsubSessionError = window.electronAPI.onSessionError(sessionId, (error: string) => {
     console.error('[terminal] Session error:', error)
+    outputWriter.flush()
     term.write(`\r\n\x1b[31m[Session Error: ${error}]\x1b[0m\r\n`)
   })
 
@@ -501,6 +607,7 @@ export async function createTerminal(
         info.signal != null
           ? `Shell killed by signal ${info.signal}`
           : `Shell exited with code ${info.exitCode}`
+      outputWriter.flush()
       term.write(`\r\n\x1b[33m[${msg}]\x1b[0m\r\n`)
     },
   )
@@ -524,7 +631,7 @@ export async function createTerminal(
     }
     fitTerminalToContainer(container, term)
     // Startup output can arrive between attach:ok and the final fit above. Writing it before the
-    // final resize makes Ghostty preserve/reflow the early shell prompt at the wrong screen origin,
+    // final resize makes the renderer preserve/reflow the early shell prompt at the wrong origin,
     // which presents as a blank terminal until the next input-triggered repaint. Flush only after
     // the terminal dimensions have settled for first paint.
     await nextAnimationFrame()
@@ -535,11 +642,11 @@ export async function createTerminal(
     // where they are needed to hydrate an existing screen without replaying full scrollback.
     if (pendingStartupSnapshot) {
       if (!archived && attachedSession.attachMode !== 'fresh') {
-        suppressOutputThroughSeq = tryApplyCurrentScreenSnapshot(term, pendingStartupSnapshot)
+        suppressOutputThroughSeq = await tryApplyCurrentScreenSnapshot(term, pendingStartupSnapshot)
       }
       pendingStartupSnapshot = null
     }
-    flushStartupOutput(suppressOutputThroughSeq)
+    await flushStartupOutput(suppressOutputThroughSeq)
     await revealTerminalAfterStableRender(container, term)
   } catch (err) {
     unsubSessionOutput()
@@ -547,6 +654,8 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
+    titleSubscription?.dispose()
+    outputWriter.dispose()
     term.dispose()
     container.classList.remove('terminal-surface-restoring')
     renderTerminalError(container, err)
@@ -568,9 +677,13 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
+    titleSubscription?.dispose()
+    outputWriter.dispose()
     void window.electronAPI.detachSession(sessionId)
     stopResizeObserver?.()
     stopResizeObserver = null
+    terminalFitAddons.delete(term)
+    terminalWebglAddons.delete(term)
     container.classList.remove('terminal-surface-restoring')
     originalDispose()
   }

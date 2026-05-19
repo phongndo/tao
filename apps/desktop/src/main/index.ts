@@ -49,21 +49,17 @@ import {
 
 // ─── Phase 0: Chromium flags (MUST be set before app.ready) ───
 
-// GPU: enable hardware rasterization for canvas text rendering.
+// GPU: enable hardware rasterization for terminal renderer layers.
 // Without this, Chromium may fall back to software rasterization
-// which is 2-5× slower for canvas 2D operations.
+// which is slower for WebGL canvas composition and fallback rendering.
 app.commandLine.appendSwitch('enable-gpu-rasterization')
 app.commandLine.appendSwitch('enable-zero-copy')
 app.commandLine.appendSwitch('enable-native-gpu-memory-buffers')
 
-// Disable software rasterizer fallback — forces GPU path.
-// If GPU is unavailable, Electron will still work via SwiftShader
-// (which is still faster than CPU raster for 2D canvas).
-app.commandLine.appendSwitch('disable-software-rasterizer')
+// Leave Chromium's software rasterizer fallback available so WebGL can recover
+// on machines without a working hardware context.
 
-// Canvas 2D: use GPU-accelerated canvas rendering layer.
-// This promotes the <canvas> to an independent compositor layer,
-// reducing repaint cost when only the terminal content changes.
+// Keep the accelerated 2D canvas path available for xterm.js fallback rendering.
 app.commandLine.appendSwitch('enable-accelerated-2d-canvas')
 
 // Disable unused Chromium features to reduce memory footprint
@@ -146,14 +142,14 @@ function createWindow() {
       enableWebSQL: false,
       spellcheck: false,
 
-      // Canvas: use GPU-accelerated path
+      // xterm.js WebGL renderer needs Chromium's GPU path.
       offscreen: false,
 
       // Disable unnecessary renderer features
-      webgl: false, // Ghostty-web uses Canvas 2D, not WebGL
+      webgl: true,
       plugins: false, // No Flash/PDF plugins
       experimentalFeatures: false,
-      webSecurity: true, // Keep security, CSP handles WASM
+      webSecurity: true,
 
       // V8: eager compile for fast startup
       v8CacheOptions: 'bypassHeatCheck',

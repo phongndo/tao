@@ -1,4 +1,4 @@
-import type { Terminal } from 'ghostty-web'
+import type { Terminal } from '@xterm/xterm'
 import { useEffect, useRef, useState } from 'react'
 import type { AttachSessionResult } from '@tao/shared/taod-protocol'
 import { createTerminal, forceTerminalRender, setTerminalCursorVisible } from '../terminal'

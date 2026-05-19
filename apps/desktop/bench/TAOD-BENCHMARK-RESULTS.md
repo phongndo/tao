@@ -73,7 +73,7 @@ session launch. The daemon survives Electron restarts, so subsequent launches co
 - **avg:** 0.31 ms | **p50:** 0.15 ms | **p95:** 1.29 ms | **p99:** 2.02 ms | **samples:** 50
 - Measured: write → Unix socket → taod → PTY → echo → taod → binary stream frame
 - This includes the full daemon pipeline. The Zig native path has **no V8 GC pauses**.
-- node-pty era: ~2-4 ms avg, ~6-10 ms p99 (from `bench/latency-tao.ts`)
+- node-pty era: ~2-4 ms avg, ~6-10 ms p99 (historical benchmark from the old node-pty branch)
 
 ### 4. VT Parser Throughput (WASM — for cross-reference)
 
