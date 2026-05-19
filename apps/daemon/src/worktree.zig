@@ -95,7 +95,11 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     if (try database.worktreeFolderExists(workspace_row.id, folder_name)) return errorResponse(allocator, request, .invalid_name, "folder_name already exists");
     if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
-    if (git.branchExists(self.allocator, workspace_row.root_path, branch_name) catch false) return errorResponse(allocator, request, .branch_exists, "branch already exists");
+    const branch_in_git = git.branchExists(self.allocator, workspace_row.root_path, branch_name) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to check branch existence"),
+        else => return err,
+    };
+    if (branch_in_git) return errorResponse(allocator, request, .branch_exists, "branch already exists");
 
     const parent_path = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
     defer self.allocator.free(parent_path);
@@ -231,6 +235,7 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
 
     const canonical = workspace.canonicalPathAlloc(self.allocator, path) catch return errorResponse(allocator, request, .invalid_path, "invalid worktree path");
     defer self.allocator.free(canonical);
+    if (std.mem.eql(u8, canonical, workspace_row.root_path)) return errorResponse(allocator, request, .invalid_path, "cannot adopt workspace root as worktree");
     if (try database.findWorktreeByPath(self.allocator, canonical)) |existing_row| {
         var existing = existing_row;
         defer existing.deinit(self.allocator);
@@ -242,7 +247,10 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         return jsonAlloc(allocator, WorktreePayload{ .id = request.requestId(), .worktree = response });
     }
 
-    const entries = try git.worktreeListAlloc(self.allocator, workspace_row.root_path);
+    const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
+        else => return err,
+    };
     defer {
         for (entries) |*entry| entry.deinit(self.allocator);
         self.allocator.free(entries);
@@ -295,7 +303,10 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
     var workspace_row = (try database.findWorkspaceById(self.allocator, workspace_id)) orelse return error.InvalidWorkspace;
     defer workspace_row.deinit(self.allocator);
     const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
-        error.GitFailed, error.GitNotFound => return,
+        error.GitFailed, error.GitNotFound => {
+            std.log.warn("git worktree list failed for {s}: {t}", .{ workspace_row.root_path, err });
+            return;
+        },
         else => return err,
     };
     defer {
