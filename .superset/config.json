@@ -1,0 +1,9 @@
+{
+  "setup": [
+    "just setup"
+  ],
+  "teardown": [],
+  "run": [
+    "just dev"
+  ]
+}
