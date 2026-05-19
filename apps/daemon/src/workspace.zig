@@ -329,7 +329,12 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
                 try database.archiveWorktree(known.id);
                 continue;
             }
-            const branch = entry.branch orelse if (entry.detached) "detached" else known.branch;
+            var branch_owned: ?[]u8 = null;
+            defer if (branch_owned) |value| self.allocator.free(value);
+            const branch = entry.branch orelse blk: {
+                branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, known.id);
+                break :blk branch_owned.?;
+            };
             try database.updateWorktreeGit(known.id, branch, "active");
         } else if (!pathExists(known.path)) {
             try database.archiveWorktree(known.id);
@@ -343,10 +348,15 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
         if (entry.prunable) continue;
         if (samePath(self.allocator, entry.path, row.root_path)) continue;
 
-        const branch = entry.branch orelse if (entry.detached) "detached" else "unknown";
         if (try findWorktreeByPathAny(self.allocator, database, entry.path)) |existing_row| {
             var existing = existing_row;
             defer existing.deinit(self.allocator);
+            var branch_owned: ?[]u8 = null;
+            defer if (branch_owned) |value| self.allocator.free(value);
+            const branch = entry.branch orelse blk: {
+                branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, existing.id);
+                break :blk branch_owned.?;
+            };
             if (std.mem.eql(u8, existing.workspace_id, row.id)) {
                 try database.updateWorktreeGit(existing.id, branch, "active");
             }
@@ -355,9 +365,15 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
 
         const folder_name = try adoptedFolderNameAlloc(self.allocator, database, row.id, entry.path);
         defer self.allocator.free(folder_name);
-        const title = branch;
         const worktree_id = try idAlloc(self.allocator, "worktree");
         defer self.allocator.free(worktree_id);
+        var branch_owned: ?[]u8 = null;
+        defer if (branch_owned) |value| self.allocator.free(value);
+        const branch = entry.branch orelse blk: {
+            branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, worktree_id);
+            break :blk branch_owned.?;
+        };
+        const title = branch;
         try database.insertWorktree(.{
             .id = worktree_id,
             .workspace_id = row.id,

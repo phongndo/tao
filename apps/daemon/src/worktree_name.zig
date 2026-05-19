@@ -133,6 +133,11 @@ pub fn branchForFolderAlloc(allocator: std.mem.Allocator, folder_name: []const u
     return allocator.dupe(u8, folder_name);
 }
 
+pub fn detachedBranchForFolderAlloc(allocator: std.mem.Allocator, folder_name: []const u8) ![]u8 {
+    if (!isValidFolderName(folder_name)) return error.InvalidName;
+    return std.fmt.allocPrint(allocator, "detached-{s}", .{folder_name});
+}
+
 pub fn isValidFolderName(value: []const u8) bool {
     if (value.len == 0 or value.len > 96) return false;
     if (value[0] == '-' or value[value.len - 1] == '-') return false;
@@ -202,6 +207,9 @@ test "generated folder names are branch safe" {
     const branch = try branchForFolderAlloc(std.testing.allocator, folder);
     defer std.testing.allocator.free(branch);
     try std.testing.expect(isValidGeneratedBranchName(branch));
+    const detached_branch = try detachedBranchForFolderAlloc(std.testing.allocator, folder);
+    defer std.testing.allocator.free(detached_branch);
+    try std.testing.expect(isSafeBranchName(detached_branch));
 }
 
 test "folder and branch validators reject unsafe names" {

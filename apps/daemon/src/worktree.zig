@@ -136,7 +136,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     };
 
     try database.updateWorktreeState(worktree_id, "active", null);
-    var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return errorResponse(allocator, request, .invalid_worktree, "created worktree not found");
+    var row = (try database.findWorktreeByPath(self.allocator, worktree_path)) orelse return errorResponse(allocator, request, .invalid_worktree, "created worktree not found");
     defer row.deinit(self.allocator);
     const response = try workspace.worktreeResponseFromRowAlloc(self.allocator, row, null);
     defer workspace.freeWorktreeResponseFields(self.allocator, response);
@@ -147,7 +147,11 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 pub fn handleRefreshLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
     const database = if (self.database) |*database| database else return errorResponse(allocator, request, .state_conflict, "database is unavailable");
     if (request.requestWorktreeId()) |worktree_id| {
-        try refreshSingleWorktree(self, database, worktree_id);
+        refreshSingleWorktree(self, database, worktree_id) catch |err| switch (err) {
+            error.InvalidWorktree => return errorResponse(allocator, request, .invalid_worktree, "worktree not found"),
+            error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "workspace not found"),
+            else => return err,
+        };
         var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return errorResponse(allocator, request, .invalid_worktree, "worktree not found");
         defer row.deinit(self.allocator);
         const response = try workspace.worktreeResponseFromRowAlloc(self.allocator, row, null);
@@ -156,7 +160,10 @@ pub fn handleRefreshLocked(self: anytype, allocator: std.mem.Allocator, request:
     }
 
     const workspace_id = request.requestWorkspaceId() orelse return errorResponse(allocator, request, .invalid_workspace, "workspace_id is required");
-    try refreshWorkspaceWorktrees(self, database, workspace_id);
+    refreshWorkspaceWorktrees(self, database, workspace_id) catch |err| switch (err) {
+        error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "workspace not found"),
+        else => return err,
+    };
     return handleListLocked(self, allocator, request);
 }
 
@@ -185,7 +192,13 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
         return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
     }
 
-    if (!request.requestForce() and (git.isDirty(self.allocator, row.path) catch false)) return errorResponse(allocator, request, .worktree_dirty, "worktree has uncommitted changes");
+    if (!request.requestForce()) {
+        const dirty = git.isDirty(self.allocator, row.path) catch |err| switch (err) {
+            error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to determine worktree status"),
+            else => return err,
+        };
+        if (dirty) return errorResponse(allocator, request, .worktree_dirty, "worktree has uncommitted changes");
+    }
 
     try database.updateWorktreeState(row.id, "removing", null);
     git.worktreeRemove(self.allocator, workspace_row.root_path, row.path, request.requestForce()) catch |err| {
@@ -221,6 +234,9 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
     if (try database.findWorktreeByPath(self.allocator, canonical)) |existing_row| {
         var existing = existing_row;
         defer existing.deinit(self.allocator);
+        if (!std.mem.eql(u8, existing.workspace_id, workspace_row.id)) {
+            return errorResponse(allocator, request, .invalid_path, "path belongs to a different workspace");
+        }
         const response = try workspace.worktreeResponseFromRowAlloc(self.allocator, existing, null);
         defer workspace.freeWorktreeResponseFields(self.allocator, response);
         return jsonAlloc(allocator, WorktreePayload{ .id = request.requestId(), .worktree = response });
@@ -232,12 +248,17 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         self.allocator.free(entries);
     }
     const entry = findGitWorktree(self.allocator, entries, canonical) orelse return errorResponse(allocator, request, .invalid_path, "path is not a Git worktree for this workspace");
-    const branch = entry.branch orelse "detached";
     const basename = std.fs.path.basename(canonical);
     const folder_name = try workspace.adoptedFolderNameAlloc(self.allocator, database, workspace_row.id, canonical);
     defer self.allocator.free(folder_name);
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
     defer self.allocator.free(worktree_id);
+    var branch_owned: ?[]u8 = null;
+    defer if (branch_owned) |value| self.allocator.free(value);
+    const branch = entry.branch orelse blk: {
+        branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, worktree_id);
+        break :blk branch_owned.?;
+    };
     try database.insertWorktree(.{
         .id = worktree_id,
         .workspace_id = workspace_row.id,
@@ -249,7 +270,7 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         .order_index = try database.nextWorktreeOrder(workspace_row.id),
         .created_by = "external",
     });
-    var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return errorResponse(allocator, request, .invalid_worktree, "adopted worktree not found");
+    var row = (try database.findWorktreeByPath(self.allocator, canonical)) orelse return errorResponse(allocator, request, .invalid_worktree, "adopted worktree not found");
     defer row.deinit(self.allocator);
     const response = try workspace.worktreeResponseFromRowAlloc(self.allocator, row, null);
     defer workspace.freeWorktreeResponseFields(self.allocator, response);
@@ -288,7 +309,12 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
     }
     for (rows) |row| {
         if (findGitWorktree(self.allocator, entries, row.path)) |entry| {
-            const branch = entry.branch orelse if (entry.detached) "detached" else row.branch;
+            var branch_owned: ?[]u8 = null;
+            defer if (branch_owned) |value| self.allocator.free(value);
+            const branch = entry.branch orelse blk: {
+                branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, row.id);
+                break :blk branch_owned.?;
+            };
             try database.updateWorktreeGit(row.id, branch, "active");
         } else {
             try database.updateWorktreeState(row.id, "missing", null);

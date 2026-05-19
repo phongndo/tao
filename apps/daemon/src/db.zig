@@ -348,6 +348,14 @@ const insert_worktree_sql =
     \\) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 ;
 
+const reactivate_worktree_sql =
+    \\UPDATE worktrees
+    \\SET workspace_id = ?, title = ?, folder_name = ?, path = ?, branch = ?,
+    \\    base_branch = ?, target_branch = ?, state = ?, order_index = ?,
+    \\    last_active_tab_id = ?, last_error = ?, created_by = ?, archived_at = NULL
+    \\WHERE id = ?;
+;
+
 const update_worktree_state_sql =
     \\UPDATE worktrees
     \\SET state = ?, last_error = ?
@@ -384,6 +392,32 @@ const find_worktree_by_path_sql =
     \\       target_branch, state, order_index, last_active_tab_id, last_error,
     \\       created_by, created_at, updated_at, archived_at
     \\FROM worktrees WHERE path = ? AND archived_at IS NULL LIMIT 1;
+;
+
+const find_archived_worktree_by_path_sql =
+    \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\       target_branch, state, order_index, last_active_tab_id, last_error,
+    \\       created_by, created_at, updated_at, archived_at
+    \\FROM worktrees WHERE path = ? AND archived_at IS NOT NULL
+    \\ORDER BY updated_at DESC LIMIT 1;
+;
+
+const find_archived_worktree_by_folder_sql =
+    \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\       target_branch, state, order_index, last_active_tab_id, last_error,
+    \\       created_by, created_at, updated_at, archived_at
+    \\FROM worktrees
+    \\WHERE workspace_id = ? AND folder_name = ? AND archived_at IS NOT NULL
+    \\ORDER BY updated_at DESC LIMIT 1;
+;
+
+const find_archived_worktree_by_branch_sql =
+    \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
+    \\       target_branch, state, order_index, last_active_tab_id, last_error,
+    \\       created_by, created_at, updated_at, archived_at
+    \\FROM worktrees
+    \\WHERE workspace_id = ? AND branch = ? AND archived_at IS NOT NULL
+    \\ORDER BY updated_at DESC LIMIT 1;
 ;
 
 const list_worktrees_for_workspace_sql =
@@ -960,6 +994,13 @@ pub const Database = struct {
     }
 
     pub fn insertWorktree(self: *Database, record: WorktreeRecord) !void {
+        if (try self.findReusableArchivedWorktree(record)) |archived_row| {
+            var row = archived_row;
+            defer row.deinit(self.allocator);
+            try self.reactivateWorktree(row.id, record);
+            return;
+        }
+
         var stmt = try self.handle.prepareDynamic(insert_worktree_sql);
         defer stmt.deinit();
         try stmt.exec(.{}, .{
@@ -977,6 +1018,50 @@ pub const Database = struct {
             record.last_error,
             record.created_by,
         });
+    }
+
+    fn reactivateWorktree(self: *Database, worktree_id: []const u8, record: WorktreeRecord) !void {
+        var stmt = try self.handle.prepareDynamic(reactivate_worktree_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{
+            record.workspace_id,
+            record.title,
+            record.folder_name,
+            record.path,
+            record.branch,
+            record.base_branch,
+            record.target_branch,
+            record.state,
+            record.order_index,
+            record.last_active_tab_id,
+            record.last_error,
+            record.created_by,
+            worktree_id,
+        });
+    }
+
+    fn findReusableArchivedWorktree(self: *Database, record: WorktreeRecord) !?WorktreeRow {
+        if (try self.findArchivedWorktreeByPath(record.path)) |row| return row;
+        if (try self.findArchivedWorktreeByFolder(record.workspace_id, record.folder_name)) |row| return row;
+        return try self.findArchivedWorktreeByBranch(record.workspace_id, record.branch);
+    }
+
+    fn findArchivedWorktreeByPath(self: *Database, path: []const u8) !?WorktreeRow {
+        var stmt = try self.handle.prepareDynamic(find_archived_worktree_by_path_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorktreeRow, self.allocator, .{}, .{path});
+    }
+
+    fn findArchivedWorktreeByFolder(self: *Database, workspace_id: []const u8, folder_name: []const u8) !?WorktreeRow {
+        var stmt = try self.handle.prepareDynamic(find_archived_worktree_by_folder_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorktreeRow, self.allocator, .{}, .{ workspace_id, folder_name });
+    }
+
+    fn findArchivedWorktreeByBranch(self: *Database, workspace_id: []const u8, branch: []const u8) !?WorktreeRow {
+        var stmt = try self.handle.prepareDynamic(find_archived_worktree_by_branch_sql);
+        defer stmt.deinit();
+        return try stmt.oneAlloc(WorktreeRow, self.allocator, .{}, .{ workspace_id, branch });
     }
 
     pub fn updateWorktreeState(self: *Database, worktree_id: []const u8, state: []const u8, last_error: ?[]const u8) !void {
@@ -1296,7 +1381,8 @@ test "sqlite database records workspaces and worktrees" {
     });
     var recreated = (try database.findWorktreeByPath(std.testing.allocator, "/tmp/luminous-galileo-a13f")).?;
     defer recreated.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("worktree-2", recreated.id);
+    try std.testing.expectEqual(@as(u64, 1), try database.countWorktrees());
+    try std.testing.expectEqualStrings("worktree-1", recreated.id);
     try std.testing.expectEqualStrings("untracked", recreated.state);
 
     try database.archiveWorkspace("workspace-1");
@@ -1318,4 +1404,9 @@ test "sqlite database records workspaces and worktrees" {
         .state = "active",
         .order_index = 3,
     });
+    var reused = (try database.findWorktreeByPath(std.testing.allocator, "/tmp/luminous-galileo-a13f")).?;
+    defer reused.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u64, 1), try database.countWorktrees());
+    try std.testing.expectEqualStrings("worktree-1", reused.id);
+    try std.testing.expectEqualStrings("active", reused.state);
 }
