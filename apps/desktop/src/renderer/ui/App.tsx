@@ -25,7 +25,6 @@ import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-componen
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData } from '@tao/shared/session'
 import {
-  LOCAL_WORKSPACE_ID,
   type Pane,
   type ReorderPlacement,
   selectPaneLayoutData,
@@ -680,6 +679,7 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace,
   onNextWorkspace,
   onNewTab,
+  canCreateTabs,
   onSelectTab,
   onCloseTab,
   onReorderTab,
@@ -695,6 +695,7 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace(): void
   onNextWorkspace(): void
   onNewTab(): void
+  canCreateTabs: boolean
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
@@ -781,7 +782,8 @@ const TabBar = memo(function TabBar({
         type="button"
         className="icon-button"
         aria-label="New tab"
-        title="New tab"
+        title={canCreateTabs ? 'New tab' : 'Add a workspace first'}
+        disabled={!canCreateTabs}
         onClick={onNewTab}
       >
         <FiPlus size={15} />
@@ -1062,7 +1064,8 @@ export function App() {
   const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
-  const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+  const activeWorkspaceKey = activeWorkspaceId
+  const canCreateTerminal = activeWorkspaceKey !== null
   const sidebarSize = useMemo(
     () =>
       normalizeSidebarWidth(
@@ -1093,23 +1096,12 @@ export function App() {
     activeWorkspaceIndex >= 0 && activeWorkspaceIndex < sortedWorkspaces.length - 1
   const workspaceTabs = useMemo(
     () =>
-      layoutLoaded
+      layoutLoaded && activeWorkspaceKey
         ? tabs
             .filter((tab) => tab.workspaceId === activeWorkspaceKey)
             .sort((a, b) => a.order - b.order)
         : [],
     [activeWorkspaceKey, layoutLoaded, tabs],
-  )
-  const mountedTabs = useMemo(
-    () =>
-      layoutLoaded
-        ? [...tabs].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order)
-        : [],
-    [layoutLoaded, tabs],
-  )
-  const activeTab = useMemo(
-    () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
-    [activeTabId, workspaceTabs],
   )
   const contextMetadataById = useMemo(() => {
     const entries: Array<[string, { workspaceId?: string; worktreeId?: string; cwd?: string }]> = []
@@ -1124,6 +1116,19 @@ export function App() {
     }
     return new Map(entries)
   }, [workspaces])
+  const mountedTabs = useMemo(
+    () =>
+      layoutLoaded
+        ? tabs
+            .filter((tab) => contextMetadataById.has(tab.workspaceId))
+            .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order)
+        : [],
+    [contextMetadataById, layoutLoaded, tabs],
+  )
+  const activeTab = useMemo(
+    () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
+    [activeTabId, workspaceTabs],
+  )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
   const archivedTabIds = useMemo(
     () => new Set(panes.filter((pane) => pane.status === 'archived').map((pane) => pane.tabId)),
@@ -1260,6 +1265,7 @@ export function App() {
 
   useEffect(() => {
     if (!layoutLoaded) return
+    if (!activeWorkspaceKey) return
     ensureWorkspaceTab(activeWorkspaceKey)
   }, [activeWorkspaceKey, ensureWorkspaceTab, layoutLoaded])
 
@@ -1317,7 +1323,7 @@ export function App() {
           toggleSidebar()
           break
         case 'new-tab':
-          newTab(activeWorkspaceKey)
+          newTab(activeWorkspaceKey ?? undefined)
           break
         case 'close-tab':
           closeActiveTab()
@@ -1487,7 +1493,8 @@ export function App() {
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onNewTab={() => newTab(activeWorkspaceKey)}
+            onNewTab={() => newTab(activeWorkspaceKey ?? undefined)}
+            canCreateTabs={canCreateTerminal}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
@@ -1526,14 +1533,16 @@ export function App() {
               })
             ) : (
               <div className="pane-grid-empty">
-                <button
-                  type="button"
-                  className="empty-new-tab-button"
-                  aria-label="New tab"
-                  onClick={() => newTab(activeWorkspaceKey)}
-                >
-                  <FiPlus size={15} />
-                </button>
+                {canCreateTerminal ? (
+                  <button
+                    type="button"
+                    className="empty-new-tab-button"
+                    aria-label="New tab"
+                    onClick={() => newTab(activeWorkspaceKey ?? undefined)}
+                  >
+                    <FiPlus size={15} />
+                  </button>
+                ) : null}
               </div>
             )}
           </div>

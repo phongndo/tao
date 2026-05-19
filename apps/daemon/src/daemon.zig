@@ -418,7 +418,7 @@ test "daemon control RPC creates and updates sessions" {
     defer daemon.deinit();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"s1","terminal_id":"t1","cols":80,"rows":24}
+        \\{"id":"1","method":"create","session_id":"s1","terminal_id":"t1","workspace_id":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(created);
 
@@ -434,7 +434,7 @@ test "daemon control RPC creates and updates sessions" {
     try std.testing.expect(std.mem.indexOf(u8, resized, "\"cols\":120") != null);
 
     const recreated = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"2b","method":"create","session_id":"s1","terminal_id":"t1b","cols":90,"rows":25,"cwd":"/tmp"}
+        \\{"id":"2b","method":"create","session_id":"s1","terminal_id":"t1b","workspace_id":"workspace-1","cols":90,"rows":25,"cwd":"/tmp"}
     );
     defer std.testing.allocator.free(recreated);
 
@@ -443,11 +443,28 @@ test "daemon control RPC creates and updates sessions" {
     try std.testing.expectEqual(@as(u16, 90), daemon.sessions.find("s1").?.cols);
 
     const protocol_created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"3","type":"create","sessionId":"s2","terminalId":"t2","cols":80,"rows":24}
+        \\{"id":"3","type":"create","sessionId":"s2","terminalId":"t2","workspaceId":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(protocol_created);
 
     try std.testing.expect(daemon.sessions.find("s2") != null);
+}
+
+test "daemon control RPC rejects session creation without workspace" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"1","method":"create","session_id":"s1","terminal_id":"t1","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(daemon.sessions.find("s1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "missing field: workspace_id") != null);
 }
 
 test "daemon control RPC reports missing sessions" {
@@ -507,7 +524,7 @@ test "daemon persistence privacy toggle avoids session log creation" {
     try std.testing.expect(std.mem.indexOf(u8, configured, "\"persistence_enabled\":false") != null);
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"private-session","terminal_id":"private-terminal","cols":80,"rows":24}
+        \\{"id":"1","method":"create","session_id":"private-session","terminal_id":"private-terminal","workspace_id":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(created);
 
@@ -525,7 +542,7 @@ test "daemon drops failed stream subscribers without blocking pending output" {
     defer daemon.deinit();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"stream-session","terminal_id":"stream-terminal","cols":80,"rows":24}
+        \\{"id":"1","method":"create","session_id":"stream-session","terminal_id":"stream-terminal","workspace_id":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(created);
 
@@ -644,7 +661,7 @@ test "daemon detach checkpoints current-screen snapshot" {
     try daemon.prepareStorage();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"snapshot-session","terminal_id":"snapshot-terminal","cols":24,"rows":4}
+        \\{"id":"1","method":"create","session_id":"snapshot-session","terminal_id":"snapshot-terminal","workspace_id":"workspace-1","cols":24,"rows":4}
     );
     defer std.testing.allocator.free(created);
 

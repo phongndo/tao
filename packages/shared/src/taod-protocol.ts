@@ -37,7 +37,7 @@ export const AttachSessionModeSchema = Schema.Union([
 
 export const CreateSessionInputSchema = Schema.Struct({
   terminalId: NonEmptyString,
-  workspaceId: Schema.optional(NonEmptyString),
+  workspaceId: NonEmptyString,
   worktreeId: Schema.optional(NonEmptyString),
   cols: Schema.Number,
   rows: Schema.Number,

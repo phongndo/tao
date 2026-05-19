@@ -288,6 +288,12 @@ export class TaodPtyBridge {
       worktreeId?: string
     },
   ): Promise<void> {
+    const workspaceId = options.workspaceId
+    if (!workspaceId) {
+      throw new Error('Terminal sessions require a workspace')
+    }
+    const sessionOptions = { argv: options.argv, workspaceId, worktreeId: options.worktreeId }
+
     const existing = this.sessions.get(sessionId)
     if (existing?.stream) {
       // A renderer can request attach for an already-streaming session when a terminal view is
@@ -305,12 +311,12 @@ export class TaodPtyBridge {
     let stream: TaodSessionStream
     let attachMode: AttachSessionMode = 'live'
     if (options.forceCreate) {
-      await this.createShellSession(sessionId, terminalId, cols, rows, cwd, options)
+      await this.createShellSession(sessionId, terminalId, cols, rows, cwd, sessionOptions)
       attachMode = 'fresh'
       ;({ response: attachResponse, stream } = await this.client.attachSession({
         sessionId,
         terminalId,
-        workspaceId: options.workspaceId,
+        workspaceId,
         worktreeId: options.worktreeId,
         cols,
         rows,
@@ -324,17 +330,17 @@ export class TaodPtyBridge {
           cols,
           rows,
           cwd,
-          workspaceId: options.workspaceId,
+          workspaceId,
           worktreeId: options.worktreeId,
         }))
       } catch (error) {
         if (!isNotFoundError(error)) throw error
-        await this.createShellSession(sessionId, terminalId, cols, rows, cwd, options)
+        await this.createShellSession(sessionId, terminalId, cols, rows, cwd, sessionOptions)
         attachMode = 'fresh'
         ;({ response: attachResponse, stream } = await this.client.attachSession({
           sessionId,
           terminalId,
-          workspaceId: options.workspaceId,
+          workspaceId,
           worktreeId: options.worktreeId,
           cols,
           rows,
@@ -378,8 +384,8 @@ export class TaodPtyBridge {
     terminalId: string,
     cols: number,
     rows: number,
-    cwd?: string,
-    options: { argv?: readonly string[]; workspaceId?: string; worktreeId?: string } = {},
+    cwd: string | undefined,
+    options: { argv?: readonly string[]; workspaceId: string; worktreeId?: string },
   ): Promise<TaodControlResponse> {
     return this.client.createSession({
       sessionId,

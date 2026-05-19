@@ -525,6 +525,10 @@ const electronAPI = {
     if (!input || typeof input.terminalId !== 'string' || input.terminalId.length === 0) {
       return Promise.reject(new Error('terminalId is required'))
     }
+    const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : ''
+    if (workspaceId.length === 0) {
+      return Promise.reject(new Error('workspaceId is required'))
+    }
     if (!isValidTerminalSize(input.cols, input.rows)) {
       return Promise.reject(new Error('Session size must use positive integer cols and rows'))
     }
@@ -536,7 +540,7 @@ const electronAPI = {
       type: 'spawn',
       sessionId,
       terminalId: input.terminalId,
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      workspaceId,
       ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
       cols: input.cols,
       rows: input.rows,
@@ -564,12 +568,15 @@ const electronAPI = {
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
     const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : ''
+    if (workspaceId.length === 0) {
+      return Promise.reject(new Error('workspaceId is required'))
+    }
     const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
     queuePtyMessage({
       type: 'attach',
       sessionId,
       ...(terminalId.length > 0 ? { terminalId } : {}),
-      ...(workspaceId.length > 0 ? { workspaceId } : {}),
+      workspaceId,
       ...(worktreeId.length > 0 ? { worktreeId } : {}),
       cols,
       rows,

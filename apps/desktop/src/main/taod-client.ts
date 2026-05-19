@@ -108,7 +108,7 @@ type RawWorkspace = {
 export type TaodCreateSessionInput = {
   readonly sessionId: string
   readonly terminalId: string
-  readonly workspaceId?: string
+  readonly workspaceId: string
   readonly worktreeId?: string
   readonly cols: number
   readonly rows: number
@@ -583,7 +583,7 @@ export class TaodClient {
       id: nextRequestId('create'),
       sessionId: input.sessionId,
       terminalId: input.terminalId,
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      workspaceId: input.workspaceId,
       ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
       cols: input.cols,
       rows: input.rows,

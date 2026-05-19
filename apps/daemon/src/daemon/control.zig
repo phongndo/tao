@@ -27,17 +27,18 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer if (generated_session_id) |value| allocator.free(value);
 
     const terminal_id = request.requestTerminalId() orelse return missingField(allocator, request, "terminal_id");
+    const workspace_id = request.requestWorkspaceId() orelse return missingField(allocator, request, "workspace_id");
     const cols = request.cols orelse return missingField(allocator, request, "cols");
     const rows = request.rows orelse return missingField(allocator, request, "rows");
 
     const created = if (self.sessions.find(session_id)) |existing| blk: {
         existing.transitionTo(.live);
-        try existing.updateCreateMetadata(self.allocator, terminal_id, request.requestWorkspaceId(), request.requestWorktreeId(), request.cwd, cols, rows);
+        try existing.updateCreateMetadata(self.allocator, terminal_id, workspace_id, request.requestWorktreeId(), request.cwd, cols, rows);
         break :blk existing;
     } else try self.sessions.create(.{
         .session_id = session_id,
         .terminal_id = terminal_id,
-        .workspace_id = request.requestWorkspaceId(),
+        .workspace_id = workspace_id,
         .worktree_id = request.requestWorktreeId(),
         .cols = cols,
         .rows = rows,
@@ -87,6 +88,12 @@ pub fn handleAttachLocked(self: anytype, allocator: std.mem.Allocator, request: 
             .error_message = "session is not live",
         });
     }
+    const terminal_id = request.requestTerminalId() orelse attached.terminal_id;
+    const workspace_id = request.requestWorkspaceId() orelse attached.workspace_id orelse return missingField(allocator, request, "workspace_id");
+    const worktree_id = request.requestWorktreeId() orelse attached.worktree_id;
+    const cols = request.cols orelse attached.cols;
+    const rows = request.rows orelse attached.rows;
+    try attached.updateCreateMetadata(self.allocator, terminal_id, workspace_id, worktree_id, request.cwd orelse attached.cwd, cols, rows);
     self.recordTerminalSessionLocked(attached, null);
     const metadata: SessionResponseMetadata = if (restored_result) |result| .{
         .attach_kind = result.attach_kind,

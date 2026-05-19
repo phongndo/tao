@@ -546,8 +546,6 @@ function ensureWorkspaceTabState(state: TaoState, workspaceId: string): Partial<
   }
 }
 
-const initialLocalTab = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
-
 type PersistedTaoState = Schema.Schema.Type<typeof PersistedTaoStateSchema>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -670,6 +668,7 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
   const tabs = reorderAllWorkspaceTabs(
     (persisted.tabs ?? []).flatMap<Tab>((tab) => {
       if (!isNonEmptyString(tab.id) || !isNonEmptyString(tab.workspaceId)) return []
+      if (!contextExists(workspaces, tab.workspaceId)) return []
 
       const layout = decodePersistedLayout(tab.layout, paneIdsByTab.get(tab.id) ?? new Set())
       if (!layout) return []
@@ -732,16 +731,16 @@ function repairPersistedState(state: TaoState): TaoState {
     state.activeWorkspaceId !== null && contextExists(state.workspaces, state.activeWorkspaceId)
   const activeWorkspaceId = hasActiveWorkspace ? state.activeWorkspaceId : null
   const nextState = { ...state, activeWorkspaceId }
-  const targetWorkspaceId = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+
+  if (!activeWorkspaceId) return { ...nextState, activeTabId: null, activePaneId: null }
 
   return {
     ...nextState,
-    ...ensureWorkspaceTabState(nextState, targetWorkspaceId),
+    ...ensureWorkspaceTabState(nextState, activeWorkspaceId),
   }
 }
 
 function contextExists(workspaces: Workspace[], contextId: string): boolean {
-  if (contextId === LOCAL_WORKSPACE_ID) return true
   if (workspaces.some((workspace) => workspace.id === contextId)) return true
   const worktreeId = worktreeIdFromContext(contextId)
   return worktreeId
@@ -772,11 +771,11 @@ function upsertWorktreeInWorkspace(
 export const useTaoStore = create<TaoState>()((set) => ({
   workspaces: [],
   activeWorkspaceId: null,
-  lastActiveLocalTabId: initialLocalTab.tab.id,
-  tabs: [initialLocalTab.tab],
-  activeTabId: initialLocalTab.tab.id,
-  panes: [initialLocalTab.pane],
-  activePaneId: initialLocalTab.pane.id,
+  lastActiveLocalTabId: null,
+  tabs: [],
+  activeTabId: null,
+  panes: [],
+  activePaneId: null,
   sidebarExpanded: true,
   sidebarWidth: 240,
   hydrateLayout: (data) =>
@@ -936,7 +935,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
       const nextState = { ...state, workspaces, tabs, panes, activeWorkspaceId }
       const nextTab = activeWorkspaceId
         ? getPreferredWorkspaceTab(tabs, workspaces, activeWorkspaceId, state.lastActiveLocalTabId)
-        : getPreferredWorkspaceTab(tabs, workspaces, LOCAL_WORKSPACE_ID, state.lastActiveLocalTabId)
+        : null
 
       return {
         workspaces,
@@ -973,12 +972,15 @@ export const useTaoStore = create<TaoState>()((set) => ({
       }
     }),
   ensureWorkspaceTab: (workspaceId) =>
-    set((state) =>
-      ensureWorkspaceTabState(state, workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID),
-    ),
+    set((state) => {
+      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId
+      if (!targetWorkspaceId || !contextExists(state.workspaces, targetWorkspaceId)) return {}
+      return ensureWorkspaceTabState(state, targetWorkspaceId)
+    }),
   newTab: (workspaceId) =>
     set((state) => {
-      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId
+      if (!targetWorkspaceId || !contextExists(state.workspaces, targetWorkspaceId)) return {}
       const order = getWorkspaceTabs(state.tabs, targetWorkspaceId).length
       const { tab, pane } = createTerminalTab(targetWorkspaceId, order)
 
@@ -1010,7 +1012,8 @@ export const useTaoStore = create<TaoState>()((set) => ({
     }),
   selectTabByIndex: (index) =>
     set((state) => {
-      const workspaceId = state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      const workspaceId = state.activeWorkspaceId
+      if (!workspaceId) return {}
       const tab = getWorkspaceTabs(state.tabs, workspaceId)[index]
       if (!tab) return {}
 
