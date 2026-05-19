@@ -103,6 +103,7 @@ export function TerminalPane({
   const onArchiveStateChangeRef = useRef(onArchiveStateChange)
   const cwdRef = useRef(cwd)
   const terminalReadyRef = useRef(false)
+  const lastOpenedSearchTokenRef = useRef(0)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
   const [isArchived, setIsArchived] = useState(false)
   const [resumeNotice, setResumeNotice] = useState<ResumeNotice | null>(null)
@@ -222,7 +223,10 @@ export function TerminalPane({
   }, [focusToken, isActive, isArchived])
 
   useEffect(() => {
-    if (searchToken <= 0 || !isActive || isArchived) return
+    if (searchToken <= 0 || searchToken <= lastOpenedSearchTokenRef.current) return
+    if (!isActive || isArchived) return
+
+    lastOpenedSearchTokenRef.current = searchToken
     setSearchVisible(true)
   }, [isActive, isArchived, searchToken])
 
