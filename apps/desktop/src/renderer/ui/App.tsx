@@ -385,6 +385,23 @@ function WorkspaceItem({
     }
   }
 
+  async function handleRemoveWorkspace() {
+    try {
+      const response = await window.electronAPI.removeWorkspace(workspace.id)
+      if (!response.ok) {
+        setWorktreeError(response.error.message)
+        console.warn('[workspace] Failed to remove workspace:', response.error.message)
+        return
+      }
+      removeWorkspace(workspace.id)
+      setWorktreeError(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWorktreeError(message)
+      console.warn('[workspace] Failed to remove workspace:', error)
+    }
+  }
+
   return (
     <div className="workspace-group">
       <div
@@ -448,7 +465,7 @@ function WorkspaceItem({
           title="Remove workspace"
           onClick={(event) => {
             event.stopPropagation()
-            removeWorkspace(workspace.id)
+            void handleRemoveWorkspace()
           }}
         >
           <FiTrash2 size={13} />

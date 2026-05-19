@@ -463,6 +463,15 @@ ipcMain.handle('workspace:refresh', async (event, workspaceId: unknown) => {
   return response
 })
 
+ipcMain.handle('workspace:remove', async (event, workspaceId: unknown) => {
+  const id = typeof workspaceId === 'string' ? workspaceId : ''
+  const response = await runTaodWorkspaceRequest<void>(event, (client) =>
+    client.removeWorkspace(id),
+  )
+  if (response.ok) ensureGitStateWatcher().untrackWorkspace(id)
+  return response
+})
+
 ipcMain.handle('worktree:create', async (event, input: unknown) => {
   const data = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
   const workspaceId = typeof data.workspaceId === 'string' ? data.workspaceId : ''

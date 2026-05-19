@@ -107,7 +107,7 @@ export class GitStateWatcher {
   trackWorkspace(workspace: WorkspaceRecord): void {
     const gitCommonDir = resolveGitCommonDir(workspace)
     if (!gitCommonDir) {
-      this.removeWorkspace(workspace.id)
+      this.untrackWorkspace(workspace.id)
       return
     }
 
@@ -143,7 +143,7 @@ export class GitStateWatcher {
     this.queueRefresh(entry)
   }
 
-  private removeWorkspace(workspaceId: string): void {
+  untrackWorkspace(workspaceId: string): void {
     const entry = this.entries.get(workspaceId)
     if (!entry) return
     this.disposeEntry(entry)

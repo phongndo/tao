@@ -821,6 +821,12 @@ const electronAPI = {
     ) as Promise<WorkspaceRecordResponse>
   },
 
+  removeWorkspace(workspaceId: string): Promise<WorkspaceIpcResponse<void>> {
+    return invokeWorkspaceDaemon('workspace:remove', workspaceId) as Promise<
+      WorkspaceIpcResponse<void>
+    >
+  },
+
   createWorktree(input: {
     workspaceId: string
     baseBranch?: string

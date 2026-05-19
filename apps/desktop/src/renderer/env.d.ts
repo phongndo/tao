@@ -79,6 +79,7 @@ export interface ElectronAPI {
     orderIndex?: number
   }): Promise<WorkspaceRecordResponse>
   refreshWorkspace(workspaceId: string): Promise<WorkspaceRecordResponse>
+  removeWorkspace(workspaceId: string): Promise<WorkspaceIpcResponse<void>>
   createWorktree(input: {
     workspaceId: string
     baseBranch?: string
