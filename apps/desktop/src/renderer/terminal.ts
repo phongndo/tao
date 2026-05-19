@@ -29,6 +29,7 @@ import type {
   CurrentScreenSnapshotFrame,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
+import { createBatchedTerminalWriter } from './terminal-output-writer'
 
 type CreateTerminalOptions = {
   readonly terminalId?: string
@@ -72,7 +73,6 @@ const terminalFontFamily =
 
 const SIDEBAR_RESIZE_FIT_DELAY_MS = 80
 const STARTUP_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024
-const OUTPUT_BATCH_MAX_CHARS = 256 * 1024
 const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
 const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 const warnedSnapshotBackends = new Set<string>()
@@ -430,59 +430,6 @@ function binaryStringToBytes(data: string): Uint8Array {
   return bytes
 }
 
-function createBatchedTerminalWriter(term: Terminal): {
-  write(data: string): void
-  flush(): void
-  dispose(): void
-} {
-  let chunks: string[] = []
-  let queuedChars = 0
-  let flushTimer: number | null = null
-  let disposed = false
-
-  function clearFlushTimer() {
-    if (flushTimer === null) return
-    window.clearTimeout(flushTimer)
-    flushTimer = null
-  }
-
-  function flush() {
-    clearFlushTimer()
-    if (disposed || chunks.length === 0) return
-
-    const data = chunks.join('')
-    chunks = []
-    queuedChars = 0
-    term.write(data)
-  }
-
-  function scheduleFlush() {
-    if (flushTimer !== null) return
-    flushTimer = window.setTimeout(flush, 0)
-  }
-
-  return {
-    write(data: string) {
-      if (disposed || data.length === 0) return
-      chunks.push(data)
-      queuedChars += data.length
-      if (queuedChars >= OUTPUT_BATCH_MAX_CHARS) {
-        flush()
-        return
-      }
-      scheduleFlush()
-    },
-    flush,
-    dispose() {
-      flush()
-      disposed = true
-      clearFlushTimer()
-      chunks = []
-      queuedChars = 0
-    },
-  }
-}
-
 export function setTerminalCursorVisible(term: Terminal, visible: boolean) {
   term.options = {
     cursorInactiveStyle: visible ? 'outline' : 'none',
@@ -587,7 +534,7 @@ export async function createTerminal(
   }
 
   async function writePtyDataAndWait(data: string): Promise<void> {
-    outputWriter.flush()
+    await outputWriter.drain()
     await writeAndRefresh(openedTerm, data)
   }
 
