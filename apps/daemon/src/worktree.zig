@@ -170,12 +170,15 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     if (std.mem.eql(u8, workspace_row.root_path, row.path)) return errorResponse(allocator, request, .invalid_path, "cannot remove workspace root as worktree");
 
-    const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch null;
-    defer if (entries) |items| {
-        for (items) |*entry| entry.deinit(self.allocator);
-        self.allocator.free(items);
+    const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
+        else => return err,
     };
-    const git_entry = if (entries) |items| findGitWorktree(self.allocator, items, row.path) else null;
+    defer {
+        for (entries) |*entry| entry.deinit(self.allocator);
+        self.allocator.free(entries);
+    }
+    const git_entry = findGitWorktree(self.allocator, entries, row.path);
     if (!pathExists(row.path) or git_entry == null or (git_entry != null and git_entry.?.prunable)) {
         pruneGitWorktrees(self.allocator, workspace_row.root_path);
         try database.archiveWorktree(row.id);

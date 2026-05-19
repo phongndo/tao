@@ -134,7 +134,10 @@ pub fn currentBranchAlloc(allocator: std.mem.Allocator, path: []const u8) !?[]u8
     }
 
     const hash_args = [_][]const u8{ "rev-parse", "--short", "HEAD" };
-    if (runGitAlloc(allocator, path, &hash_args)) |hash| return hash else |_| return null;
+    if (runGitAlloc(allocator, path, &hash_args)) |hash| return hash else |err| switch (err) {
+        error.GitFailed => return null,
+        else => return err,
+    }
 }
 
 pub fn defaultBranchAlloc(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {

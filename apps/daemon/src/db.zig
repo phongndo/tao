@@ -117,12 +117,13 @@ pub const migration_004_workspace_worktrees =
     \\    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     \\    title TEXT,
     \\    folder_name TEXT NOT NULL,
-    \\    path TEXT NOT NULL UNIQUE,
+    \\    path TEXT NOT NULL,
     \\    branch TEXT NOT NULL,
     \\    base_branch TEXT,
     \\    target_branch TEXT,
     \\    state TEXT NOT NULL CHECK(state IN (
-    \\        'creating', 'active', 'missing', 'removing', 'archived', 'error'
+    \\        'creating', 'active', 'missing', 'removing', 'archived', 'error',
+    \\        'untracked'
     \\    )),
     \\    order_index INTEGER NOT NULL DEFAULT 0,
     \\    last_active_tab_id TEXT,
@@ -132,7 +133,8 @@ pub const migration_004_workspace_worktrees =
     \\    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     \\    archived_at TEXT
     \\) STRICT;
-    \\CREATE UNIQUE INDEX idx_worktrees_workspace_folder ON worktrees(workspace_id, folder_name);
+    \\CREATE UNIQUE INDEX idx_worktrees_path ON worktrees(path) WHERE archived_at IS NULL;
+    \\CREATE UNIQUE INDEX idx_worktrees_workspace_folder ON worktrees(workspace_id, folder_name) WHERE archived_at IS NULL;
     \\CREATE INDEX idx_worktrees_workspace_order ON worktrees(workspace_id, order_index);
     \\CREATE INDEX idx_worktrees_state ON worktrees(state);
     \\CREATE INDEX idx_worktrees_branch ON worktrees(workspace_id, branch);
@@ -365,7 +367,7 @@ const find_worktree_by_path_sql =
     \\SELECT id, workspace_id, title, folder_name, path, branch, base_branch,
     \\       target_branch, state, order_index, last_active_tab_id, last_error,
     \\       created_by, created_at, updated_at, archived_at
-    \\FROM worktrees WHERE path = ? LIMIT 1;
+    \\FROM worktrees WHERE path = ? AND archived_at IS NULL LIMIT 1;
 ;
 
 const list_worktrees_for_workspace_sql =
@@ -382,7 +384,7 @@ const count_worktrees_sql =
 ;
 
 const worktree_path_exists_sql =
-    \\SELECT 1 FROM worktrees WHERE path = ? LIMIT 1;
+    \\SELECT 1 FROM worktrees WHERE path = ? AND archived_at IS NULL LIMIT 1;
 ;
 
 const worktree_branch_exists_sql =
@@ -390,7 +392,7 @@ const worktree_branch_exists_sql =
 ;
 
 const worktree_folder_exists_sql =
-    \\SELECT 1 FROM worktrees WHERE workspace_id = ? AND folder_name = ? LIMIT 1;
+    \\SELECT 1 FROM worktrees WHERE workspace_id = ? AND folder_name = ? AND archived_at IS NULL LIMIT 1;
 ;
 
 const next_worktree_order_sql =
@@ -1249,4 +1251,21 @@ test "sqlite database records workspaces and worktrees" {
     const remaining = try database.listWorktreesForWorkspace(std.testing.allocator, "workspace-1");
     defer std.testing.allocator.free(remaining);
     try std.testing.expectEqual(@as(usize, 0), remaining.len);
+    try std.testing.expect(!try database.worktreePathExists("/tmp/luminous-galileo-a13f"));
+    try std.testing.expect(!try database.worktreeFolderExists("workspace-1", "luminous-galileo-a13f"));
+
+    try database.insertWorktree(.{
+        .id = "worktree-2",
+        .workspace_id = "workspace-1",
+        .title = "Recreated worktree",
+        .folder_name = "luminous-galileo-a13f",
+        .path = "/tmp/luminous-galileo-a13f",
+        .branch = "luminous-galileo-a13f",
+        .state = "untracked",
+        .order_index = 1,
+    });
+    var recreated = (try database.findWorktreeByPath(std.testing.allocator, "/tmp/luminous-galileo-a13f")).?;
+    defer recreated.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("worktree-2", recreated.id);
+    try std.testing.expectEqualStrings("untracked", recreated.state);
 }

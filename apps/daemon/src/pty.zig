@@ -78,8 +78,9 @@ pub const Driver = struct {
         if (options.argv.len == 0) return error.EmptyArgv;
 
         var argv_storage = try self.allocator.alloc([:0]u8, options.argv.len);
+        var argv_count: usize = 0;
         defer {
-            for (argv_storage) |arg| self.allocator.free(arg);
+            for (argv_storage[0..argv_count]) |arg| self.allocator.free(arg);
             self.allocator.free(argv_storage);
         }
 
@@ -87,19 +88,22 @@ pub const Driver = struct {
         defer self.allocator.free(argv_c);
 
         var env_name_storage = try self.allocator.alloc([:0]u8, options.env.len);
+        var env_name_count: usize = 0;
         defer {
-            for (env_name_storage) |name| self.allocator.free(name);
+            for (env_name_storage[0..env_name_count]) |name| self.allocator.free(name);
             self.allocator.free(env_name_storage);
         }
         var env_value_storage = try self.allocator.alloc([:0]u8, options.env.len);
+        var env_value_count: usize = 0;
         defer {
-            for (env_value_storage) |value| self.allocator.free(value);
+            for (env_value_storage[0..env_value_count]) |value| self.allocator.free(value);
             self.allocator.free(env_value_storage);
         }
 
         for (options.argv, 0..) |arg, index| {
             if (arg.len == 0) return error.EmptyArgv;
             argv_storage[index] = try self.allocator.dupeZ(u8, arg);
+            argv_count += 1;
             argv_c[index] = argv_storage[index].ptr;
         }
         argv_c[options.argv.len] = null;
@@ -107,7 +111,9 @@ pub const Driver = struct {
         for (options.env, 0..) |pair, index| {
             if (pair.name.len == 0) return error.SpawnFailed;
             env_name_storage[index] = try self.allocator.dupeZ(u8, pair.name);
+            env_name_count += 1;
             env_value_storage[index] = try self.allocator.dupeZ(u8, pair.value);
+            env_value_count += 1;
         }
 
         const cwd_z = if (options.cwd) |cwd| try self.allocator.dupeZ(u8, cwd) else null;
@@ -128,7 +134,7 @@ pub const Driver = struct {
             if (cwd_z) |cwd| {
                 if (std.c.chdir(cwd.ptr) != 0) std.c._exit(125);
             }
-            for (env_name_storage, env_value_storage) |name, value| {
+            for (env_name_storage[0..env_name_count], env_value_storage[0..env_value_count]) |name, value| {
                 if (setenv(name.ptr, value.ptr, 1) != 0) std.c._exit(126);
             }
             _ = execvp(argv_c[0].?, @ptrCast(argv_c.ptr));
