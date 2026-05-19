@@ -325,6 +325,10 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
     }
     for (rows) |row| {
         if (findGitWorktree(self.allocator, entries, row.path)) |entry| {
+            if (entry.prunable or !pathExists(row.path)) {
+                try database.archiveWorktree(row.id);
+                continue;
+            }
             var branch_owned: ?[]u8 = null;
             defer if (branch_owned) |value| self.allocator.free(value);
             const branch = entry.branch orelse blk: {
