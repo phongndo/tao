@@ -900,6 +900,13 @@ body {
   color: #6f7380;
 }
 
+.terminal-search-panel input:focus,
+.terminal-search-panel input:focus-visible {
+  border-radius: 3px;
+  outline: 1px solid rgb(172 161 207 / 70%);
+  outline-offset: 1px;
+}
+
 .terminal-search-count {
   min-width: 34px;
   color: #9699a8;
@@ -921,12 +928,20 @@ body {
   border-radius: 5px;
   background: transparent;
   color: #c9c7cd;
-  cursor: default;
+  cursor: pointer;
 }
 
 .terminal-search-panel button:hover {
   background: rgb(172 161 207 / 14%);
   color: #ffffff;
+}
+
+.terminal-search-panel button:focus,
+.terminal-search-panel button:focus-visible {
+  background: rgb(172 161 207 / 14%);
+  color: #ffffff;
+  outline: 1px solid rgb(172 161 207 / 70%);
+  outline-offset: 1px;
 }
 
 /* ── xterm.js renderer layers ── */

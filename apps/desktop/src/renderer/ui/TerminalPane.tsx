@@ -234,7 +234,16 @@ export function TerminalPane({
       searchInputRef.current?.select()
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [searchVisible])
+  }, [searchToken, searchVisible])
+
+  useEffect(() => {
+    if (!isArchived) return
+
+    const terminal = terminalRef.current
+    if (terminal) clearTerminalSearch(terminal)
+    setSearchVisible(false)
+    setSearchResult({ resultIndex: -1, resultCount: 0 })
+  }, [isArchived])
 
   function runSearch(query: string, direction: 'next' | 'previous', incremental = false) {
     const terminal = terminalRef.current
@@ -268,7 +277,7 @@ export function TerminalPane({
       }
     >
       <div className="terminal-surface" ref={surfaceRef} />
-      {searchVisible && !terminalError ? (
+      {searchVisible && !isArchived && !terminalError ? (
         <form
           className="terminal-search-panel"
           onPointerDown={(event) => event.stopPropagation()}

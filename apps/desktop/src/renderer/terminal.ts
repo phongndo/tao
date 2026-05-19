@@ -168,7 +168,7 @@ function fitTerminalToContainer(container: HTMLElement, term: Terminal): boolean
   const rows = Math.max(MIN_TERMINAL_ROWS, dimensions.rows)
   if (cols === term.cols && rows === term.rows) return false
 
-  fitAddon.fit()
+  term.resize(cols, rows)
   return true
 }
 
