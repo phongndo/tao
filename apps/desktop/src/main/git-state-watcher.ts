@@ -4,6 +4,8 @@ import type { WorkspaceRecord } from '@tao/shared/workspace'
 import type { TaodClient } from './taod-client'
 
 const GIT_REFRESH_DEBOUNCE_MS = 75
+const MAX_WATCHED_GIT_DIRS = 512
+const MAX_WATCHED_GIT_DEPTH = 32
 
 type WatchEntry = {
   record: WorkspaceRecord
@@ -54,14 +56,15 @@ function existingPath(path: string): string | null {
   }
 }
 
-function appendExistingDirectory(paths: Set<string>, path: string): void {
+function appendExistingDirectory(paths: Set<string>, path: string, depth = 0): void {
+  if (depth > MAX_WATCHED_GIT_DEPTH || paths.size >= MAX_WATCHED_GIT_DIRS) return
   const existing = existingPath(path)
   if (!existing) return
   try {
     for (const entry of readdirSync(existing, { withFileTypes: true })) {
-      if (entry.isDirectory()) appendExistingDirectory(paths, join(existing, entry.name))
+      if (entry.isDirectory()) appendExistingDirectory(paths, join(existing, entry.name), depth + 1)
     }
-    paths.add(existing)
+    if (paths.size < MAX_WATCHED_GIT_DIRS) paths.add(existing)
   } catch {
     // Git may rewrite metadata while we are enumerating. The parent watcher will
     // fire again and re-arm watchers after the next refresh.

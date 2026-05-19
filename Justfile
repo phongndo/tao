@@ -30,4 +30,10 @@ electron:
 [unix]
 dev:
     pkill -TERM -x taod || true
+    for _ in {1..20}; do pgrep -x taod >/dev/null || break; sleep 0.1; done
+    if pgrep -x taod >/dev/null; then echo "taod did not stop after TERM" >&2; exit 1; fi
     pnpm dev
+
+[windows]
+dev:
+    $ErrorActionPreference = 'Stop'; Get-Process -Name taod -ErrorAction SilentlyContinue | Stop-Process -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 20 -and (Get-Process -Name taod -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 100 }; if (Get-Process -Name taod -ErrorAction SilentlyContinue) { throw 'taod did not stop after stop request' }; pnpm dev

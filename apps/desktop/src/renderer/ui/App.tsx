@@ -358,6 +358,7 @@ function WorkspaceItem({
       }
       setIsExpanded(true)
       upsertWorktree(workspaceResponse.value.id, response.value)
+      selectWorktree(response.value.id)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       setWorktreeError(message)
@@ -376,7 +377,10 @@ function WorkspaceItem({
         return
       }
       removeWorktree(workspace.id, worktreeId)
+      setWorktreeError(null)
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWorktreeError(message)
       console.warn('[worktree] Failed to remove worktree:', error)
     }
   }
@@ -1046,7 +1050,14 @@ export function App() {
     [workspaces],
   )
   const activeWorkspace = useMemo(
-    () => sortedWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
+    () =>
+      sortedWorkspaces.find(
+        (workspace) =>
+          workspace.id === activeWorkspaceId ||
+          (workspace.worktrees ?? []).some(
+            (worktree) => worktreeContextId(worktree.id) === activeWorkspaceId,
+          ),
+      ) ?? null,
     [activeWorkspaceId, sortedWorkspaces],
   )
   const activeWorkspaceIndex = activeWorkspace

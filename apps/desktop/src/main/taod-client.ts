@@ -16,7 +16,12 @@ import {
   TaodStreamFrameParser,
   type TaodParsedStreamFrame,
 } from './taod-stream'
-import type { GitStatus, WorkspaceRecord, WorkspaceWorktree } from '@tao/shared/workspace'
+import type {
+  GitStatus,
+  WorkspaceRecord,
+  WorkspaceWorktree,
+  WorkspaceWorktreeState,
+} from '@tao/shared/workspace'
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 500
 const DEFAULT_START_TIMEOUT_MS = 3000
@@ -202,6 +207,20 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
 
+const VALID_WORKTREE_STATES = new Set<WorkspaceWorktreeState>([
+  'creating',
+  'active',
+  'missing',
+  'removing',
+  'archived',
+  'error',
+  'untracked',
+])
+
+function isWorkspaceWorktreeState(value: string): value is WorkspaceWorktreeState {
+  return VALID_WORKTREE_STATES.has(value as WorkspaceWorktreeState)
+}
+
 function normalizeGitStatus(value: unknown): GitStatus | undefined {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as RawGitStatus
@@ -223,6 +242,9 @@ function normalizeWorktree(value: unknown): WorkspaceWorktree {
   if (!id || !workspaceId || !folderName || !path || !branch || !state) {
     throw new Error('Invalid taod worktree')
   }
+  if (!isWorkspaceWorktreeState(state)) {
+    throw new Error('Invalid taod worktree')
+  }
 
   return {
     id,
@@ -233,7 +255,7 @@ function normalizeWorktree(value: unknown): WorkspaceWorktree {
     branch,
     baseBranch: optionalNullableString(raw.base_branch ?? raw.baseBranch),
     targetBranch: optionalNullableString(raw.target_branch ?? raw.targetBranch),
-    state: state as WorkspaceWorktree['state'],
+    state,
     orderIndex: numberOr(raw.order_index ?? raw.orderIndex, 0),
     lastActiveTabId: optionalNullableString(raw.last_active_tab_id ?? raw.lastActiveTabId),
     lastError: optionalNullableString(raw.last_error ?? raw.lastError),

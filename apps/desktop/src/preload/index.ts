@@ -765,7 +765,11 @@ const electronAPI = {
   onWorkspaceChanged(callback: WorkspaceChangedCallback): () => void {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       const decoded = Schema.decodeUnknownOption(WorkspaceRecordSchema)(payload)
-      if (decoded._tag === 'Some') callback(decoded.value)
+      if (decoded._tag === 'Some') {
+        callback(decoded.value)
+      } else {
+        console.debug('[preload] Invalid workspace:changed payload received', payload)
+      }
     }
     ipcRenderer.on('workspace:changed', listener)
     return () => {

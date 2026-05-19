@@ -496,8 +496,9 @@ ipcMain.handle('worktree:remove', async (event, input: unknown) => {
     try {
       const worktree = await client.refreshWorktree(worktreeId)
       workspaceId = worktree.workspaceId
-    } catch {
+    } catch (error) {
       // The worktree may already be missing; removal below is still authoritative.
+      console.warn(`[worktree:remove] Failed to refresh worktree ${worktreeId}:`, error)
     }
     return client.removeWorktree({
       worktreeId,

@@ -852,6 +852,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
         ...workspace,
         order: existingWorkspace.order,
         lastActiveTabId: existingWorkspace.lastActiveTabId ?? workspace.lastActiveTabId,
+        worktrees: workspace.worktrees ?? existingWorkspace.worktrees,
       }
       const workspaceIdChanged = oldWorkspaceId !== nextWorkspace.id
 
