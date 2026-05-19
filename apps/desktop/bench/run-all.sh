@@ -19,32 +19,37 @@ echo -e "${BOLD}╚════════════════════�
 echo ""
 
 # 1. taod daemon benchmark (Zig vs node-pty comparison)
-echo -e "${CYAN}▶ Bench 1/6: taod daemon vs node-pty${NC}"
+echo -e "${CYAN}▶ Bench 1/7: taod daemon vs node-pty${NC}"
 bash "$SCRIPT_DIR/taod-vs-node-pty.sh" || echo "  (taod benchmark skipped)"
 
 # 2. Latency benchmark (via taod)
 echo ""
-echo -e "${CYAN}▶ Bench 2/6: Input Latency (taod)${NC}"
+echo -e "${CYAN}▶ Bench 2/7: Input Latency (taod)${NC}"
 npx tsx "$SCRIPT_DIR/latency-taod.ts" || echo "  (latency benchmark skipped)"
 
 # 3. VT Parser benchmark (Node.js, headless)
 echo ""
-echo -e "${CYAN}▶ Bench 3/6: VT Parser Throughput${NC}"
+echo -e "${CYAN}▶ Bench 3/7: VT Parser Throughput${NC}"
 npx tsx "$SCRIPT_DIR/benchmark.ts" || echo "  (parser benchmark skipped)"
 
-# 4. Cross-terminal throughput
+# 4. xterm.js renderer path
 echo ""
-echo -e "${CYAN}▶ Bench 4/6: Cross-Terminal Throughput${NC}"
+echo -e "${CYAN}▶ Bench 4/7: xterm.js DOM vs WebGL Renderer${NC}"
+npx tsx "$SCRIPT_DIR/run-electron.ts" "$SCRIPT_DIR/xterm-webgl-benchmark.ts" || echo "  (renderer benchmark skipped)"
+
+# 5. Cross-terminal throughput
+echo ""
+echo -e "${CYAN}▶ Bench 5/7: Cross-Terminal Throughput${NC}"
 bash "$SCRIPT_DIR/cross-terminal.sh" || echo "  (cross-terminal benchmark skipped)"
 
-# 5. Startup time
+# 6. Startup time
 echo ""
-echo -e "${CYAN}▶ Bench 5/6: Startup Time${NC}"
+echo -e "${CYAN}▶ Bench 6/7: Startup Time${NC}"
 bash "$SCRIPT_DIR/startup-bench.sh" || echo "  (startup benchmark skipped)"
 
-# 6. Electron IPC transport
+# 7. Electron IPC transport
 echo ""
-echo -e "${CYAN}▶ Bench 6/6: Electron IPC Transport${NC}"
+echo -e "${CYAN}▶ Bench 7/7: Electron IPC Transport${NC}"
 npx tsx "$SCRIPT_DIR/run-electron.ts" "$SCRIPT_DIR/ipc-benchmark.ts" || echo "  (IPC benchmark skipped)"
 
 echo ""
@@ -53,4 +58,4 @@ echo ""
 echo "Results:"
 echo "  bench/results.txt          — cross-terminal throughput"
 echo "  bench/startup-results.txt  — startup time"
-echo "  (parser + latency + IPC results printed to stdout above)"
+echo "  (parser + renderer + latency + IPC results printed to stdout above)"

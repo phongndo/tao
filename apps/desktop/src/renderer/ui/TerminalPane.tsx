@@ -1,7 +1,15 @@
-import type { Terminal } from 'ghostty-web'
+import type { Terminal } from '@xterm/xterm'
 import { useEffect, useRef, useState } from 'react'
+import { FiChevronDown, FiChevronUp, FiSearch, FiX } from 'react-icons/fi'
 import type { AttachSessionResult } from '@tao/shared/taod-protocol'
-import { createTerminal, forceTerminalRender, setTerminalCursorVisible } from '../terminal'
+import {
+  clearTerminalSearch,
+  createTerminal,
+  forceTerminalRender,
+  onTerminalSearchResults,
+  searchTerminalBuffer,
+  setTerminalCursorVisible,
+} from '../terminal'
 
 type TerminalError = {
   title?: string
@@ -73,6 +81,7 @@ export function TerminalPane({
   cwd,
   isActive,
   focusToken,
+  searchToken,
   onTitleChange,
   onRestartSession,
   onArchiveStateChange,
@@ -82,19 +91,25 @@ export function TerminalPane({
   cwd?: string
   isActive: boolean
   focusToken: number
+  searchToken: number
   onTitleChange?(title: string): void
   onRestartSession?(): void
   onArchiveStateChange?(archived: boolean): void
 }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const onTitleChangeRef = useRef(onTitleChange)
   const onArchiveStateChangeRef = useRef(onArchiveStateChange)
   const cwdRef = useRef(cwd)
   const terminalReadyRef = useRef(false)
+  const lastOpenedSearchTokenRef = useRef(0)
   const [terminalError, setTerminalError] = useState<TerminalError | null>(null)
   const [isArchived, setIsArchived] = useState(false)
   const [resumeNotice, setResumeNotice] = useState<ResumeNotice | null>(null)
+  const [searchVisible, setSearchVisible] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResult, setSearchResult] = useState({ resultIndex: -1, resultCount: 0 })
 
   useEffect(() => {
     onTitleChangeRef.current = onTitleChange
@@ -111,6 +126,7 @@ export function TerminalPane({
   useEffect(() => {
     let disposed = false
     let cleanupWindowRender: (() => void) | null = null
+    let searchResultsSubscription: { dispose(): void } | null = null
 
     async function mountTerminal() {
       const surface = surfaceRef.current
@@ -150,6 +166,9 @@ export function TerminalPane({
 
         terminalRef.current = terminal
         terminalReadyRef.current = true
+        searchResultsSubscription = onTerminalSearchResults(terminal, (result) => {
+          if (!disposed) setSearchResult(result)
+        })
         setTerminalCursorVisible(terminal, isActive && !isArchived)
         if (isActive && !isArchived) {
           terminal.focus()
@@ -181,6 +200,7 @@ export function TerminalPane({
     return () => {
       disposed = true
       cleanupWindowRender?.()
+      searchResultsSubscription?.dispose()
       terminalReadyRef.current = false
       terminalRef.current?.dispose()
       terminalRef.current = null
@@ -202,6 +222,58 @@ export function TerminalPane({
     }
   }, [focusToken, isActive, isArchived])
 
+  useEffect(() => {
+    if (searchToken <= 0 || searchToken <= lastOpenedSearchTokenRef.current) return
+    if (!isActive || isArchived) return
+
+    lastOpenedSearchTokenRef.current = searchToken
+    setSearchVisible(true)
+  }, [isActive, isArchived, searchToken])
+
+  useEffect(() => {
+    if (!searchVisible) return
+
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [searchToken, searchVisible])
+
+  useEffect(() => {
+    if (!isArchived) return
+
+    const terminal = terminalRef.current
+    if (terminal) clearTerminalSearch(terminal)
+    setSearchVisible(false)
+    setSearchResult({ resultIndex: -1, resultCount: 0 })
+  }, [isArchived])
+
+  function runSearch(query: string, direction: 'next' | 'previous', incremental = false) {
+    const terminal = terminalRef.current
+    if (!terminal) return
+
+    if (query.length === 0) {
+      clearTerminalSearch(terminal)
+      setSearchResult({ resultIndex: -1, resultCount: 0 })
+      return
+    }
+
+    searchTerminalBuffer(terminal, query, direction, incremental)
+  }
+
+  function closeSearch() {
+    const terminal = terminalRef.current
+    if (terminal) {
+      clearTerminalSearch(terminal)
+      if (isActive && !isArchived) terminal.focus()
+    }
+    setSearchVisible(false)
+    setSearchResult({ resultIndex: -1, resultCount: 0 })
+  }
+
+  const activeSearchIndex = searchResult.resultIndex >= 0 ? searchResult.resultIndex + 1 : 0
+
   return (
     <div
       className={
@@ -209,6 +281,64 @@ export function TerminalPane({
       }
     >
       <div className="terminal-surface" ref={surfaceRef} />
+      {searchVisible && !isArchived && !terminalError ? (
+        <form
+          className="terminal-search-panel"
+          onPointerDown={(event) => event.stopPropagation()}
+          onSubmit={(event) => {
+            event.preventDefault()
+            runSearch(searchQuery, 'next')
+          }}
+          onKeyDown={(event) => {
+            event.stopPropagation()
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              closeSearch()
+            }
+          }}
+        >
+          <FiSearch size={13} aria-hidden="true" />
+          <input
+            ref={searchInputRef}
+            aria-label="Find in terminal"
+            value={searchQuery}
+            placeholder="Find"
+            spellCheck={false}
+            onChange={(event) => {
+              const nextQuery = event.target.value
+              setSearchQuery(nextQuery)
+              runSearch(nextQuery, 'next', true)
+            }}
+          />
+          <span className="terminal-search-count" aria-live="polite">
+            {searchQuery.length > 0 ? `${activeSearchIndex}/${searchResult.resultCount}` : ''}
+          </span>
+          <button
+            type="button"
+            aria-label="Previous match"
+            title="Previous match"
+            onClick={() => runSearch(searchQuery, 'previous')}
+          >
+            <FiChevronUp size={14} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next match"
+            title="Next match"
+            onClick={() => runSearch(searchQuery, 'next')}
+          >
+            <FiChevronDown size={14} />
+          </button>
+          <button
+            type="button"
+            aria-label="Close search"
+            title="Close search"
+            onClick={closeSearch}
+          >
+            <FiX size={14} />
+          </button>
+        </form>
+      ) : null}
       {terminalError ? (
         <div className="terminal-error">
           {terminalError.title ? <h2>{terminalError.title}</h2> : null}

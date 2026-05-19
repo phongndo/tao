@@ -11,3 +11,4 @@ export type AppCommand =
   | { type: 'switch-tab'; index: number }
   | { type: 'focus-pane'; direction: PaneFocusDirection }
   | { type: 'focus-terminal' }
+  | { type: 'search-terminal' }

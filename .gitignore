@@ -13,6 +13,7 @@ zls.log
 # nix
 result
 bench/data/
+apps/desktop/.bench-cache/
 
 apps/desktop/bench/data/
 apps/daemon/zig-pkg/
