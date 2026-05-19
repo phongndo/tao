@@ -13,7 +13,6 @@
  *   - Renderer process limit = 1 (single window app)
  *   - Disabled unused Chromium features (~15 services)
  *   - Canvas compositor layer promotion
- *   - WASM preloaded in parallel with PTY service startup
  */
 
 import { join } from 'node:path'
@@ -82,8 +81,6 @@ app.commandLine.appendSwitch('disable-features', disableFeatures)
 const enableFeatures = [
   'Canvas2dRenderingTBR', // Tile-based rendering for canvas 2D (faster)
   'CanvasOopRasterization', // Out-of-process canvas rasterization
-  'WebAssemblyCodeProtection', // Protect WASM memory pages
-  'WebAssemblyLazyCompilation', // Load WASM faster by deferring full compile
 ].join(',')
 
 app.commandLine.appendSwitch('enable-features', enableFeatures)

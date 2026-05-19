@@ -612,6 +612,8 @@ export async function createTerminal(
     },
   )
 
+  let didAttachSession = false
+
   try {
     const attachedSession = await window.electronAPI.attachSession({
       sessionId,
@@ -620,6 +622,7 @@ export async function createTerminal(
       rows: term.rows,
       cwd: options.cwd,
     })
+    didAttachSession = true
     if (attachedSession.archived) {
       archived = true
       options.onArchived?.()
@@ -656,6 +659,9 @@ export async function createTerminal(
     unsubSessionExit()
     titleSubscription?.dispose()
     outputWriter.dispose()
+    if (didAttachSession) {
+      await window.electronAPI.detachSession(sessionId).catch(() => {})
+    }
     term.dispose()
     container.classList.remove('terminal-surface-restoring')
     renderTerminalError(container, err)
