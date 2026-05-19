@@ -271,6 +271,7 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, worktree_id);
         break :blk branch_owned.?;
     };
+    if (try database.worktreeBranchExists(workspace_row.id, branch)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
     try database.insertWorktree(.{
         .id = worktree_id,
         .workspace_id = workspace_row.id,
