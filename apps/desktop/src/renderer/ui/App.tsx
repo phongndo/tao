@@ -700,6 +700,7 @@ const PaneTile = memo(function PaneTile({
   terminalCwd,
   isActive,
   focusToken,
+  searchToken,
   onSelect,
   onTitleChange,
   onRestartSession,
@@ -709,6 +710,7 @@ const PaneTile = memo(function PaneTile({
   terminalCwd?: string
   isActive: boolean
   focusToken: number
+  searchToken: number
   onSelect(): void
   onTitleChange(title: string): void
   onRestartSession(): void
@@ -746,6 +748,7 @@ const PaneTile = memo(function PaneTile({
           cwd={pane.cwd ?? terminalCwd}
           isActive={isActive}
           focusToken={focusToken}
+          searchToken={searchToken}
           onTitleChange={onTitleChange}
           onRestartSession={onRestartSession}
           onArchiveStateChange={onArchiveStateChange}
@@ -765,6 +768,7 @@ const PaneGrid = memo(function PaneGrid({
   panesById,
   activePaneId,
   terminalFocusTokens,
+  terminalSearchTokens,
   onLayoutRelease,
   onSelectPane,
   onPaneTitle,
@@ -776,6 +780,7 @@ const PaneGrid = memo(function PaneGrid({
   panesById: Map<string, Pane>
   activePaneId: string | null
   terminalFocusTokens: ReadonlyMap<string, number>
+  terminalSearchTokens: ReadonlyMap<string, number>
   onLayoutRelease(tabId: string, layout: MosaicNode<string> | null): void
   onSelectPane(paneId: string): void
   onPaneTitle(paneId: string, title: string): void
@@ -818,6 +823,7 @@ const PaneGrid = memo(function PaneGrid({
           terminalCwd={terminalCwd}
           isActive={pane.id === activePaneId}
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
+          searchToken={terminalSearchTokens.get(pane.id) ?? 0}
           onSelect={() => onSelectPane(pane.id)}
           onTitleChange={(title) => onPaneTitle(pane.id, title)}
           onRestartSession={() => onRestartPaneSession(pane.id)}
@@ -834,6 +840,7 @@ const PaneGrid = memo(function PaneGrid({
       panesById,
       terminalCwd,
       terminalFocusTokens,
+      terminalSearchTokens,
     ],
   )
 
@@ -891,6 +898,7 @@ export function App() {
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
+  const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
@@ -951,6 +959,10 @@ export function App() {
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
     [terminalFocusCounts],
+  )
+  const terminalSearchTokens = useMemo(
+    () => new Map(Object.entries(terminalSearchCounts)),
+    [terminalSearchCounts],
   )
   const previousPaneSessionsRef = useRef(
     new Map(panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id])),
@@ -1045,6 +1057,16 @@ export function App() {
       }))
     }
 
+    const searchActiveTerminal = () => {
+      const paneId = useTaoStore.getState().activePaneId
+      if (!paneId) return
+
+      setTerminalSearchCounts((counts) => ({
+        ...counts,
+        [paneId]: (counts[paneId] ?? 0) + 1,
+      }))
+    }
+
     const runCommand = (command: AppCommand) => {
       switch (command.type) {
         case 'toggle-sidebar':
@@ -1076,6 +1098,9 @@ export function App() {
           break
         case 'focus-terminal':
           focusActiveTerminal()
+          break
+        case 'search-terminal':
+          searchActiveTerminal()
           break
       }
     }
@@ -1238,6 +1263,7 @@ export function App() {
                       panesById={panesById}
                       activePaneId={isTabActive ? activePaneId : null}
                       terminalFocusTokens={terminalFocusTokens}
+                      terminalSearchTokens={terminalSearchTokens}
                       onLayoutRelease={setTabLayout}
                       onSelectPane={selectPane}
                       onPaneTitle={setPaneTitle}

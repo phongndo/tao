@@ -227,6 +227,12 @@ function createWindow() {
       return
     }
 
+    if (key === 'f' && !input.shift) {
+      event.preventDefault()
+      sendAppCommand({ type: 'search-terminal' })
+      return
+    }
+
     if (key === 'd') {
       event.preventDefault()
       sendAppCommand({ type: input.shift ? 'split-pane-horizontal' : 'split-pane-vertical' })

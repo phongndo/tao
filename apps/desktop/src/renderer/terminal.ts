@@ -1,6 +1,20 @@
+import {
+  ClipboardAddon,
+  type ClipboardSelectionType,
+  type IClipboardProvider,
+} from '@xterm/addon-clipboard'
 import { FitAddon } from '@xterm/addon-fit'
+import { ImageAddon } from '@xterm/addon-image'
+import {
+  SearchAddon,
+  type ISearchOptions,
+  type ISearchResultChangeEvent,
+} from '@xterm/addon-search'
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type IDisposable } from '@xterm/xterm'
 import {
   decodeCurrentScreenSnapshot,
   decodeFallbackCurrentScreenSnapshotPayload,
@@ -69,6 +83,7 @@ const MIN_TERMINAL_ROWS = 1
 let terminalFontsLoad: Promise<void> | null = null
 
 const terminalFitAddons = new WeakMap<Terminal, FitAddon>()
+const terminalSearchAddons = new WeakMap<Terminal, SearchAddon>()
 const terminalWebglAddons = new WeakMap<Terminal, WebglAddon>()
 
 function updateStatus(msg: string) {
@@ -328,6 +343,85 @@ function installWebglRenderer(term: Terminal): void {
   }
 }
 
+class TaoClipboardProvider implements IClipboardProvider {
+  readText(selection: ClipboardSelectionType): string {
+    if (selection !== 'c') return ''
+    return ''
+  }
+
+  async writeText(selection: ClipboardSelectionType, text: string): Promise<void> {
+    if (selection !== 'c') return
+    await window.electronAPI.writeClipboardText(text)
+  }
+}
+
+function installTerminalAddons(term: Terminal): void {
+  term.loadAddon(new Unicode11Addon())
+  term.unicode.activeVersion = '11'
+  term.loadAddon(new UnicodeGraphemesAddon())
+
+  const searchAddon = new SearchAddon({ highlightLimit: 1000 })
+  term.loadAddon(searchAddon)
+  terminalSearchAddons.set(term, searchAddon)
+
+  term.loadAddon(
+    new WebLinksAddon((event, uri) => {
+      event.preventDefault()
+      void window.electronAPI.openExternalUrl(uri).catch((error) => {
+        console.warn('[terminal] failed to open external link:', error)
+      })
+    }),
+  )
+  term.loadAddon(new ImageAddon())
+  term.loadAddon(new ClipboardAddon(undefined, new TaoClipboardProvider()))
+}
+
+const searchDecorationOptions: NonNullable<ISearchOptions['decorations']> = {
+  matchBackground: '#4b3f2f',
+  matchBorder: '#e6b99d',
+  matchOverviewRuler: '#e6b99d',
+  activeMatchBackground: '#6b4a35',
+  activeMatchBorder: '#ffae9f',
+  activeMatchColorOverviewRuler: '#ffae9f',
+}
+
+export function searchTerminalBuffer(
+  term: Terminal,
+  query: string,
+  direction: 'next' | 'previous' = 'next',
+  incremental = false,
+): boolean {
+  const searchAddon = terminalSearchAddons.get(term)
+  if (!searchAddon) return false
+
+  if (query.length === 0) {
+    searchAddon.clearDecorations()
+    term.clearSelection()
+    return false
+  }
+
+  const options: ISearchOptions = {
+    incremental,
+    decorations: searchDecorationOptions,
+  }
+  return direction === 'previous'
+    ? searchAddon.findPrevious(query, options)
+    : searchAddon.findNext(query, options)
+}
+
+export function clearTerminalSearch(term: Terminal): void {
+  const searchAddon = terminalSearchAddons.get(term)
+  searchAddon?.clearDecorations()
+  term.clearSelection()
+}
+
+export function onTerminalSearchResults(
+  term: Terminal,
+  callback: (event: ISearchResultChangeEvent) => void,
+): IDisposable | null {
+  return terminalSearchAddons.get(term)?.onDidChangeResults(callback) ?? null
+}
+
 function binaryStringToBytes(data: string): Uint8Array {
   const bytes = new Uint8Array(data.length)
   for (let index = 0; index < data.length; index++) {
@@ -441,12 +535,13 @@ export async function createTerminal(
       rescaleOverlappingGlyphs: false,
       screenReaderMode: false,
       smoothScrollDuration: 0,
-      allowProposedApi: false,
+      allowProposedApi: true,
       logLevel: 'warn',
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     terminalFitAddons.set(term, fitAddon)
+    installTerminalAddons(term)
 
     // Step 3: Clear container and open terminal
     updateStatus('Opening terminal...')
@@ -689,6 +784,7 @@ export async function createTerminal(
     stopResizeObserver?.()
     stopResizeObserver = null
     terminalFitAddons.delete(term)
+    terminalSearchAddons.delete(term)
     terminalWebglAddons.delete(term)
     container.classList.remove('terminal-surface-restoring')
     originalDispose()
