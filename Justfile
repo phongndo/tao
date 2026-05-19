@@ -26,3 +26,8 @@ _ensure-package-manager:
 electron:
     pnpm exec tsx scripts/electron-install.ts
 
+# Kill any running taod daemon and start a fresh dev server.
+[unix]
+dev:
+    pkill -TERM -x taod || true
+    pnpm dev
