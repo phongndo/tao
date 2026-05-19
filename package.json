@@ -2,12 +2,12 @@
   "name": "tao",
   "version": "1.0.0",
   "private": true,
-  "description": "A performance-first workspace terminal powered by Electron and Ghostty Web",
+  "description": "A performance-first workspace terminal powered by Electron and xterm.js WebGL",
   "keywords": [
     "electron",
     "emulator",
-    "ghostty",
-    "terminal"
+    "terminal",
+    "xterm"
   ],
   "license": "MIT",
   "author": "Tao Contributors",
@@ -32,6 +32,7 @@
     "leak:taod": "pnpm zig:leak-check",
     "bench": "pnpm --filter @tao/desktop bench",
     "bench:latency": "pnpm --filter @tao/desktop bench:latency",
+    "bench:renderer": "pnpm --filter @tao/desktop bench:renderer",
     "bench:ipc": "pnpm --filter @tao/desktop bench:ipc",
     "bench:cross": "pnpm --filter @tao/desktop bench:cross",
     "bench:startup": "pnpm --filter @tao/desktop bench:startup",

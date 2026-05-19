@@ -292,9 +292,9 @@ export class TaodPtyBridge {
     if (existing?.stream) {
       // A renderer can request attach for an already-streaming session when a terminal view is
       // remounted during tab/layout changes. Returning a bare ready message here leaves the new
-      // Ghostty instance with no current-screen snapshot or startup bytes because the previous
-      // stream already consumed them. Treat it as a real live reattach instead: close the old
-      // subscriber socket and continue through taod attach so the daemon sends a fresh snapshot.
+      // terminal view with no current-screen snapshot or startup bytes because the previous stream
+      // already consumed them. Treat it as a real live reattach instead: close the old subscriber
+      // socket and continue through taod attach so the daemon sends a fresh snapshot.
       existing.cols = cols
       existing.rows = rows
       this.supersededAttachStreams.add(existing.stream)

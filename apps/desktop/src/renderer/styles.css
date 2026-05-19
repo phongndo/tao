@@ -924,22 +924,116 @@ body {
   opacity: 0;
 }
 
-/* ── Canvas: crisp text, GPU layer ── */
+.terminal-search-panel {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: auto minmax(120px, 220px) minmax(34px, auto) 24px 24px 24px;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 24px);
+  padding: 5px 6px;
+  border: 1px solid rgb(172 161 207 / 34%);
+  border-radius: 7px;
+  background: rgb(21 21 21 / 96%);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
+  color: #c9c7cd;
+}
+
+.terminal-search-panel input {
+  min-width: 0;
+  height: 24px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #c9c7cd;
+  font:
+    12px/1.2 Menlo,
+    Monaco,
+    'Courier New',
+    monospace;
+}
+
+.terminal-search-panel input::placeholder {
+  color: #6f7380;
+}
+
+.terminal-search-panel input:focus,
+.terminal-search-panel input:focus-visible {
+  border-radius: 3px;
+  outline: 1px solid rgb(172 161 207 / 70%);
+  outline-offset: 1px;
+}
+
+.terminal-search-count {
+  min-width: 34px;
+  color: #9699a8;
+  font:
+    11px/1 Menlo,
+    Monaco,
+    'Courier New',
+    monospace;
+  text-align: right;
+}
+
+.terminal-search-panel button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #c9c7cd;
+  cursor: pointer;
+}
+
+.terminal-search-panel button:hover {
+  background: rgb(172 161 207 / 14%);
+  color: #ffffff;
+}
+
+.terminal-search-panel button:focus,
+.terminal-search-panel button:focus-visible {
+  background: rgb(172 161 207 / 14%);
+  color: #ffffff;
+  outline: 1px solid rgb(172 161 207 / 70%);
+  outline-offset: 1px;
+}
+
+/* ── xterm.js renderer layers ── */
+.terminal-surface .xterm {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-surface .xterm-screen,
+.terminal-surface .xterm-helpers {
+  outline: none;
+}
+
+.terminal-surface .xterm-screen {
+  position: relative;
+}
+
+.terminal-surface .xterm-image-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .terminal-surface canvas {
   display: block;
   image-rendering: auto;
   /*
    * Promote canvas to independent GPU texture.
    * When the canvas is repainted (60fps rAF loop), Chromium uploads
-   * only the changed rows as a texture update rather than re-rasterizing
-   * the entire page. Combined with dirty-row tracking in ghostty-web,
-   * this gives near-native rendering performance.
+   * only the changed rows as a texture update rather than re-rasterizing the entire page.
    */
   will-change: contents;
-  /* Disable alpha channel for canvas — terminal background is opaque.
-   * This allows Chromium to skip alpha blending for this layer. */
-  /* Note: canvas context is created by ghostty-web, so we can't set
-     alpha:false here — but the renderer creates an opaque canvas. */
 }
 
 /* ── Hidden textarea (for focus/IME) ── */

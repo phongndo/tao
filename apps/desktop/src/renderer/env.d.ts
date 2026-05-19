@@ -29,6 +29,8 @@ import type {
 } from '@tao/shared/workspace'
 
 export interface ElectronAPI {
+  openExternalUrl(url: string): Promise<void>
+  writeClipboardText(text: string): Promise<void>
   createSession(input: CreateSessionInput): Promise<CreateSessionResult>
   attachSession(input: AttachSessionInput): Promise<AttachSessionResult>
   detachSession(sessionId: string): Promise<void>

@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect'
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer, shell } from 'electron'
 import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
 import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
 import type { AppCommand } from '@tao/shared/app-command'
@@ -508,6 +508,19 @@ ipcRenderer.send('pty:requestPort')
  * these specific methods, nothing else.
  */
 const electronAPI = {
+  async openExternalUrl(url: string): Promise<void> {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`Unsupported external URL protocol: ${parsed.protocol}`)
+    }
+    await shell.openExternal(parsed.href)
+  },
+
+  writeClipboardText(text: string): Promise<void> {
+    clipboard.writeText(text)
+    return Promise.resolve()
+  },
+
   async createSession(input: CreateSessionInput): Promise<CreateSessionResult> {
     if (!input || typeof input.terminalId !== 'string' || input.terminalId.length === 0) {
       return Promise.reject(new Error('terminalId is required'))

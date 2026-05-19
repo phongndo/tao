@@ -9,10 +9,12 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
+const GHOSTTY_WEB_VERSION = '0.4.0-next.14.g6a1a50d'
 
 // ─── Test Data Generators ───
 
@@ -73,6 +75,59 @@ function fmt(r: Result): string {
   return `${r.engine.padEnd(22)} ${r.durationMs.toFixed(1).padStart(8)}ms  ${r.throughputMBps.toFixed(1).padStart(8)} MB/s  (${r.name})`
 }
 
+function ensureGhosttyWasm(): string {
+  if (process.env.TAO_GHOSTTY_WEB_WASM) {
+    if (!fs.existsSync(process.env.TAO_GHOSTTY_WEB_WASM)) {
+      throw new Error(`TAO_GHOSTTY_WEB_WASM does not exist: ${process.env.TAO_GHOSTTY_WEB_WASM}`)
+    }
+    return process.env.TAO_GHOSTTY_WEB_WASM
+  }
+
+  const localDependencyWasm = path.join(PROJECT_ROOT, 'node_modules/ghostty-web/ghostty-vt.wasm')
+  if (fs.existsSync(localDependencyWasm)) return localDependencyWasm
+
+  const cacheRoot = path.join(PROJECT_ROOT, '.bench-cache')
+  const packageDir = path.join(cacheRoot, `ghostty-web-${GHOSTTY_WEB_VERSION}`, 'package')
+  const cachedWasm = path.join(packageDir, 'ghostty-vt.wasm')
+  if (fs.existsSync(cachedWasm)) return cachedWasm
+
+  fs.mkdirSync(cacheRoot, { recursive: true })
+  const tarball = execFileSync(
+    'npm',
+    ['pack', `ghostty-web@${GHOSTTY_WEB_VERSION}`, '--pack-destination', cacheRoot],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
+  )
+    .trim()
+    .split('\n')
+    .filter((line) => line.endsWith('.tgz'))
+    .at(-1)
+
+  if (!tarball) {
+    throw new Error(`npm pack did not produce a .tgz file for ghostty-web@${GHOSTTY_WEB_VERSION}`)
+  }
+
+  fs.rmSync(packageDir, { recursive: true, force: true })
+  fs.mkdirSync(path.dirname(packageDir), { recursive: true })
+  execFileSync('tar', ['-xzf', path.join(cacheRoot, tarball), '-C', path.dirname(packageDir)], {
+    stdio: 'ignore',
+  })
+
+  if (!fs.existsSync(cachedWasm)) {
+    throw new Error(`ghostty-web package did not contain ${cachedWasm}`)
+  }
+
+  fs.rmSync(path.join(cacheRoot, tarball), { force: true })
+
+  return cachedWasm
+}
+
+let ghosttyWasmPath: string | null = null
+
+function getGhosttyWasmPath(): string {
+  ghosttyWasmPath ??= ensureGhosttyWasm()
+  return ghosttyWasmPath
+}
+
 // ─── xterm.js Benchmark ───
 
 async function benchXtermJs(data: Buffer, label: string): Promise<Result> {
@@ -105,8 +160,7 @@ async function benchXtermJs(data: Buffer, label: string): Promise<Result> {
 // ─── ghostty-web (WASM) Benchmark ───
 
 async function benchGhostty(data: Buffer, label: string): Promise<Result> {
-  const wasmPath = path.join(PROJECT_ROOT, 'node_modules/ghostty-web/ghostty-vt.wasm')
-  const wasmBin = fs.readFileSync(wasmPath)
+  const wasmBin = fs.readFileSync(getGhosttyWasmPath())
 
   // Track ghostty log calls (some WASM builds log warnings)
   const logs: string[] = []
@@ -201,8 +255,7 @@ async function main() {
   )
 
   // Ghostty burst
-  const wasmPath2 = path.join(PROJECT_ROOT, 'node_modules/ghostty-web/ghostty-vt.wasm')
-  const wasmBin2 = fs.readFileSync(wasmPath2)
+  const wasmBin2 = fs.readFileSync(getGhosttyWasmPath())
   const mod2 = await WebAssembly.instantiate(wasmBin2, { env: { log: () => {} } })
   const exp2 = mod2.instance.exports as any
   const mem2 = exp2.memory as WebAssembly.Memory
@@ -271,8 +324,8 @@ async function main() {
   console.log('╚══════════════════════════════════════════════════════════╝')
   console.log()
   console.log('Note: Benchmarks run in Node.js (headless, no rendering).')
-  console.log('Real-world Electron performance includes Canvas rendering')
-  console.log('overhead but the VT parser is the dominant bottleneck.')
+  console.log(`ghostty-web baseline is loaded from npm package ${GHOSTTY_WEB_VERSION}`)
+  console.log('without keeping ghostty-web in the desktop runtime dependency graph.')
 }
 
 main().catch((err) => {

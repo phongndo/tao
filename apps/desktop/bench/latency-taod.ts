@@ -4,7 +4,7 @@
  * Measures keystroke-to-echo latency through the full taod pipeline:
  *   write → taod socket → Zig VT parser → binary stream output
  *
- * This replaces the old latency-tao.ts which used node-pty (now removed).
+ * This replaces the old node-pty-era latency benchmark.
  *
  * Usage: npx tsx bench/latency-taod.ts [samples]
  *
@@ -266,7 +266,7 @@ async function runLatencyBenchmark() {
   console.log(`    min:     ${min.toFixed(2)} ms`)
   console.log(`    max:     ${max.toFixed(2)} ms`)
   console.log('')
-  console.log('  ── Comparison with node-pty era (bench/latency-tao.ts) ──')
+  console.log('  ── Comparison with node-pty era ──')
   console.log('')
   console.log('  Old benchmark (node-pty + ghostty-web WASM):')
   console.log('    avg: ~2-4 ms    p50: ~2-3 ms    p95: ~4-6 ms    p99: ~6-10 ms')
