@@ -256,6 +256,10 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         self.allocator.free(entries);
     }
     const entry = findGitWorktree(self.allocator, entries, canonical) orelse return errorResponse(allocator, request, .invalid_path, "path is not a Git worktree for this workspace");
+    if (entry.prunable) {
+        pruneGitWorktrees(self.allocator, workspace_row.root_path);
+        return errorResponse(allocator, request, .invalid_path, "path is a prunable Git worktree");
+    }
     const basename = std.fs.path.basename(canonical);
     const folder_name = try workspace.adoptedFolderNameAlloc(self.allocator, database, workspace_row.id, canonical);
     defer self.allocator.free(folder_name);
