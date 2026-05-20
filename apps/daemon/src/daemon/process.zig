@@ -18,8 +18,12 @@ pub fn Context(comptime Daemon: type) type {
         pub fn ensureSessionProcess(self: Self, item: *session.TerminalSession, argv: []const []const u8) !void {
             item.assertInvariants();
             const daemon = self.daemon;
-            if (item.pty_child) |child| {
+            if (item.pty_child) |*child| {
                 if (child.master_fd >= 0) return;
+                if (child.pid > 0) {
+                    _ = try daemon.pty_driver.tryWait(child) orelse return error.SpawnFailed;
+                }
+                child.close();
                 item.pty_child = null;
                 item.reader_started = false;
             }
@@ -65,13 +69,10 @@ pub fn Context(comptime Daemon: type) type {
             if (item.reader_started) return;
             const child = item.pty_child orelse return;
             if (child.master_fd < 0) return;
-            item.reader_started = true;
             const owned_session_id = try std.heap.smp_allocator.dupe(u8, item.id);
             errdefer std.heap.smp_allocator.free(owned_session_id);
-            const thread = std.Thread.spawn(.{}, sessionReaderThread, .{ self, owned_session_id }) catch |err| {
-                item.reader_started = false;
-                return err;
-            };
+            const thread = try std.Thread.spawn(.{}, sessionReaderThread, .{ self, owned_session_id });
+            item.reader_started = true;
             thread.detach();
         }
 
@@ -215,8 +216,7 @@ pub fn Context(comptime Daemon: type) type {
             }
             item.assertInvariants();
             item.transitionTo(.exited);
-            if (item.pty_child) |*child| child.close();
-            item.pty_child = null;
+            releasePtyChildForBackgroundReap(item, "synthetic exit");
             item.reader_started = false;
             if (item.event_log_path) |path| {
                 _ = event_log.appendExit(daemon.allocator, path, &item.last_seq, exit_code, signal_value) catch |err| {
@@ -249,6 +249,16 @@ pub fn Context(comptime Daemon: type) type {
                 std.log.warn("session reader failed for {s}: {t}", .{ session_id, err });
                 _ = context.markExitedAndBroadcast(session_id, -1, 0) catch {};
             };
+        }
+
+        fn releasePtyChildForBackgroundReap(item: *session.TerminalSession, reason: []const u8) void {
+            if (item.pty_child) |*child| {
+                pty.reapInBackground(child) catch |err| {
+                    std.log.warn("failed to start PTY reaper for {s} after {s}: {t}", .{ item.id, reason, err });
+                    return;
+                };
+                item.pty_child = null;
+            }
         }
     };
 }

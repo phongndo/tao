@@ -1,6 +1,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 const event_log = @import("event_log.zig");
+const limits = @import("limits.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
 const session = @import("session.zig");
@@ -57,6 +58,7 @@ pub const Daemon = struct {
     database: ?db.Database,
     persistence: PersistencePolicy,
     mutex: std.Thread.Mutex = .{},
+    active_control_connections: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     const ProcessContext = process.Context(*Daemon);
     const StreamContext = stream_mod.Context(*Daemon);
@@ -405,10 +407,53 @@ pub const Daemon = struct {
         self.mutex.unlock();
     }
 
+    pub fn reserveControlConnection(self: *Daemon) bool {
+        while (true) {
+            const active = self.active_control_connections.load(.monotonic);
+            std.debug.assert(active <= limits.control_connections_max);
+            if (active >= limits.control_connections_max) return false;
+            if (self.active_control_connections.cmpxchgWeak(active, active + 1, .acquire, .monotonic) == null) {
+                std.debug.assert(self.active_control_connections.load(.monotonic) <= limits.control_connections_max);
+                return true;
+            }
+        }
+    }
+
+    pub fn releaseControlConnection(self: *Daemon) void {
+        const previous = self.active_control_connections.fetchSub(1, .release);
+        std.debug.assert(previous > 0);
+        std.debug.assert(previous <= limits.control_connections_max);
+    }
+
     pub fn writePidFile(self: *Daemon) !void {
         return server.writePidFile(self);
     }
 };
+
+test "daemon control connection reservations enforce configured cap" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    var reserved: usize = 0;
+    while (reserved < limits.control_connections_max) : (reserved += 1) {
+        try std.testing.expect(daemon.reserveControlConnection());
+    }
+
+    try std.testing.expect(!daemon.reserveControlConnection());
+    try std.testing.expectEqual(limits.control_connections_max, daemon.active_control_connections.load(.monotonic));
+
+    while (reserved > 0) {
+        reserved -= 1;
+        daemon.releaseControlConnection();
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), daemon.active_control_connections.load(.monotonic));
+    try std.testing.expect(daemon.reserveControlConnection());
+    daemon.releaseControlConnection();
+}
 
 test "daemon control RPC creates and updates sessions" {
     var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");

@@ -4,6 +4,8 @@ const git = @import("git.zig");
 const rpc = @import("rpc.zig");
 const worktree_name = @import("worktree_name.zig");
 
+const assert = std.debug.assert;
+
 pub const ErrorCode = enum {
     invalid_workspace,
     invalid_path,
@@ -472,21 +474,7 @@ pub fn workspaceResponsesAlloc(self: anytype, rows: []const db.WorkspaceRow, inc
             initialized_worktrees += 1;
         }
 
-        responses[index] = .{
-            .id = try allocator.dupe(u8, row.id),
-            .name = try allocator.dupe(u8, row.name),
-            .root_path = try allocator.dupe(u8, row.root_path),
-            .git_common_dir = try dupeOptional(allocator, row.git_common_dir),
-            .workspace_slug = try allocator.dupe(u8, row.workspace_slug),
-            .default_branch = try dupeOptional(allocator, row.default_branch),
-            .branch = if (include_status) branchOrNull(allocator, row.root_path) else null,
-            .order_index = row.order_index,
-            .last_active_tab_id = try dupeOptional(allocator, row.last_active_tab_id),
-            .created_at = try allocator.dupe(u8, row.created_at),
-            .updated_at = try allocator.dupe(u8, row.updated_at),
-            .git_status = if (include_status) workspaceStatusOrNull(allocator, row.root_path) else null,
-            .worktrees = worktree_responses,
-        };
+        responses[index] = try workspaceResponseFromRowAlloc(allocator, row, worktree_responses, include_status);
         initialized += 1;
     }
     return responses;
@@ -542,25 +530,192 @@ pub fn freeWorktreeResponseFields(allocator: std.mem.Allocator, response: Worktr
     freeInitializedWorktreeResponses(allocator, (&[_]WorktreeResponse{response})[0..]);
 }
 
-pub fn worktreeResponseFromRowAlloc(allocator: std.mem.Allocator, row: db.WorktreeRow, status: ?GitStatusResponse) !WorktreeResponse {
-    return .{
-        .id = try allocator.dupe(u8, row.id),
-        .workspace_id = try allocator.dupe(u8, row.workspace_id),
-        .title = try dupeOptional(allocator, row.title),
-        .folder_name = try allocator.dupe(u8, row.folder_name),
-        .path = try allocator.dupe(u8, row.path),
-        .branch = try allocator.dupe(u8, row.branch),
-        .base_branch = try dupeOptional(allocator, row.base_branch),
-        .target_branch = try dupeOptional(allocator, row.target_branch),
-        .state = try allocator.dupe(u8, row.state),
+fn workspaceResponseFromRowAlloc(allocator: std.mem.Allocator, row: db.WorkspaceRow, worktrees: []const WorktreeResponse, include_status: bool) !WorkspaceResponse {
+    var id: ?[]u8 = null;
+    errdefer if (id) |value| allocator.free(value);
+    id = try allocator.dupe(u8, row.id);
+
+    var name: ?[]u8 = null;
+    errdefer if (name) |value| allocator.free(value);
+    name = try allocator.dupe(u8, row.name);
+
+    var root_path: ?[]u8 = null;
+    errdefer if (root_path) |value| allocator.free(value);
+    root_path = try allocator.dupe(u8, row.root_path);
+
+    var git_common_dir: ?[]u8 = null;
+    errdefer if (git_common_dir) |value| allocator.free(value);
+    git_common_dir = try dupeOptional(allocator, row.git_common_dir);
+
+    var workspace_slug: ?[]u8 = null;
+    errdefer if (workspace_slug) |value| allocator.free(value);
+    workspace_slug = try allocator.dupe(u8, row.workspace_slug);
+
+    var default_branch: ?[]u8 = null;
+    errdefer if (default_branch) |value| allocator.free(value);
+    default_branch = try dupeOptional(allocator, row.default_branch);
+
+    var branch: ?[]u8 = null;
+    errdefer if (branch) |value| allocator.free(value);
+    branch = if (include_status) branchOrNull(allocator, row.root_path) else null;
+
+    var last_active_tab_id: ?[]u8 = null;
+    errdefer if (last_active_tab_id) |value| allocator.free(value);
+    last_active_tab_id = try dupeOptional(allocator, row.last_active_tab_id);
+
+    var created_at: ?[]u8 = null;
+    errdefer if (created_at) |value| allocator.free(value);
+    created_at = try allocator.dupe(u8, row.created_at);
+
+    var updated_at: ?[]u8 = null;
+    errdefer if (updated_at) |value| allocator.free(value);
+    updated_at = try allocator.dupe(u8, row.updated_at);
+
+    const response: WorkspaceResponse = .{
+        .id = id.?,
+        .name = name.?,
+        .root_path = root_path.?,
+        .git_common_dir = git_common_dir,
+        .workspace_slug = workspace_slug.?,
+        .default_branch = default_branch,
+        .branch = branch,
         .order_index = row.order_index,
-        .last_active_tab_id = try dupeOptional(allocator, row.last_active_tab_id),
-        .last_error = try dupeOptional(allocator, row.last_error),
-        .created_by = try allocator.dupe(u8, row.created_by),
-        .created_at = try allocator.dupe(u8, row.created_at),
-        .updated_at = try allocator.dupe(u8, row.updated_at),
+        .last_active_tab_id = last_active_tab_id,
+        .created_at = created_at.?,
+        .updated_at = updated_at.?,
+        .git_status = if (include_status) workspaceStatusOrNull(allocator, row.root_path) else null,
+        .worktrees = worktrees,
+    };
+    assertWorkspaceResponse(response);
+    id = null;
+    name = null;
+    root_path = null;
+    git_common_dir = null;
+    workspace_slug = null;
+    default_branch = null;
+    branch = null;
+    last_active_tab_id = null;
+    created_at = null;
+    updated_at = null;
+    return response;
+}
+
+pub fn worktreeResponseFromRowAlloc(allocator: std.mem.Allocator, row: db.WorktreeRow, status: ?GitStatusResponse) !WorktreeResponse {
+    var id: ?[]u8 = null;
+    errdefer if (id) |value| allocator.free(value);
+    id = try allocator.dupe(u8, row.id);
+
+    var workspace_id: ?[]u8 = null;
+    errdefer if (workspace_id) |value| allocator.free(value);
+    workspace_id = try allocator.dupe(u8, row.workspace_id);
+
+    var title: ?[]u8 = null;
+    errdefer if (title) |value| allocator.free(value);
+    title = try dupeOptional(allocator, row.title);
+
+    var folder_name: ?[]u8 = null;
+    errdefer if (folder_name) |value| allocator.free(value);
+    folder_name = try allocator.dupe(u8, row.folder_name);
+
+    var path: ?[]u8 = null;
+    errdefer if (path) |value| allocator.free(value);
+    path = try allocator.dupe(u8, row.path);
+
+    var branch: ?[]u8 = null;
+    errdefer if (branch) |value| allocator.free(value);
+    branch = try allocator.dupe(u8, row.branch);
+
+    var base_branch: ?[]u8 = null;
+    errdefer if (base_branch) |value| allocator.free(value);
+    base_branch = try dupeOptional(allocator, row.base_branch);
+
+    var target_branch: ?[]u8 = null;
+    errdefer if (target_branch) |value| allocator.free(value);
+    target_branch = try dupeOptional(allocator, row.target_branch);
+
+    var state: ?[]u8 = null;
+    errdefer if (state) |value| allocator.free(value);
+    state = try allocator.dupe(u8, row.state);
+
+    var last_active_tab_id: ?[]u8 = null;
+    errdefer if (last_active_tab_id) |value| allocator.free(value);
+    last_active_tab_id = try dupeOptional(allocator, row.last_active_tab_id);
+
+    var last_error: ?[]u8 = null;
+    errdefer if (last_error) |value| allocator.free(value);
+    last_error = try dupeOptional(allocator, row.last_error);
+
+    var created_by: ?[]u8 = null;
+    errdefer if (created_by) |value| allocator.free(value);
+    created_by = try allocator.dupe(u8, row.created_by);
+
+    var created_at: ?[]u8 = null;
+    errdefer if (created_at) |value| allocator.free(value);
+    created_at = try allocator.dupe(u8, row.created_at);
+
+    var updated_at: ?[]u8 = null;
+    errdefer if (updated_at) |value| allocator.free(value);
+    updated_at = try allocator.dupe(u8, row.updated_at);
+
+    const response: WorktreeResponse = .{
+        .id = id.?,
+        .workspace_id = workspace_id.?,
+        .title = title,
+        .folder_name = folder_name.?,
+        .path = path.?,
+        .branch = branch.?,
+        .base_branch = base_branch,
+        .target_branch = target_branch,
+        .state = state.?,
+        .order_index = row.order_index,
+        .last_active_tab_id = last_active_tab_id,
+        .last_error = last_error,
+        .created_by = created_by.?,
+        .created_at = created_at.?,
+        .updated_at = updated_at.?,
         .git_status = status,
     };
+    assertWorktreeResponse(response);
+    id = null;
+    workspace_id = null;
+    title = null;
+    folder_name = null;
+    path = null;
+    branch = null;
+    base_branch = null;
+    target_branch = null;
+    state = null;
+    last_active_tab_id = null;
+    last_error = null;
+    created_by = null;
+    created_at = null;
+    updated_at = null;
+    return response;
+}
+
+fn assertWorkspaceResponse(response: WorkspaceResponse) void {
+    assert(response.id.len > 0);
+    assert(response.name.len > 0);
+    assert(response.root_path.len > 0);
+    assert(response.workspace_slug.len > 0);
+    assert(response.created_at.len > 0);
+    assert(response.updated_at.len > 0);
+    for (response.worktrees) |worktree_response| {
+        assertWorktreeResponse(worktree_response);
+        assert(std.mem.eql(u8, worktree_response.workspace_id, response.id));
+    }
+}
+
+fn assertWorktreeResponse(response: WorktreeResponse) void {
+    assert(response.id.len > 0);
+    assert(response.workspace_id.len > 0);
+    assert(response.folder_name.len > 0);
+    assert(response.path.len > 0);
+    assert(response.branch.len > 0);
+    assert(response.state.len > 0);
+    assert(response.created_by.len > 0);
+    assert(response.created_at.len > 0);
+    assert(response.updated_at.len > 0);
 }
 
 fn dupeOptional(allocator: std.mem.Allocator, value: ?[]const u8) !?[]u8 {
@@ -613,4 +768,86 @@ test "workspace response json includes nested worktrees" {
     defer std.testing.allocator.free(response);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"worktrees\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "luminous-galileo-a13f") != null);
+}
+
+const WorkspaceResponsesAllocationFailureDatabase = struct {
+    fn listWorktreesForWorkspace(self: *@This(), allocator: std.mem.Allocator, workspace_id: []const u8) ![]db.WorktreeRow {
+        _ = self;
+        try std.testing.expectEqualStrings("workspace-oom", workspace_id);
+        return allocator.alloc(db.WorktreeRow, 0);
+    }
+};
+
+fn mutableTestSlice(value: []const u8) []u8 {
+    return @constCast(value);
+}
+
+fn testWorkspaceRow() db.WorkspaceRow {
+    return .{
+        .id = mutableTestSlice("workspace-oom"),
+        .name = mutableTestSlice("Tao OOM"),
+        .root_path = mutableTestSlice("/tmp/tao-workspace-oom"),
+        .git_common_dir = mutableTestSlice("/tmp/tao-workspace-oom/.git"),
+        .workspace_slug = mutableTestSlice("tao-oom"),
+        .default_branch = mutableTestSlice("main"),
+        .order_index = 7,
+        .last_active_tab_id = mutableTestSlice("tab-oom"),
+        .created_at = mutableTestSlice("2026-05-20T00:00:00Z"),
+        .updated_at = mutableTestSlice("2026-05-20T00:00:01Z"),
+        .archived_at = null,
+    };
+}
+
+fn testWorktreeRow() db.WorktreeRow {
+    return .{
+        .id = mutableTestSlice("worktree-oom"),
+        .workspace_id = mutableTestSlice("workspace-oom"),
+        .title = mutableTestSlice("OOM Worktree"),
+        .folder_name = mutableTestSlice("luminous-oom"),
+        .path = mutableTestSlice("/tmp/tao-worktree-oom"),
+        .branch = mutableTestSlice("luminous-oom"),
+        .base_branch = mutableTestSlice("main"),
+        .target_branch = mutableTestSlice("main"),
+        .state = mutableTestSlice("active"),
+        .order_index = 3,
+        .last_active_tab_id = mutableTestSlice("tab-oom"),
+        .last_error = mutableTestSlice("previous failure"),
+        .created_by = mutableTestSlice("tao"),
+        .created_at = mutableTestSlice("2026-05-20T00:00:00Z"),
+        .updated_at = mutableTestSlice("2026-05-20T00:00:01Z"),
+        .archived_at = null,
+    };
+}
+
+fn workspaceResponsesForAllocationFailure(allocator: std.mem.Allocator) !void {
+    var database = WorkspaceResponsesAllocationFailureDatabase{};
+    var self = .{
+        .allocator = allocator,
+        .database = @as(?*WorkspaceResponsesAllocationFailureDatabase, &database),
+    };
+    const rows = [_]db.WorkspaceRow{testWorkspaceRow()};
+    const responses = try workspaceResponsesAlloc(&self, rows[0..], false);
+    defer freeWorkspaceResponses(allocator, responses);
+    try std.testing.expectEqual(@as(usize, 1), responses.len);
+    try std.testing.expectEqualStrings("workspace-oom", responses[0].id);
+}
+
+fn worktreeResponseForAllocationFailure(allocator: std.mem.Allocator) !void {
+    const response = try worktreeResponseFromRowAlloc(allocator, testWorktreeRow(), .{ .changed = 1, .staged = 2 });
+    defer freeWorktreeResponseFields(allocator, response);
+    try std.testing.expectEqualStrings("worktree-oom", response.id);
+    try std.testing.expectEqual(@as(u32, 1), response.git_status.?.changed);
+}
+
+test "workspace response builders clean up on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        workspaceResponsesForAllocationFailure,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        worktreeResponseForAllocationFailure,
+        .{},
+    );
 }

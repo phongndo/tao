@@ -104,6 +104,28 @@ pub const TerminalSession = struct {
         if (self.status == .detached) assert(self.subscribers.items.len == 0);
 
         assert(self.pending_output_bytes <= max_pending_output_bytes);
+        var pending_output_bytes: usize = 0;
+        for (self.pending_output.items) |frame| {
+            assert(frame.seq > 0);
+            assert(frame.payload.len > 0);
+            pending_output_bytes += frame.payload.len;
+        }
+        assert(self.pending_output_bytes == pending_output_bytes);
+
+        const has_session_dir = self.session_dir != null;
+        assert((self.event_log_path != null) == has_session_dir);
+        assert((self.excerpt_path != null) == has_session_dir);
+        assert((self.snapshot_path != null) == has_session_dir);
+
+        if (self.pty_child) |*child| {
+            child.assertInvariants();
+            if (self.reader_started) {
+                assert(child.master_fd >= 0);
+                assert(self.status == .live or self.status == .detached);
+            }
+        } else {
+            assert(!self.reader_started);
+        }
     }
 
     pub fn deinit(self: *TerminalSession, allocator: std.mem.Allocator) void {

@@ -76,6 +76,18 @@ pub const ParseResult = struct {
     frames_seen: usize,
 };
 
+const FileParseResult = struct {
+    valid_bytes: usize,
+    frames_seen: usize,
+    file_size: usize,
+
+    fn assertInvariants(self: FileParseResult) void {
+        assert(self.valid_bytes <= self.file_size);
+        if (self.frames_seen == 0) assert(self.valid_bytes == 0 or self.valid_bytes == file_header_size);
+        if (self.frames_seen > 0) assert(self.valid_bytes >= file_header_size + frame_header_size);
+    }
+};
+
 pub const SessionFiles = struct {
     dir: []const u8,
     event_log_path: []const u8,
@@ -282,9 +294,7 @@ pub fn openExistingSession(
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
 
-    const data = try readFileAlloc(allocator, event_log_path, file_header_size + max_payload_bytes);
-    defer if (data) |bytes| allocator.free(bytes);
-    if (data == null or !hasValidHeader(data.?)) {
+    if (!try eventLogFileHasValidHeader(allocator, event_log_path)) {
         allocator.free(dir);
         allocator.free(event_log_path);
         allocator.free(excerpt_path);
@@ -426,13 +436,9 @@ pub fn appendSnapshotMark(
 }
 
 pub fn readOwnedFrames(allocator: std.mem.Allocator, path: []const u8) ![]OwnedFrame {
-    const data = try readFileAlloc(allocator, path, file_header_size + max_payload_bytes);
-    defer if (data) |bytes| allocator.free(bytes);
-
-    const bytes = data orelse return allocator.alloc(OwnedFrame, 0);
     var recorder = OwnedFrameRecorder{ .allocator = allocator };
     errdefer recorder.deinit();
-    _ = try parseEventLog(bytes, &recorder);
+    _ = try parseEventLogFile(allocator, path, &recorder) orelse return allocator.alloc(OwnedFrame, 0);
     return recorder.frames.toOwnedSlice(allocator);
 }
 
@@ -441,46 +447,10 @@ pub fn readReplayOutputFrames(
     path: []const u8,
     max_bytes: usize,
 ) ![]OwnedFrame {
-    const frames = try readOwnedFrames(allocator, path);
-    defer deinitOwnedFrames(allocator, frames);
-
-    var total: usize = 0;
-    var output_count: usize = 0;
-    for (frames) |frame| {
-        if (frame.kind == .output and frame.payload.len > 0) {
-            total += frame.payload.len;
-            output_count += 1;
-        }
-    }
-
-    var keep_start: usize = 0;
-    while (total > max_bytes and keep_start < frames.len) : (keep_start += 1) {
-        if (frames[keep_start].kind != .output) continue;
-        if (output_count <= 1) break;
-        total -= frames[keep_start].payload.len;
-        output_count -= 1;
-    }
-
-    var replay: std.ArrayList(OwnedFrame) = .empty;
-    errdefer {
-        for (replay.items) |*frame| frame.deinit(allocator);
-        replay.deinit(allocator);
-    }
-
-    for (frames, 0..) |frame, index| {
-        if (frame.kind != .output or frame.payload.len == 0) continue;
-        if (index < keep_start) continue;
-
-        const payload = try allocator.dupe(u8, frame.payload);
-        errdefer allocator.free(payload);
-        try replay.append(allocator, .{
-            .kind = frame.kind,
-            .seq = frame.seq,
-            .payload = payload,
-        });
-    }
-
-    return replay.toOwnedSlice(allocator);
+    var recorder = ReplayOutputRecorder{ .allocator = allocator, .max_bytes = max_bytes };
+    errdefer recorder.deinit();
+    _ = try parseEventLogFile(allocator, path, &recorder) orelse return allocator.alloc(OwnedFrame, 0);
+    return recorder.frames.toOwnedSlice(allocator);
 }
 
 pub fn deinitOwnedFrames(allocator: std.mem.Allocator, frames: []OwnedFrame) void {
@@ -489,10 +459,6 @@ pub fn deinitOwnedFrames(allocator: std.mem.Allocator, frames: []OwnedFrame) voi
 }
 
 pub fn readLastSeq(allocator: std.mem.Allocator, path: []const u8) !u64 {
-    const data = try readFileAlloc(allocator, path, file_header_size + max_payload_bytes);
-    defer if (data) |bytes| allocator.free(bytes);
-
-    const bytes = data orelse return 0;
     var last_seq: u64 = 0;
     var recorder = struct {
         value: *u64,
@@ -500,26 +466,153 @@ pub fn readLastSeq(allocator: std.mem.Allocator, path: []const u8) !u64 {
             self.value.* = frame.seq;
         }
     }{ .value = &last_seq };
-    _ = try parseEventLog(bytes, &recorder);
+    _ = try parseEventLogFile(allocator, path, &recorder) orelse return last_seq;
     return last_seq;
 }
 
 fn repairEventLog(allocator: std.mem.Allocator, path: []const u8, session_id: []const u8) !void {
-    const data = try readFileAlloc(allocator, path, file_header_size + max_payload_bytes);
-    defer if (data) |bytes| allocator.free(bytes);
-
-    if (data == null or !hasValidHeader(data.?)) {
+    var visitor = struct {
+        pub fn visit(_: *@This(), _: Frame) !void {}
+    }{};
+    const result = try parseEventLogFile(allocator, path, &visitor);
+    const parsed = result orelse {
+        var header: [file_header_size]u8 = undefined;
+        const encoded = try encodeFileHeader(&header, session_id, nowMs());
+        try writeFile(allocator, path, encoded, 0o600);
+        return;
+    };
+    if (parsed.valid_bytes == 0) {
         var header: [file_header_size]u8 = undefined;
         const encoded = try encodeFileHeader(&header, session_id, nowMs());
         try writeFile(allocator, path, encoded, 0o600);
         return;
     }
 
-    var visitor = struct {
-        pub fn visit(_: *@This(), _: Frame) !void {}
-    }{};
-    const result = try parseEventLog(data.?, &visitor);
-    if (result.valid_bytes < data.?.len) try truncateFile(allocator, path, result.valid_bytes);
+    if (parsed.valid_bytes < parsed.file_size) try truncateFile(allocator, path, parsed.valid_bytes);
+}
+
+fn eventLogFileHasValidHeader(allocator: std.mem.Allocator, path: []const u8) !bool {
+    const file = try openReadFile(allocator, path) orelse return false;
+    defer _ = std.c.close(file.fd);
+
+    var header: [file_header_size]u8 = undefined;
+    const header_bytes = try readExactFd(file.fd, &header);
+    return header_bytes == file_header_size and hasValidHeader(&header);
+}
+
+fn parseEventLogFile(allocator: std.mem.Allocator, path: []const u8, visitor: anytype) !?FileParseResult {
+    const file = try openReadFile(allocator, path) orelse return null;
+    defer _ = std.c.close(file.fd);
+
+    const result = try parseEventLogFd(allocator, file.fd, visitor);
+    const parsed: FileParseResult = .{
+        .valid_bytes = result.valid_bytes,
+        .frames_seen = result.frames_seen,
+        .file_size = file.size,
+    };
+    parsed.assertInvariants();
+    return parsed;
+}
+
+fn parseEventLogFd(allocator: std.mem.Allocator, fd: std.c.fd_t, visitor: anytype) !ParseResult {
+    assert(fd >= 0);
+    var header: [file_header_size]u8 = undefined;
+    const header_bytes = try readExactFd(fd, &header);
+    if (header_bytes != file_header_size or !hasValidHeader(&header)) {
+        return .{ .valid_bytes = 0, .frames_seen = 0 };
+    }
+
+    var offset: usize = file_header_size;
+    var valid_bytes: usize = file_header_size;
+    var frames_seen: usize = 0;
+    var last_seq: u64 = 0;
+
+    while (true) {
+        var frame_header: [frame_header_size]u8 = undefined;
+        const frame_header_bytes = try readExactFd(fd, &frame_header);
+        if (frame_header_bytes == 0) break;
+        if (frame_header_bytes != frame_header_size) break;
+
+        assert(valid_bytes <= offset);
+        if (std.mem.readInt(u32, frame_header[0..4], .big) != frame_magic) break;
+
+        const version = std.mem.readInt(u16, frame_header[4..6], .big);
+        const kind_raw = std.mem.readInt(u16, frame_header[6..8], .big);
+        const seq = std.mem.readInt(u64, frame_header[8..16], .big);
+        const monotonic_ms = std.mem.readInt(u64, frame_header[16..24], .big);
+        const length = std.mem.readInt(u32, frame_header[24..28], .big);
+        const expected_crc = std.mem.readInt(u32, frame_header[28..32], .big);
+
+        const kind = FrameKind.fromRaw(kind_raw) orelse break;
+        if (version != 1 or seq <= last_seq or length > max_payload_bytes) break;
+        assert(length <= max_payload_bytes);
+
+        const payload = try allocator.alloc(u8, @as(usize, length));
+        defer allocator.free(payload);
+        const payload_bytes = try readExactFd(fd, payload);
+        if (payload_bytes != payload.len) break;
+        if (std.hash.Crc32.hash(payload) != expected_crc) break;
+
+        try visitor.visit(.{
+            .kind = kind,
+            .seq = seq,
+            .monotonic_ms = monotonic_ms,
+            .payload = payload,
+        });
+        frames_seen += 1;
+        last_seq = seq;
+
+        const previous_valid_bytes = valid_bytes;
+        offset += frame_header_size + payload.len;
+        valid_bytes = offset;
+        assert(valid_bytes > previous_valid_bytes);
+        assert(valid_bytes >= file_header_size);
+    }
+
+    return .{ .valid_bytes = valid_bytes, .frames_seen = frames_seen };
+}
+
+const OpenReadFile = struct {
+    fd: std.c.fd_t,
+    size: usize,
+};
+
+fn openReadFile(allocator: std.mem.Allocator, path: []const u8) !?OpenReadFile {
+    assert(path.len > 0);
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+
+    const fd = std.c.open(path_z.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) {
+        return switch (std.posix.errno(fd)) {
+            .NOENT => null,
+            else => error.FileOpenFailed,
+        };
+    }
+    errdefer _ = std.c.close(fd);
+
+    var stat: std.c.Stat = undefined;
+    if (std.c.fstat(fd, &stat) != 0) return error.FileStatFailed;
+    if (stat.size < 0) return error.FileTooBig;
+
+    return .{ .fd = fd, .size = @intCast(stat.size) };
+}
+
+fn readExactFd(fd: std.c.fd_t, out: []u8) !usize {
+    assert(fd >= 0);
+    var offset: usize = 0;
+    while (offset < out.len) {
+        const amount = std.c.read(fd, out[offset..].ptr, out.len - offset);
+        if (amount < 0) {
+            switch (std.posix.errno(amount)) {
+                .INTR => continue,
+                else => return error.FileReadFailed,
+            }
+        }
+        if (amount == 0) break;
+        offset += @intCast(amount);
+    }
+    return offset;
 }
 
 const OwnedFrameRecorder = struct {
@@ -539,6 +632,37 @@ const OwnedFrameRecorder = struct {
             .seq = frame.seq,
             .payload = payload,
         });
+    }
+};
+
+const ReplayOutputRecorder = struct {
+    allocator: std.mem.Allocator,
+    max_bytes: usize,
+    frames: std.ArrayList(OwnedFrame) = .empty,
+    total_bytes: usize = 0,
+
+    pub fn deinit(self: *ReplayOutputRecorder) void {
+        for (self.frames.items) |*frame| frame.deinit(self.allocator);
+        self.frames.deinit(self.allocator);
+    }
+
+    pub fn visit(self: *ReplayOutputRecorder, frame: Frame) !void {
+        if (frame.kind != .output or frame.payload.len == 0) return;
+
+        const payload = try self.allocator.dupe(u8, frame.payload);
+        errdefer self.allocator.free(payload);
+        try self.frames.append(self.allocator, .{
+            .kind = frame.kind,
+            .seq = frame.seq,
+            .payload = payload,
+        });
+        self.total_bytes += payload.len;
+
+        while (self.total_bytes > self.max_bytes and self.frames.items.len > 1) {
+            var dropped = self.frames.orderedRemove(0);
+            self.total_bytes -= dropped.payload.len;
+            dropped.deinit(self.allocator);
+        }
     }
 };
 
@@ -780,6 +904,50 @@ test "event log durable append failure does not advance sequence" {
         appendFramePathDurable(std.testing.allocator, missing_path, .output, seq, "not-written"),
     );
     try std.testing.expectEqual(@as(u64, 0), last_seq);
+}
+
+test "event log recovery streams valid files beyond a whole-file payload cap" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const sessions_dir = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/sessions",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(sessions_dir);
+
+    var files = try resetPersistentSession(std.testing.allocator, sessions_dir, "session:stream/recovery");
+    defer files.deinit(std.testing.allocator);
+
+    const simulated_single_payload_cap: usize = 1024;
+    var payload: [128]u8 = undefined;
+    @memset(&payload, 'x');
+
+    var last_seq = files.last_seq;
+    var expected_size: usize = file_header_size;
+    while (expected_size <= file_header_size + simulated_single_payload_cap) {
+        _ = try appendOutput(std.testing.allocator, files.event_log_path, null, &last_seq, &payload);
+        expected_size += encodedFrameSize(payload.len);
+    }
+
+    try std.testing.expectError(
+        error.FileTooBig,
+        readFileAlloc(std.testing.allocator, files.event_log_path, file_header_size + simulated_single_payload_cap),
+    );
+    try std.testing.expectEqual(last_seq, try readLastSeq(std.testing.allocator, files.event_log_path));
+
+    var reopened = (try openExistingSession(std.testing.allocator, sessions_dir, "session:stream/recovery")).?;
+    defer reopened.deinit(std.testing.allocator);
+    try std.testing.expectEqual(last_seq, reopened.last_seq);
+
+    try appendFile(std.testing.allocator, files.event_log_path, "invalid-tail", 0o600, false);
+    try repairEventLog(std.testing.allocator, files.event_log_path, "session:stream/recovery");
+    try std.testing.expectEqual(last_seq, try readLastSeq(std.testing.allocator, files.event_log_path));
+
+    const repaired_file = (try openReadFile(std.testing.allocator, files.event_log_path)).?;
+    defer _ = std.c.close(repaired_file.fd);
+    try std.testing.expectEqual(expected_size, repaired_file.size);
 }
 
 test "event log parser deterministic malformed-input sweep" {

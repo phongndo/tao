@@ -1,22 +1,32 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cleanup = @import("../cleanup.zig");
 const db = @import("../db.zig");
+const limits = @import("../limits.zig");
 const rpc = @import("../rpc.zig");
 
 const fd_io = @import("fd_io.zig");
 
-const readControlPayload = fd_io.readControlPayload;
+const readControlPayloadWithTimeout = fd_io.readControlPayloadWithTimeout;
 const writeAllFd = fd_io.writeAllFd;
+
+const owner_dir_mode: std.c.mode_t = 0o700;
+const owner_socket_mode: std.c.mode_t = 0o600;
+const assert = std.debug.assert;
+
+extern "c" fn getpeereid(socket: std.c.fd_t, euid: *std.c.uid_t, egid: *std.c.gid_t) c_int;
 
 fn handleConnectionThread(context: anytype) void {
     defer context.daemon.allocator.destroy(context);
+    defer context.daemon.releaseControlConnection();
     context.daemon.handleStream(context.stream) catch |err| {
         std.log.warn("control RPC connection failed: {s}", .{@errorName(err)});
     };
 }
 
 pub fn prepareStorage(self: anytype) !void {
-    try std.fs.cwd().makePath(self.config.run_dir);
+    try ensureOwnerOnlyDir(self.allocator, self.config.root_dir);
+    try ensureOwnerOnlyDir(self.allocator, self.config.run_dir);
     try std.fs.cwd().makePath(self.config.sessions_dir);
     try std.fs.cwd().makePath(self.config.adapters_dir);
     const worktrees_dir = try std.fs.path.join(self.allocator, &.{ self.config.root_dir, "worktrees" });
@@ -43,14 +53,15 @@ pub fn printConfig(self: anytype) void {
 }
 
 pub fn runForever(self: anytype) !void {
-    std.fs.cwd().deleteFile(self.config.socket_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
+    try removeInactiveSocketPath(self.config.socket_path);
 
     const address = try std.net.Address.initUnix(self.config.socket_path);
     var server = try address.listen(.{});
     defer server.deinit();
+    try chmodPath(self.allocator, self.config.socket_path, owner_socket_mode);
+    const socket_stat = try lstatPath(self.config.socket_path);
+    assert(std.posix.S.ISSOCK(socket_stat.mode));
+    assert(socket_stat.uid == std.c.geteuid());
 
     std.log.info("taod listening on {s}", .{self.config.socket_path});
     std.log.info("control RPC, PTY driver, event log, and binary attach stream enabled", .{});
@@ -63,7 +74,15 @@ pub fn runForever(self: anytype) !void {
     while (true) {
         const connection = try server.accept();
         const stream = connection.stream;
+        if (!self.reserveControlConnection()) {
+            std.log.warn("refusing control RPC connection: active connection cap reached ({d})", .{limits.control_connections_max});
+            stream.close();
+            continue;
+        }
+        assert(self.active_control_connections.load(.monotonic) <= limits.control_connections_max);
+
         const context = self.allocator.create(ConnectionContext) catch |err| {
+            self.releaseControlConnection();
             stream.close();
             return err;
         };
@@ -74,6 +93,7 @@ pub fn runForever(self: anytype) !void {
             self.handleStream(stream) catch |stream_err| {
                 std.log.warn("control RPC connection failed: {s}", .{@errorName(stream_err)});
             };
+            self.releaseControlConnection();
             self.allocator.destroy(context);
             continue;
         };
@@ -134,8 +154,11 @@ pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request
 
 pub fn handleStream(self: anytype, stream: std.net.Stream) !void {
     defer stream.close();
+    assert(stream.handle >= 0);
 
-    var control = try readControlPayload(self.allocator, stream.handle);
+    try verifyPeerOwner(stream.handle);
+
+    var control = try readControlPayloadWithTimeout(self.allocator, stream.handle, limits.control_first_line_timeout_ms);
     defer control.deinit(self.allocator);
 
     var parsed = std.json.parseFromSlice(rpc.ControlRequestJson, self.allocator, control.payload, .{
@@ -167,4 +190,161 @@ pub fn writePidFile(self: anytype) !void {
     var buffer: [64]u8 = undefined;
     const pid_text = try std.fmt.bufPrint(&buffer, "{d}\n", .{std.c.getpid()});
     try std.fs.cwd().writeFile(.{ .sub_path = self.config.pid_path, .data = pid_text });
+}
+
+fn ensureOwnerOnlyDir(allocator: std.mem.Allocator, path: []const u8) !void {
+    assert(path.len > 0);
+    try std.fs.cwd().makePath(path);
+    const stat = try lstatPath(path);
+    if (!std.posix.S.ISDIR(stat.mode) or stat.uid != std.c.geteuid()) return error.UnsafeSocketPath;
+    try chmodPath(allocator, path, owner_dir_mode);
+    const updated = try lstatPath(path);
+    assert(std.posix.S.ISDIR(updated.mode));
+    assert(updated.uid == std.c.geteuid());
+}
+
+fn removeInactiveSocketPath(path: []const u8) !void {
+    assert(path.len > 0);
+    const stat = lstatPath(path) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    if (!std.posix.S.ISSOCK(stat.mode) or stat.uid != std.c.geteuid()) return error.UnsafeSocketPath;
+
+    if (std.net.connectUnixSocket(path)) |stream| {
+        stream.close();
+        return error.ActiveSocketAlreadyExists;
+    } else |err| switch (err) {
+        error.ConnectionRefused => {},
+        else => return err,
+    }
+
+    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn lstatPath(path: []const u8) !std.posix.Stat {
+    return std.posix.fstatat(std.fs.cwd().fd, path, std.posix.AT.SYMLINK_NOFOLLOW);
+}
+
+fn chmodPath(allocator: std.mem.Allocator, path: []const u8, mode: std.c.mode_t) !void {
+    assert(path.len > 0);
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+
+    if (std.c.chmod(path_z.ptr, mode) != 0) return error.ChmodFailed;
+}
+
+fn verifyPeerOwner(socket_fd: std.c.fd_t) !void {
+    assert(socket_fd >= 0);
+    switch (builtin.os.tag) {
+        .linux => {
+            const UCred = extern struct {
+                pid: std.c.pid_t,
+                uid: std.c.uid_t,
+                gid: std.c.gid_t,
+            };
+            var credentials: UCred = undefined;
+            try std.posix.getsockopt(
+                socket_fd,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.PEERCRED,
+                std.mem.asBytes(&credentials),
+            );
+            if (credentials.uid != std.c.geteuid()) return error.UnauthorizedPeer;
+        },
+        .macos => {
+            var euid: std.c.uid_t = undefined;
+            var egid: std.c.gid_t = undefined;
+            if (getpeereid(socket_fd, &euid, &egid) != 0) return error.UnauthorizedPeer;
+            if (euid != std.c.geteuid()) return error.UnauthorizedPeer;
+        },
+        else => {},
+    }
+}
+
+test "daemon storage and socket paths are owner-only" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try @import("config.zig").Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = @import("../daemon.zig").Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+    try daemon.prepareStorage();
+
+    const root_stat = try std.fs.cwd().statFile(config.root_dir);
+    const run_stat = try std.fs.cwd().statFile(config.run_dir);
+    try std.testing.expectEqual(@as(std.fs.File.Mode, owner_dir_mode), root_stat.mode & 0o777);
+    try std.testing.expectEqual(@as(std.fs.File.Mode, owner_dir_mode), run_stat.mode & 0o777);
+
+    const address = try std.net.Address.initUnix(config.socket_path);
+    var listener = try address.listen(.{});
+    defer listener.deinit();
+    try chmodPath(std.testing.allocator, config.socket_path, owner_socket_mode);
+
+    const socket_stat = try std.fs.cwd().statFile(config.socket_path);
+    try std.testing.expectEqual(@as(std.fs.File.Mode, owner_socket_mode), socket_stat.mode & 0o777);
+}
+
+test "daemon stale socket cleanup refuses unsafe paths" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try @import("config.zig").Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    try ensureOwnerOnlyDir(std.testing.allocator, config.root_dir);
+    try ensureOwnerOnlyDir(std.testing.allocator, config.run_dir);
+    try std.fs.cwd().writeFile(.{ .sub_path = config.socket_path, .data = "not a socket" });
+    try std.testing.expectError(error.UnsafeSocketPath, removeInactiveSocketPath(config.socket_path));
+
+    const stat = try std.fs.cwd().statFile(config.socket_path);
+    try std.testing.expectEqual(@as(u64, "not a socket".len), stat.size);
+}
+
+test "daemon stale socket cleanup removes only inactive owned sockets" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try @import("config.zig").Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    try ensureOwnerOnlyDir(std.testing.allocator, config.root_dir);
+    try ensureOwnerOnlyDir(std.testing.allocator, config.run_dir);
+
+    const address = try std.net.Address.initUnix(config.socket_path);
+    var listener = try address.listen(.{});
+    try chmodPath(std.testing.allocator, config.socket_path, owner_socket_mode);
+    try std.testing.expectError(error.ActiveSocketAlreadyExists, removeInactiveSocketPath(config.socket_path));
+    listener.deinit();
+
+    try removeInactiveSocketPath(config.socket_path);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().statFile(config.socket_path));
+}
+
+test "daemon peer owner check accepts same-user local sockets" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+
+    var sockets: [2]std.c.fd_t = undefined;
+    if (std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &sockets) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer _ = std.c.close(sockets[0]);
+    defer _ = std.c.close(sockets[1]);
+
+    try verifyPeerOwner(sockets[0]);
+    try verifyPeerOwner(sockets[1]);
 }

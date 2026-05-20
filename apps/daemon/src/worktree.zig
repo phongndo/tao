@@ -5,6 +5,8 @@ const rpc = @import("rpc.zig");
 const workspace = @import("workspace.zig");
 const worktree_name = @import("worktree_name.zig");
 
+const assert = std.debug.assert;
+
 const ErrorCode = enum {
     invalid_workspace,
     invalid_worktree,
@@ -105,6 +107,8 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer self.allocator.free(parent_path);
     const worktree_path = try std.fs.path.join(self.allocator, &.{ parent_path, folder_name });
     defer self.allocator.free(worktree_path);
+    assert(parent_path.len > 0);
+    assert(worktree_path.len > parent_path.len);
     if (!isPathUnder(parent_path, worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path escaped root");
     if (pathExists(worktree_path) or try database.worktreePathExists(worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path already exists");
 
@@ -180,6 +184,12 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer workspace_row.deinit(self.allocator);
 
     if (std.mem.eql(u8, workspace_row.root_path, row.path)) return errorResponse(allocator, request, .invalid_path, "cannot remove workspace root as worktree");
+
+    if (std.mem.eql(u8, row.created_by, "external") and !request.requestForce()) {
+        try database.archiveWorktree(row.id);
+        return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
+    }
+    assert(!std.mem.eql(u8, row.created_by, "external") or request.requestForce());
 
     const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
@@ -446,4 +456,85 @@ fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
 test "worktree path containment requires separator" {
     try std.testing.expect(isPathUnder("/tmp/root", "/tmp/root/child"));
     try std.testing.expect(!isPathUnder("/tmp/root", "/tmp/root-other/child"));
+}
+
+test "default remove archives external worktree without deleting git worktree" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const tmp_root_rel = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(tmp_root_rel);
+    const tmp_root = try std.fs.cwd().realpathAlloc(allocator, tmp_root_rel);
+    defer allocator.free(tmp_root);
+
+    const repo_path = try std.fs.path.join(allocator, &.{ tmp_root, "repo" });
+    defer allocator.free(repo_path);
+    const external_path = try std.fs.path.join(allocator, &.{ tmp_root, "external-worktree" });
+    defer allocator.free(external_path);
+    try std.fs.cwd().makePath(repo_path);
+
+    const init_args = [_][]const u8{"init"};
+    var out = try git.runGitAlloc(allocator, repo_path, &init_args);
+    allocator.free(out);
+    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    out = try git.runGitAlloc(allocator, repo_path, &commit_args);
+    allocator.free(out);
+    try git.worktreeAddNewBranch(allocator, repo_path, "external-branch", external_path, "HEAD");
+
+    var database = try db.Database.openInMemory(allocator);
+    try database.insertWorkspace(.{
+        .id = "workspace-1",
+        .name = "repo",
+        .root_path = repo_path,
+        .git_common_dir = ".git",
+        .workspace_slug = "repo",
+        .default_branch = null,
+        .order_index = 0,
+    });
+    try database.insertWorktree(.{
+        .id = "worktree-external",
+        .workspace_id = "workspace-1",
+        .title = "External",
+        .folder_name = "external-worktree",
+        .path = external_path,
+        .branch = "external-branch",
+        .state = "active",
+        .order_index = 0,
+        .created_by = "external",
+    });
+
+    var subject = struct {
+        allocator: std.mem.Allocator,
+        database: ?db.Database,
+    }{
+        .allocator = allocator,
+        .database = database,
+    };
+    defer {
+        if (subject.database) |*subject_database| subject_database.deinit();
+    }
+
+    const response = try handleRemoveLocked(&subject, allocator, .{
+        .id = "remove",
+        .method = "worktree.remove",
+        .worktree_id = "worktree-external",
+    });
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":true") != null);
+    try std.testing.expect(pathExists(external_path));
+    try std.testing.expect(!try subject.database.?.worktreePathExists(external_path));
+    var archived = (try subject.database.?.findWorktreeById(allocator, "worktree-external")).?;
+    defer archived.deinit(allocator);
+    try std.testing.expectEqualStrings("archived", archived.state);
+    try std.testing.expect(archived.archived_at != null);
+
+    const entries = try git.worktreeListAlloc(allocator, repo_path);
+    defer {
+        for (entries) |*entry| entry.deinit(allocator);
+        allocator.free(entries);
+    }
+    try std.testing.expect(findGitWorktree(allocator, entries, external_path) != null);
 }

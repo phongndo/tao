@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const max_git_output_bytes = 8 * 1024 * 1024;
+const assert = std.debug.assert;
 
 pub const GitError = error{
     GitFailed,
@@ -47,6 +48,7 @@ const MutableWorktreeListEntry = struct {
 
     fn finish(self: *MutableWorktreeListEntry) ?WorktreeListEntry {
         const path = self.path orelse return null;
+        assert(path.len > 0);
         const result: WorktreeListEntry = .{
             .path = path,
             .head = self.head,
@@ -234,8 +236,13 @@ pub fn parseWorktreeListPorcelainZ(allocator: std.mem.Allocator, output: []const
         if (field.len == 0) continue;
 
         if (std.mem.startsWith(u8, field, "worktree ")) {
-            if (current.finish()) |entry| try entries.append(allocator, entry);
+            if (current.finish()) |entry_value| {
+                var entry = entry_value;
+                errdefer entry.deinit(allocator);
+                try entries.append(allocator, entry);
+            }
             current.path = try allocator.dupe(u8, field["worktree ".len..]);
+            assert(current.path.?.len > 0);
             continue;
         }
         if (current.path == null) continue;
@@ -257,8 +264,14 @@ pub fn parseWorktreeListPorcelainZ(allocator: std.mem.Allocator, output: []const
         if (std.mem.startsWith(u8, field, "prunable")) current.prunable = true;
     }
 
-    if (current.finish()) |entry| try entries.append(allocator, entry);
-    return entries.toOwnedSlice(allocator);
+    if (current.finish()) |entry_value| {
+        var entry = entry_value;
+        errdefer entry.deinit(allocator);
+        try entries.append(allocator, entry);
+    }
+    const owned = try entries.toOwnedSlice(allocator);
+    for (owned) |entry| assert(entry.path.len > 0);
+    return owned;
 }
 
 fn trimTrailingNewlines(value: []const u8) []const u8 {
@@ -290,4 +303,25 @@ test "parses worktree porcelain z output" {
     try std.testing.expectEqualStrings("main", entries[0].branch.?);
     try std.testing.expectEqualStrings("/tmp/wt", entries[1].path);
     try std.testing.expectEqualStrings("luminous-galileo-a13f", entries[1].branch.?);
+}
+
+fn parseWorktreeListPorcelainZForAllocationFailure(allocator: std.mem.Allocator) !void {
+    const sample = "worktree /repo\x00HEAD abc123\x00branch refs/heads/main\x00\x00worktree /tmp/wt\x00HEAD def456\x00branch refs/heads/luminous-galileo-a13f\x00detached\x00\x00";
+    const entries = try parseWorktreeListPorcelainZ(allocator, sample);
+    defer {
+        for (entries) |*entry| entry.deinit(allocator);
+        allocator.free(entries);
+    }
+    try std.testing.expectEqual(@as(usize, 2), entries.len);
+    try std.testing.expectEqualStrings("/repo", entries[0].path);
+    try std.testing.expectEqualStrings("luminous-galileo-a13f", entries[1].branch.?);
+    try std.testing.expect(entries[1].detached);
+}
+
+test "worktree porcelain parser cleans up on OOM" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        parseWorktreeListPorcelainZForAllocationFailure,
+        .{},
+    );
 }

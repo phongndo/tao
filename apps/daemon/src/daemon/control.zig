@@ -1,6 +1,7 @@
 const std = @import("std");
 const cleanup = @import("../cleanup.zig");
 const event_log = @import("../event_log.zig");
+const pty = @import("../pty.zig");
 const rpc = @import("../rpc.zig");
 const session = @import("../session.zig");
 
@@ -48,6 +49,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     try self.ensureSessionPersistence(created);
     try self.ensureSessionProcess(created, request.argv orelse &.{});
+    errdefer if (!created.reader_started) terminateUnstartedPtyChildLocked(self, created);
     if (created.event_log_path) |path| {
         _ = event_log.appendResize(self.allocator, path, &created.last_seq, cols, rows) catch |err| {
             std.log.warn("failed to append create resize frame for {s}: {t}", .{ created.id, err });
@@ -137,14 +139,18 @@ pub fn handleKillLocked(self: anytype, allocator: std.mem.Allocator, request: rp
         self.pty_driver.terminate(child) catch |err| {
             std.log.warn("failed to terminate PTY for {s}: {t}", .{ item.id, err });
         };
-        child.close();
+        pty.reapInBackground(child) catch |err| {
+            std.log.warn("failed to start PTY reaper for killed session {s}: {t}", .{ item.id, err });
+        };
     }
     if (item.event_log_path) |path| {
         _ = event_log.appendExit(self.allocator, path, &item.last_seq, 0, 15) catch |err| {
             std.log.warn("failed to append kill exit frame for {s}: {t}", .{ item.id, err });
         };
     }
-    item.pty_child = null;
+    if (item.pty_child) |child| {
+        if (child.pid <= 0) item.pty_child = null;
+    }
     item.reader_started = false;
     try self.broadcastExitFrameLocked(item, item.last_seq, 0, 15);
     if (!self.sessions.kill(session_id)) return notFound(allocator, request);
@@ -161,6 +167,21 @@ pub fn handleKillLocked(self: anytype, allocator: std.mem.Allocator, request: rp
     self.lock();
 
     return response;
+}
+
+fn terminateUnstartedPtyChildLocked(self: anytype, item: *session.TerminalSession) void {
+    if (item.pty_child) |*child| {
+        self.pty_driver.terminate(child) catch |err| {
+            std.log.warn("failed to terminate unstarted PTY for {s}: {t}", .{ item.id, err });
+        };
+        pty.reapInBackground(child) catch |err| {
+            std.log.warn("failed to start PTY reaper for unstarted session {s}: {t}", .{ item.id, err });
+            item.reader_started = false;
+            return;
+        };
+        item.pty_child = null;
+    }
+    item.reader_started = false;
 }
 
 pub fn handleClearHistoryLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
