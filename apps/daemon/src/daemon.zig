@@ -59,6 +59,7 @@ pub const Daemon = struct {
     persistence: PersistencePolicy,
     mutex: std.Thread.Mutex = .{},
     active_control_connections: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    active_session_readers: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     const ProcessContext = process.Context(*Daemon);
     const StreamContext = stream_mod.Context(*Daemon);
@@ -75,8 +76,42 @@ pub const Daemon = struct {
     }
 
     pub fn deinit(self: *Daemon) void {
+        self.stopSessionProcessesForDeinit();
+        self.waitForSessionReadersForDeinit();
         if (self.database) |*database| database.deinit();
         self.sessions.deinit();
+    }
+
+    fn stopSessionProcessesForDeinit(self: *Daemon) void {
+        self.lock();
+        defer self.unlock();
+
+        for (self.sessions.sessions.items) |*item| {
+            if (item.pty_child) |*child| {
+                if (child.pid > 0) {
+                    self.pty_driver.terminate(child) catch |err| {
+                        std.log.warn("failed to terminate PTY during daemon teardown for {s}: {t}", .{ item.id, err });
+                        child.close();
+                    };
+                    _ = self.pty_driver.wait(child) catch |err| {
+                        std.log.warn("failed to reap PTY during daemon teardown for {s}: {t}", .{ item.id, err });
+                    };
+                } else {
+                    child.close();
+                }
+                item.pty_child = null;
+            }
+            item.reader_started = false;
+            item.assertInvariants();
+        }
+    }
+
+    fn waitForSessionReadersForDeinit(self: *Daemon) void {
+        var spins: usize = 0;
+        while (self.active_session_readers.load(.acquire) != 0 and spins < 400) : (spins += 1) {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+        std.debug.assert(self.active_session_readers.load(.acquire) == 0);
     }
 
     pub fn prepareStorage(self: *Daemon) !void {

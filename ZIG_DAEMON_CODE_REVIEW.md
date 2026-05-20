@@ -75,16 +75,16 @@ Top 5 risks:
 
 ## Dedupe Table
 
-| Finding | Reported By | Consolidated As |
-|---|---|---|
-| PTY child zombies / lost process ownership | Correctness, Memory | High resource lifetime bug |
-| Event logs fail over 64 MiB | Correctness, Security, Testing | Medium persistence recovery bug |
-| Idle sockets / unbounded threads | Memory, Security | Medium local DoS/resource-bound bug |
-| Blocking IO under global lock | Correctness, Performance, Zig API | Medium architecture/perf risk |
-| External worktree deletion | Correctness | High data-loss contract bug |
-| Response OOM leaks | Memory | Medium allocator bug |
-| Weak socket/protocol integration tests | Testing, Security | Highest ROI test gap |
-| Broad `anytype`/public daemon API | Zig API | Refactor after tests exist |
+| Finding                                    | Reported By                       | Consolidated As                     |
+| ------------------------------------------ | --------------------------------- | ----------------------------------- |
+| PTY child zombies / lost process ownership | Correctness, Memory               | High resource lifetime bug          |
+| Event logs fail over 64 MiB                | Correctness, Security, Testing    | Medium persistence recovery bug     |
+| Idle sockets / unbounded threads           | Memory, Security                  | Medium local DoS/resource-bound bug |
+| Blocking IO under global lock              | Correctness, Performance, Zig API | Medium architecture/perf risk       |
+| External worktree deletion                 | Correctness                       | High data-loss contract bug         |
+| Response OOM leaks                         | Memory                            | Medium allocator bug                |
+| Weak socket/protocol integration tests     | Testing, Security                 | Highest ROI test gap                |
+| Broad `anytype`/public daemon API          | Zig API                           | Refactor after tests exist          |
 
 ## TigerBeetle Gap Analysis
 
@@ -95,17 +95,17 @@ Sources used:
 - <https://tigerbeetle.com/blog/2022-10-12-a-database-without-dynamic-memory/>
 - <https://tigerbeetle.com/blog/2025-02-13-a-descent-into-the-vortex/>
 
-| Area | Current repo | TigerBeetle-inspired standard | Applies? | Recommendation |
-|---|---|---|---|---|
-| Resource bounds | Limits exist in `apps/daemon/src/limits.zig`, but threads/connections/log size are not fully bounded | Everything has an explicit upper bound | A | Add connection/thread/log/session retention caps |
-| Allocation | Good OOM tests in many modules; hot paths still allocate per frame/snapshot | Up-front/static where hot or reliability-critical | B | Use fixed/reused buffers for stream/event-log hot paths |
-| Ownership | Slices mostly explicit, but PTY child ownership can be lost | One owner, one cleanup path | A | Introduce process owner object: terminate/close/reap |
-| Assertions | Strong in session/codec paths | Meaningful pre/postcondition assertions | B | Add assertions around child ownership, lock-held invariants, log size semantics |
-| Testing | 74 daemon tests pass; good unit coverage | Defense-in-depth: unit, fuzz, integration, simulation | A | Add socket integration, fuzz/property, interleaving simulation |
-| Fault model | Corrupt CRCs tested; large valid logs and live socket split-brain not covered | Treat disk/network as faulty external inputs | A | Stream-parse logs and validate live/stale socket ownership |
-| Mechanical sympathy | Bounded buffers exist; control/data-plane mixed under lock | Separate control/data plane, batch/cost model | B | Move Git/file/adapter/blocking work outside global lock |
-| Minimal dependencies | Zig daemon depends on Ghostty VT and SQLite; reasonable for domain | Avoid hidden complexity | B | Keep dependencies, but isolate adapter/Node tests from core |
-| Direct/simple code | Code is explicit but `anytype` forwarding widens contracts | Narrow interfaces, illegal states hard to represent | A | Typed control request union; enum worktree/agent states |
+| Area                 | Current repo                                                                                         | TigerBeetle-inspired standard                         | Applies? | Recommendation                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | -------- | ------------------------------------------------------------------------------- |
+| Resource bounds      | Limits exist in `apps/daemon/src/limits.zig`, but threads/connections/log size are not fully bounded | Everything has an explicit upper bound                | A        | Add connection/thread/log/session retention caps                                |
+| Allocation           | Good OOM tests in many modules; hot paths still allocate per frame/snapshot                          | Up-front/static where hot or reliability-critical     | B        | Use fixed/reused buffers for stream/event-log hot paths                         |
+| Ownership            | Slices mostly explicit, but PTY child ownership can be lost                                          | One owner, one cleanup path                           | A        | Introduce process owner object: terminate/close/reap                            |
+| Assertions           | Strong in session/codec paths                                                                        | Meaningful pre/postcondition assertions               | B        | Add assertions around child ownership, lock-held invariants, log size semantics |
+| Testing              | 74 daemon tests pass; good unit coverage                                                             | Defense-in-depth: unit, fuzz, integration, simulation | A        | Add socket integration, fuzz/property, interleaving simulation                  |
+| Fault model          | Corrupt CRCs tested; large valid logs and live socket split-brain not covered                        | Treat disk/network as faulty external inputs          | A        | Stream-parse logs and validate live/stale socket ownership                      |
+| Mechanical sympathy  | Bounded buffers exist; control/data-plane mixed under lock                                           | Separate control/data plane, batch/cost model         | B        | Move Git/file/adapter/blocking work outside global lock                         |
+| Minimal dependencies | Zig daemon depends on Ghostty VT and SQLite; reasonable for domain                                   | Avoid hidden complexity                               | B        | Keep dependencies, but isolate adapter/Node tests from core                     |
+| Direct/simple code   | Code is explicit but `anytype` forwarding widens contracts                                           | Narrow interfaces, illegal states hard to represent   | A        | Typed control request union; enum worktree/agent states                         |
 
 ## Highest ROI Fix Plan
 

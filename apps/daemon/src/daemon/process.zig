@@ -71,6 +71,8 @@ pub fn Context(comptime Daemon: type) type {
             if (child.master_fd < 0) return;
             const owned_session_id = try std.heap.smp_allocator.dupe(u8, item.id);
             errdefer std.heap.smp_allocator.free(owned_session_id);
+            _ = self.daemon.active_session_readers.fetchAdd(1, .release);
+            errdefer _ = self.daemon.active_session_readers.fetchSub(1, .acquire);
             const thread = try std.Thread.spawn(.{}, sessionReaderThread, .{ self, owned_session_id });
             item.reader_started = true;
             thread.detach();
@@ -243,7 +245,10 @@ pub fn Context(comptime Daemon: type) type {
         }
 
         fn sessionReaderThread(context: Self, session_id: []u8) void {
-            defer std.heap.smp_allocator.free(session_id);
+            defer {
+                std.heap.smp_allocator.free(session_id);
+                _ = context.daemon.active_session_readers.fetchSub(1, .acquire);
+            }
 
             context.runSessionReader(session_id) catch |err| {
                 std.log.warn("session reader failed for {s}: {t}", .{ session_id, err });
