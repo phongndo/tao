@@ -176,4 +176,3 @@ Not verified:
 Remaining risk:
 
 The strongest findings are source-proven, but runtime severity still depends on deployment posture and real daemon workload. The next useful proof is a focused socket/process integration harness.
-
