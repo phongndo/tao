@@ -173,11 +173,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
         defer self.lock();
         break :blk git.worktreeAddNewBranch(self.allocator, workspace_row.root_path, branch_name, worktree_path, start_point);
     }) catch |err| {
-        {
-            self.unlock();
-            defer self.lock();
-            safeDeletePartialWorktree(self.allocator, self.config.root_dir, worktree_path);
-        }
+        std.log.warn("git worktree add failed for {s}; leaving path in place for reconciliation", .{worktree_path});
         try database.updateWorktreeState(effective_worktree_id, "error", @errorName(err));
         return errorResponse(allocator, request, .git_failed, "git worktree add failed");
     };
@@ -542,15 +538,6 @@ fn isPathUnder(parent: []const u8, path: []const u8) bool {
 fn pathExists(path: []const u8) bool {
     std.fs.cwd().access(path, .{}) catch return false;
     return true;
-}
-
-fn safeDeletePartialWorktree(allocator: std.mem.Allocator, root_dir: []const u8, worktree_path: []const u8) void {
-    const worktree_root = std.fs.path.join(allocator, &.{ root_dir, "worktrees" }) catch return;
-    defer allocator.free(worktree_root);
-    if (!isPathUnder(worktree_root, worktree_path)) return;
-    std.fs.cwd().deleteTree(worktree_path) catch |err| {
-        std.log.warn("failed to remove partial worktree {s}: {t}", .{ worktree_path, err });
-    };
 }
 
 fn pruneGitWorktrees(allocator: std.mem.Allocator, repository_path: []const u8) void {
