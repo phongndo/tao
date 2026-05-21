@@ -296,14 +296,6 @@ function ensureGitStateWatcher(): GitStateWatcher {
   return gitStateWatcher
 }
 
-function warmSessionBackend() {
-  void ensureTaodBridge()
-    .ensureReady()
-    .catch((err) => {
-      console.warn(`[main] Failed to warm taod backend: ${errorMessageFromUnknown(err)}`)
-    })
-}
-
 function disposeSessionBackends() {
   gitStateWatcher?.dispose()
   gitStateWatcher = null
@@ -572,12 +564,10 @@ ipcMain.handle('workspace:getPullRequestInfo', async (event, workspacePath: unkn
 
 app.whenReady().then(() => {
   createWindow()
-  warmSessionBackend()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
-      warmSessionBackend()
     }
   })
 })

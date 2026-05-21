@@ -1197,6 +1197,8 @@ export function App() {
 
     async function syncDaemonWorkspaces() {
       const currentWorkspaces = useTaoStore.getState().workspaces
+      if (currentWorkspaces.length === 0) return
+
       for (const workspace of currentWorkspaces) {
         try {
           const response = await window.electronAPI.addWorkspace({
