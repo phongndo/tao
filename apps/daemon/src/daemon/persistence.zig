@@ -38,7 +38,7 @@ pub fn restoreSessionFromDatabaseLocked(
     const rows = request.rows orelse record.rows;
     const cwd = request.cwd orelse record.cwd;
     const terminal_id = request.requestTerminalId() orelse record.terminal_id;
-    const workspace_id = request.requestWorkspaceId() orelse record.workspace_id;
+    const workspace_id = request.requestWorkspaceId() orelse record.workspace_id orelse return null;
     const worktree_id = request.requestWorktreeId() orelse record.worktree_id;
 
     if (mutable_resume_lookup) |lookup| {
