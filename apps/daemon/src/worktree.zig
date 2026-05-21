@@ -67,7 +67,18 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer workspace_row.deinit(self.allocator);
     if (workspace_row.git_common_dir == null) return errorResponse(allocator, request, .invalid_workspace, "workspace is not a Git repository");
 
-    const base_branch_owned = try resolveBaseBranchAlloc(self.allocator, workspace_row.root_path, workspace_row.default_branch, request.requestBaseBranch());
+    const base_branch_owned = if (request.requestBaseBranch()) |value|
+        try self.allocator.dupe(u8, value)
+    else if (workspace_row.default_branch) |value|
+        try self.allocator.dupe(u8, value)
+    else blk: {
+        const current = blk_current: {
+            self.unlock();
+            defer self.lock();
+            break :blk_current try git.currentBranchAlloc(self.allocator, workspace_row.root_path);
+        };
+        break :blk current orelse return errorResponse(allocator, request, .invalid_workspace, "workspace default branch not found");
+    };
     defer self.allocator.free(base_branch_owned);
     const target_branch = request.requestTargetBranch() orelse base_branch_owned;
     const start_point = request.requestStartPoint() orelse base_branch_owned;
@@ -83,7 +94,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
         if (!worktree_name.isValidFolderName(manual_folder)) return errorResponse(allocator, request, .invalid_name, "invalid folder_name");
         folder_name = @constCast(manual_folder);
     } else {
-        folder_name = try generateAvailableFolderAlloc(self.allocator, database, &workspace_row, self.config.root_dir);
+        folder_name = try generateAvailableFolderAlloc(self, database, &workspace_row);
         generated_folder = true;
     }
 
@@ -97,7 +108,11 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     if (try database.worktreeFolderExists(workspace_row.id, folder_name)) return errorResponse(allocator, request, .invalid_name, "folder_name already exists");
     if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
-    const branch_in_git = git.branchExists(self.allocator, workspace_row.root_path, branch_name) catch |err| switch (err) {
+    const branch_in_git = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.branchExists(self.allocator, workspace_row.root_path, branch_name);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to check branch existence"),
         else => return err,
     };
@@ -110,7 +125,12 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     assert(parent_path.len > 0);
     assert(worktree_path.len > parent_path.len);
     if (!isPathUnder(parent_path, worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path escaped root");
-    if (pathExists(worktree_path) or try database.worktreePathExists(worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path already exists");
+    const worktree_path_exists = blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk pathExists(worktree_path);
+    };
+    if (worktree_path_exists or try database.worktreePathExists(worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path already exists");
 
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
     defer self.allocator.free(worktree_id);
@@ -132,16 +152,32 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer inserted_row.deinit(self.allocator);
     const effective_worktree_id = inserted_row.id;
 
-    std.fs.cwd().makePath(parent_path) catch |err| {
+    (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk std.fs.cwd().makePath(parent_path);
+    }) catch |err| {
         try database.updateWorktreeState(effective_worktree_id, "error", @errorName(err));
         return errorResponse(allocator, request, .invalid_path, "failed to create worktree parent directory");
     };
 
     const prune_args = [_][]const u8{ "worktree", "prune" };
-    if (git.runGitAlloc(self.allocator, workspace_row.root_path, &prune_args)) |out| self.allocator.free(out) else |_| {}
+    {
+        self.unlock();
+        defer self.lock();
+        if (git.runGitAlloc(self.allocator, workspace_row.root_path, &prune_args)) |out| self.allocator.free(out) else |_| {}
+    }
 
-    git.worktreeAddNewBranch(self.allocator, workspace_row.root_path, branch_name, worktree_path, start_point) catch |err| {
-        safeDeletePartialWorktree(self.allocator, self.config.root_dir, worktree_path);
+    (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.worktreeAddNewBranch(self.allocator, workspace_row.root_path, branch_name, worktree_path, start_point);
+    }) catch |err| {
+        {
+            self.unlock();
+            defer self.lock();
+            safeDeletePartialWorktree(self.allocator, self.config.root_dir, worktree_path);
+        }
         try database.updateWorktreeState(effective_worktree_id, "error", @errorName(err));
         return errorResponse(allocator, request, .git_failed, "git worktree add failed");
     };
@@ -194,7 +230,11 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
     }
     assert(!std.mem.eql(u8, row.created_by, "external") or request.requestForce());
 
-    const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
+    const entries = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.worktreeListAlloc(self.allocator, workspace_row.root_path);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
         else => return err,
     };
@@ -202,15 +242,32 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
         for (entries) |*entry| entry.deinit(self.allocator);
         self.allocator.free(entries);
     }
-    const git_entry = findGitWorktree(self.allocator, entries, row.path);
-    if (!pathExists(row.path) or git_entry == null or (git_entry != null and git_entry.?.prunable)) {
-        pruneGitWorktrees(self.allocator, workspace_row.root_path);
+    const git_entry = blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk findGitWorktree(self.allocator, entries, row.path);
+    };
+    const row_path_exists = blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk pathExists(row.path);
+    };
+    if (!row_path_exists or git_entry == null or (git_entry != null and git_entry.?.prunable)) {
+        {
+            self.unlock();
+            defer self.lock();
+            pruneGitWorktrees(self.allocator, workspace_row.root_path);
+        }
         try database.archiveWorktree(row.id);
         return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
     }
 
     if (!request.requestForce()) {
-        const dirty = git.isDirty(self.allocator, row.path) catch |err| switch (err) {
+        const dirty = (blk: {
+            self.unlock();
+            defer self.lock();
+            break :blk git.isDirty(self.allocator, row.path);
+        }) catch |err| switch (err) {
             error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to determine worktree status"),
             else => return err,
         };
@@ -218,9 +275,22 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
     }
 
     try database.updateWorktreeState(row.id, "removing", null);
-    git.worktreeRemove(self.allocator, workspace_row.root_path, row.path, request.requestForce()) catch |err| {
-        if (!pathExists(row.path)) {
-            pruneGitWorktrees(self.allocator, workspace_row.root_path);
+    (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.worktreeRemove(self.allocator, workspace_row.root_path, row.path, request.requestForce());
+    }) catch |err| {
+        const removed_path_exists = blk_exists: {
+            self.unlock();
+            defer self.lock();
+            break :blk_exists pathExists(row.path);
+        };
+        if (!removed_path_exists) {
+            {
+                self.unlock();
+                defer self.lock();
+                pruneGitWorktrees(self.allocator, workspace_row.root_path);
+            }
             try database.archiveWorktree(row.id);
             return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
         }
@@ -231,8 +301,12 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     if (request.requestDeleteBranch()) {
         const delete_args = [_][]const u8{ "branch", "-D", row.branch };
-        if (git.runGitAlloc(self.allocator, workspace_row.root_path, &delete_args)) |out| self.allocator.free(out) else |err| {
-            std.log.warn("branch deletion failed for {s}: {t}", .{ row.branch, err });
+        {
+            self.unlock();
+            defer self.lock();
+            if (git.runGitAlloc(self.allocator, workspace_row.root_path, &delete_args)) |out| self.allocator.free(out) else |err| {
+                std.log.warn("branch deletion failed for {s}: {t}", .{ row.branch, err });
+            }
         }
     }
 
@@ -246,7 +320,11 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
     var workspace_row = (try database.findWorkspaceById(self.allocator, workspace_id)) orelse return errorResponse(allocator, request, .invalid_workspace, "workspace not found");
     defer workspace_row.deinit(self.allocator);
 
-    const canonical = workspace.canonicalPathAlloc(self.allocator, path) catch return errorResponse(allocator, request, .invalid_path, "invalid worktree path");
+    const canonical = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk workspace.canonicalPathAlloc(self.allocator, path);
+    }) catch return errorResponse(allocator, request, .invalid_path, "invalid worktree path");
     defer self.allocator.free(canonical);
     if (std.mem.eql(u8, canonical, workspace_row.root_path)) return errorResponse(allocator, request, .invalid_path, "cannot adopt workspace root as worktree");
     if (try database.findWorktreeByPath(self.allocator, canonical)) |existing_row| {
@@ -260,7 +338,11 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         return jsonAlloc(allocator, WorktreePayload{ .id = request.requestId(), .worktree = response });
     }
 
-    const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
+    const entries = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.worktreeListAlloc(self.allocator, workspace_row.root_path);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
         else => return err,
     };
@@ -268,9 +350,17 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         for (entries) |*entry| entry.deinit(self.allocator);
         self.allocator.free(entries);
     }
-    const entry = findGitWorktree(self.allocator, entries, canonical) orelse return errorResponse(allocator, request, .invalid_path, "path is not a Git worktree for this workspace");
+    const entry = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk findGitWorktree(self.allocator, entries, canonical);
+    }) orelse return errorResponse(allocator, request, .invalid_path, "path is not a Git worktree for this workspace");
     if (entry.prunable) {
-        pruneGitWorktrees(self.allocator, workspace_row.root_path);
+        {
+            self.unlock();
+            defer self.lock();
+            pruneGitWorktrees(self.allocator, workspace_row.root_path);
+        }
         return errorResponse(allocator, request, .invalid_path, "path is a prunable Git worktree");
     }
     const basename = std.fs.path.basename(canonical);
@@ -320,7 +410,11 @@ fn refreshSingleWorktree(self: anytype, database: *db.Database, worktree_id: []c
 fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id: []const u8) !void {
     var workspace_row = (try database.findWorkspaceById(self.allocator, workspace_id)) orelse return error.InvalidWorkspace;
     defer workspace_row.deinit(self.allocator);
-    const entries = git.worktreeListAlloc(self.allocator, workspace_row.root_path) catch |err| switch (err) {
+    const entries = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.worktreeListAlloc(self.allocator, workspace_row.root_path);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => {
             std.log.warn("git worktree list failed for {s}: {t}", .{ workspace_row.root_path, err });
             return;
@@ -337,8 +431,18 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
         self.allocator.free(rows);
     }
     for (rows) |row| {
-        if (findGitWorktree(self.allocator, entries, row.path)) |entry| {
-            if (entry.prunable or !pathExists(row.path)) {
+        const maybe_entry = blk: {
+            self.unlock();
+            defer self.lock();
+            break :blk findGitWorktree(self.allocator, entries, row.path);
+        };
+        if (maybe_entry) |entry| {
+            const row_path_exists = blk: {
+                self.unlock();
+                defer self.lock();
+                break :blk pathExists(row.path);
+            };
+            if (entry.prunable or !row_path_exists) {
                 try database.archiveWorktree(row.id);
                 continue;
             }
@@ -350,7 +454,12 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
             };
             try database.updateWorktreeGit(row.id, branch, "active");
         } else {
-            if (!pathExists(row.path)) {
+            const row_path_exists = blk: {
+                self.unlock();
+                defer self.lock();
+                break :blk pathExists(row.path);
+            };
+            if (!row_path_exists) {
                 try database.archiveWorktree(row.id);
             } else {
                 try database.updateWorktreeState(row.id, "missing", null);
@@ -359,36 +468,39 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
     }
 }
 
-fn generateAvailableFolderAlloc(allocator: std.mem.Allocator, database: *db.Database, workspace_row: *const db.WorkspaceRow, root_dir: []const u8) ![]u8 {
+fn generateAvailableFolderAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow) ![]u8 {
     var suffix_len: usize = 4;
     var attempts: usize = 0;
     while (attempts < 64) : (attempts += 1) {
         if (attempts == 16) suffix_len = 6;
         if (attempts == 32) suffix_len = 8;
-        const folder = try worktree_name.generatedFolderNameAlloc(allocator, suffix_len);
+        const folder = try worktree_name.generatedFolderNameAlloc(self.allocator, suffix_len);
         var keep_folder = false;
-        defer if (!keep_folder) allocator.free(folder);
-        const branch = try worktree_name.branchForFolderAlloc(allocator, folder);
-        defer allocator.free(branch);
-        const parent = try worktreeParentPathAlloc(allocator, root_dir, workspace_row.workspace_slug);
-        defer allocator.free(parent);
-        const candidate_path = try std.fs.path.join(allocator, &.{ parent, folder });
-        defer allocator.free(candidate_path);
-        if (pathExists(candidate_path)) continue;
+        defer if (!keep_folder) self.allocator.free(folder);
+        const branch = try worktree_name.branchForFolderAlloc(self.allocator, folder);
+        defer self.allocator.free(branch);
+        const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
+        defer self.allocator.free(parent);
+        const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
+        defer self.allocator.free(candidate_path);
+        const candidate_exists = blk: {
+            self.unlock();
+            defer self.lock();
+            break :blk pathExists(candidate_path);
+        };
+        if (candidate_exists) continue;
         if (try database.worktreeFolderExists(workspace_row.id, folder)) continue;
         if (try database.worktreeBranchExists(workspace_row.id, branch)) continue;
-        if (git.branchExists(allocator, workspace_row.root_path, branch) catch false) continue;
+        const branch_exists = blk: {
+            self.unlock();
+            defer self.lock();
+            break :blk git.branchExists(self.allocator, workspace_row.root_path, branch) catch false;
+        };
+        if (branch_exists) continue;
         keep_folder = true;
         return folder;
     }
     return error.TooManyCollisions;
-}
-
-fn resolveBaseBranchAlloc(allocator: std.mem.Allocator, root_path: []const u8, default_branch: ?[]const u8, requested: ?[]const u8) ![]u8 {
-    if (requested) |value| return allocator.dupe(u8, value);
-    if (default_branch) |value| return allocator.dupe(u8, value);
-    if (try git.currentBranchAlloc(allocator, root_path)) |value| return value;
-    return error.InvalidWorkspace;
 }
 
 fn worktreeParentPathAlloc(allocator: std.mem.Allocator, root_dir: []const u8, workspace_slug: []const u8) ![]u8 {
@@ -515,6 +627,9 @@ test "default remove archives external worktree without deleting git worktree" {
     var subject = struct {
         allocator: std.mem.Allocator,
         database: ?db.Database,
+
+        pub fn unlock(_: *@This()) void {}
+        pub fn lock(_: *@This()) void {}
     }{
         .allocator = allocator,
         .database = database,
