@@ -78,6 +78,7 @@ const MAX_PENDING_DATA_CHARS = 1024 * 1024
 const MAX_PENDING_OUTPUT_CHARS = 1024 * 1024
 
 let ptyPort: MessagePort | null = null
+let ptyPortRequested = false
 let rendererReadySignaled = false
 let rendererShown = false
 let pendingClientMessages: PtyClientMessage[] = []
@@ -500,7 +501,11 @@ function removeRendererShownWaiter(resolve: () => void) {
   if (index >= 0) rendererShownWaiters.splice(index, 1)
 }
 
-ipcRenderer.send('pty:requestPort')
+function requestPtyPort() {
+  if (ptyPort || ptyPortRequested) return
+  ptyPortRequested = true
+  ipcRenderer.send('pty:requestPort')
+}
 
 /**
  * The API exposed to the renderer process via contextBridge.
@@ -537,6 +542,7 @@ const electronAPI = {
     const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
+    requestPtyPort()
     queuePtyMessage({
       type: 'spawn',
       sessionId,
@@ -573,6 +579,7 @@ const electronAPI = {
       return Promise.reject(new Error('workspaceId is required'))
     }
     const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
+    requestPtyPort()
     queuePtyMessage({
       type: 'attach',
       sessionId,
@@ -700,23 +707,13 @@ const electronAPI = {
   },
 
   spawnPty(sessionId: string, cols: number, rows: number, cwd?: string): Promise<PtySize> {
+    void cols
+    void rows
+    void cwd
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       return Promise.reject(new Error('PTY sessionId is required'))
     }
-    if (!isValidTerminalSize(cols, rows)) {
-      return Promise.reject(new Error('PTY size must use positive integer cols and rows'))
-    }
-
-    const state = beginReadyState(sessionId)
-    const trimmedCwd = typeof cwd === 'string' ? cwd.trim() : ''
-    queuePtyMessage({
-      type: 'spawn',
-      sessionId,
-      cols,
-      rows,
-      ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
-    })
-    return state.size ? Promise.resolve(state.size) : state.promise
+    return Promise.reject(new Error('workspaceId is required'))
   },
 
   sendPtyInput(sessionId: string, data: string): void {
