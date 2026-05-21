@@ -132,6 +132,12 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     };
     if (worktree_path_exists or try database.worktreePathExists(worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path already exists");
 
+    // The Git/path checks above drop the daemon lock. Re-check the persisted
+    // uniqueness boundaries immediately before reserving the row.
+    if (try database.worktreeFolderExists(workspace_row.id, folder_name)) return errorResponse(allocator, request, .invalid_name, "folder_name already exists");
+    if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
+    if (try database.worktreePathExists(worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path already exists");
+
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
     defer self.allocator.free(worktree_id);
     const order_index = try database.nextWorktreeOrder(workspace_row.id);
@@ -563,6 +569,88 @@ fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
 test "worktree path containment requires separator" {
     try std.testing.expect(isPathUnder("/tmp/root", "/tmp/root/child"));
     try std.testing.expect(!isPathUnder("/tmp/root", "/tmp/root-other/child"));
+}
+
+test "create rechecks branch reservation after unlocked git checks" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const tmp_root_rel = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(tmp_root_rel);
+    const tmp_root = try std.fs.cwd().realpathAlloc(allocator, tmp_root_rel);
+    defer allocator.free(tmp_root);
+
+    const repo_path = try std.fs.path.join(allocator, &.{ tmp_root, "repo" });
+    defer allocator.free(repo_path);
+    const daemon_root = try std.fs.path.join(allocator, &.{ tmp_root, "taod" });
+    defer allocator.free(daemon_root);
+    try std.fs.cwd().makePath(repo_path);
+
+    const init_args = [_][]const u8{"init"};
+    var out = try git.runGitAlloc(allocator, repo_path, &init_args);
+    allocator.free(out);
+    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    out = try git.runGitAlloc(allocator, repo_path, &commit_args);
+    allocator.free(out);
+
+    var database = try db.Database.openInMemory(allocator);
+    try database.insertWorkspace(.{
+        .id = "workspace-1",
+        .name = "repo",
+        .root_path = repo_path,
+        .git_common_dir = ".git",
+        .workspace_slug = "repo",
+        .default_branch = "HEAD",
+        .order_index = 0,
+    });
+
+    var subject = struct {
+        allocator: std.mem.Allocator,
+        config: struct { root_dir: []const u8 },
+        database: ?db.Database,
+        inserted_conflict: bool = false,
+
+        pub fn unlock(self: *@This()) void {
+            if (self.inserted_conflict) return;
+            self.inserted_conflict = true;
+            self.database.?.insertWorktree(.{
+                .id = "worktree-existing",
+                .workspace_id = "workspace-1",
+                .title = "Existing",
+                .folder_name = "other-folder",
+                .path = "/tmp/tao-existing-worktree",
+                .branch = "feature/reused",
+                .state = "creating",
+                .order_index = 0,
+            }) catch unreachable;
+        }
+
+        pub fn lock(_: *@This()) void {}
+    }{
+        .allocator = allocator,
+        .config = .{ .root_dir = daemon_root },
+        .database = database,
+    };
+    defer {
+        if (subject.database) |*subject_database| subject_database.deinit();
+    }
+
+    const response = try handleCreateLocked(&subject, allocator, .{
+        .id = "create",
+        .method = "worktree.create",
+        .workspace_id = "workspace-1",
+        .folder_name = "new-folder",
+        .branch = "feature/reused",
+        .base_branch = "HEAD",
+    });
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error_code\":\"branch-exists\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "branch already exists in Tao worktrees") != null);
+    try std.testing.expectEqual(@as(u64, 1), try subject.database.?.countWorktrees());
 }
 
 test "default remove archives external worktree without deleting git worktree" {
