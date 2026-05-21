@@ -530,7 +530,7 @@ test "daemon control RPC creates and updates sessions" {
     try std.testing.expect(daemon.sessions.find("s2") != null);
 }
 
-test "daemon control RPC rejects session creation without workspace" {
+test "daemon control RPC accepts legacy session creation without workspace" {
     var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
     defer config.deinit(std.testing.allocator);
 
@@ -542,9 +542,9 @@ test "daemon control RPC rejects session creation without workspace" {
     );
     defer std.testing.allocator.free(response);
 
-    try std.testing.expect(daemon.sessions.find("s1") == null);
-    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, response, "missing field: workspace_id") != null);
+    const item = daemon.sessions.find("s1").?;
+    try std.testing.expect(item.workspace_id == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":true") != null);
 }
 
 test "daemon control RPC reports missing sessions" {
@@ -719,6 +719,52 @@ test "daemon falls back to saved command when agent resume metadata is corrupt" 
 
     const killed = try daemon.handleControlPayload(std.testing.allocator,
         \\{"id":"kill","type":"kill","sessionId":"resume-session"}
+    );
+    defer std.testing.allocator.free(killed);
+    try std.testing.expect(std.mem.indexOf(u8, killed, "\"ok\":true") != null);
+}
+
+test "daemon restores legacy persisted sessions without workspace" {
+    if (!fileExists("/bin/sh")) return;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+    try daemon.prepareStorage();
+
+    if (daemon.database) |*database| {
+        try database.recordTerminalSession(.{
+            .id = "legacy-session",
+            .terminal_id = "legacy-terminal",
+            .argv_json = "[\"/bin/sh\",\"-c\",\"sleep 2\"]",
+            .status = "exited",
+            .cols = 80,
+            .rows = 24,
+            .event_log_path = "/tmp/tao-legacy-session/events.taoev",
+            .last_seq = 0,
+        });
+    } else unreachable;
+
+    const attached = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"attach","type":"attach","sessionId":"legacy-session","terminalId":"legacy-terminal","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(attached);
+
+    try std.testing.expect(std.mem.indexOf(u8, attached, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, attached, "\"attach_kind\":\"command-resume\"") != null);
+    const restored = daemon.sessions.find("legacy-session").?;
+    try std.testing.expect(restored.workspace_id == null);
+
+    const killed = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"kill","type":"kill","sessionId":"legacy-session"}
     );
     defer std.testing.allocator.free(killed);
     try std.testing.expect(std.mem.indexOf(u8, killed, "\"ok\":true") != null);

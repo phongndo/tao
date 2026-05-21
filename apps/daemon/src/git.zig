@@ -13,6 +13,7 @@ pub const GitError = error{
 pub const StatusSummary = struct {
     changed: u32 = 0,
     staged: u32 = 0,
+    untracked: u32 = 0,
 };
 
 pub const WorktreeListEntry = struct {
@@ -205,7 +206,7 @@ pub fn statusSummaryAlloc(allocator: std.mem.Allocator, path: []const u8) !Statu
 
 pub fn isDirty(allocator: std.mem.Allocator, path: []const u8) !bool {
     const status = try statusSummaryAlloc(allocator, path);
-    return status.changed > 0 or status.staged > 0;
+    return status.changed > 0 or status.staged > 0 or status.untracked > 0;
 }
 
 pub fn parseStatus(output: []const u8) StatusSummary {
@@ -215,8 +216,12 @@ pub fn parseStatus(output: []const u8) StatusSummary {
         if (line.len < 2) continue;
         const index_status = line[0];
         const working_tree_status = line[1];
+        if (index_status == '?' and working_tree_status == '?') {
+            summary.untracked += 1;
+            continue;
+        }
         if (index_status != ' ' and index_status != '?') summary.staged += 1;
-        if (working_tree_status != ' ' or index_status == '?') summary.changed += 1;
+        if (working_tree_status != ' ') summary.changed += 1;
     }
     return summary;
 }
@@ -287,8 +292,9 @@ test "parses git status porcelain" {
         \\?? new.txt
         \\
     );
-    try std.testing.expectEqual(@as(u32, 2), summary.changed);
+    try std.testing.expectEqual(@as(u32, 1), summary.changed);
     try std.testing.expectEqual(@as(u32, 1), summary.staged);
+    try std.testing.expectEqual(@as(u32, 1), summary.untracked);
 }
 
 test "parses worktree porcelain z output" {

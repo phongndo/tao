@@ -211,7 +211,7 @@ pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: 
             error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to determine worktree status"),
             else => return err,
         };
-        if (dirty) return errorResponse(allocator, request, .worktree_dirty, "worktree has uncommitted changes");
+        if (dirty) return errorResponse(allocator, request, .worktree_dirty, "worktree has uncommitted or untracked changes");
     }
 
     try database.updateWorktreeState(row.id, "removing", null);
