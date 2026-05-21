@@ -74,11 +74,19 @@ type ReadyState = {
 }
 
 const INITIAL_SIZE_TIMEOUT_MS = 5000
+const PTY_PORT_REQUEST_TIMEOUT_MS = 5000
 const MAX_PENDING_DATA_CHARS = 1024 * 1024
 const MAX_PENDING_OUTPUT_CHARS = 1024 * 1024
 
+type PtyPortRequest = {
+  promise: Promise<void>
+  resolve(): void
+  reject(error: Error): void
+  timeout: ReturnType<typeof setTimeout>
+}
+
 let ptyPort: MessagePort | null = null
-let ptyPortRequested = false
+let ptyPortRequest: PtyPortRequest | null = null
 let rendererReadySignaled = false
 let rendererShown = false
 let pendingClientMessages: PtyClientMessage[] = []
@@ -111,7 +119,7 @@ function isValidTerminalSize(cols: unknown, rows: unknown): cols is number {
   )
 }
 
-function createReadyState(sessionId: string): ReadyState {
+function createReadyState(): ReadyState {
   let resolveReady: ((size: PtySize) => void) | null = null
   let rejectReady: ((err: Error) => void) | null = null
   const state: ReadyState = {
@@ -130,9 +138,6 @@ function createReadyState(sessionId: string): ReadyState {
 
   state.resolve = resolveReady
   state.reject = rejectReady
-  state.timeout = setTimeout(() => {
-    rejectPtyReady(sessionId, new Error(`Timed out waiting for PTY ${sessionId} to become ready`))
-  }, INITIAL_SIZE_TIMEOUT_MS)
 
   return state
 }
@@ -142,9 +147,18 @@ function beginReadyState(sessionId: string): ReadyState {
   if (existingState?.resolve || existingState?.reject) return existingState
 
   if (existingState) clearReadyTimeout(existingState)
-  const state = createReadyState(sessionId)
+  const state = createReadyState()
   readyStates.set(sessionId, state)
   return state
+}
+
+function armReadyTimeout(sessionId: string) {
+  const state = readyStates.get(sessionId)
+  if (!state || state.size || state.timeout !== null || (!state.resolve && !state.reject)) return
+
+  state.timeout = setTimeout(() => {
+    rejectPtyReady(sessionId, new Error(`Timed out waiting for PTY ${sessionId} to become ready`))
+  }, INITIAL_SIZE_TIMEOUT_MS)
 }
 
 function clearReadyTimeout(state: ReadyState) {
@@ -188,6 +202,7 @@ function resolvePtyReady(
 function postToPty(message: PtyClientMessage): boolean {
   if (!ptyPort) return false
   ptyPort.postMessage(message)
+  if (message.type === 'spawn' || message.type === 'attach') armReadyTimeout(message.sessionId)
   return true
 }
 
@@ -464,6 +479,12 @@ ipcRenderer.on('pty:port', (event) => {
   if (!port) return
 
   ptyPort = port
+  const request = ptyPortRequest
+  ptyPortRequest = null
+  if (request) {
+    clearTimeout(request.timeout)
+    request.resolve()
+  }
   ptyPort.onmessage = (messageEvent) => {
     const message = decodePtyServiceMessage(messageEvent.data)
     if (!message) return
@@ -501,10 +522,30 @@ function removeRendererShownWaiter(resolve: () => void) {
   if (index >= 0) rendererShownWaiters.splice(index, 1)
 }
 
-function requestPtyPort() {
-  if (ptyPort || ptyPortRequested) return
-  ptyPortRequested = true
+function requestPtyPort(): Promise<void> {
+  if (ptyPort) return Promise.resolve()
+  if (ptyPortRequest) return ptyPortRequest.promise
+
+  let resolveRequest: (() => void) | null = null
+  let rejectRequest: ((error: Error) => void) | null = null
+  const promise = new Promise<void>((resolve, reject) => {
+    resolveRequest = resolve
+    rejectRequest = reject
+  })
+  const request: PtyPortRequest = {
+    promise,
+    resolve: () => resolveRequest?.(),
+    reject: (error) => rejectRequest?.(error),
+    timeout: setTimeout(() => {
+      if (ptyPortRequest !== request) return
+      ptyPortRequest = null
+      request.reject(new Error('Timed out waiting for PTY bridge port'))
+    }, PTY_PORT_REQUEST_TIMEOUT_MS),
+  }
+
+  ptyPortRequest = request
   ipcRenderer.send('pty:requestPort')
+  return promise
 }
 
 /**
@@ -539,10 +580,10 @@ const electronAPI = {
     }
 
     const sessionId = createSessionId()
-    const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
-    requestPtyPort()
+    await requestPtyPort()
+    const state = beginReadyState(sessionId)
     queuePtyMessage({
       type: 'spawn',
       sessionId,
@@ -571,7 +612,6 @@ const electronAPI = {
     if (!isValidTerminalSize(cols, rows)) {
       return Promise.reject(new Error('Session size must use positive integer cols and rows'))
     }
-    const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
     const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : ''
@@ -579,7 +619,8 @@ const electronAPI = {
       return Promise.reject(new Error('workspaceId is required'))
     }
     const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
-    requestPtyPort()
+    await requestPtyPort()
+    const state = beginReadyState(sessionId)
     queuePtyMessage({
       type: 'attach',
       sessionId,
@@ -706,14 +747,13 @@ const electronAPI = {
     return () => removeCallback(agentStatusCallbacks, sessionId, callback)
   },
 
-  spawnPty(sessionId: string, cols: number, rows: number, cwd?: string): Promise<PtySize> {
-    void cols
-    void rows
-    void cwd
+  spawnPty(sessionId: string, _cols: number, _rows: number, _cwd?: string): Promise<PtySize> {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       return Promise.reject(new Error('PTY sessionId is required'))
     }
-    return Promise.reject(new Error('workspaceId is required'))
+    return Promise.reject(
+      new Error('spawnPty is deprecated; use createSession with a workspaceId instead'),
+    )
   },
 
   sendPtyInput(sessionId: string, data: string): void {
