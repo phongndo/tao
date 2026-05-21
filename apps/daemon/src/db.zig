@@ -444,6 +444,10 @@ const worktree_path_exists_sql =
     \\SELECT 1 FROM worktrees WHERE path = ? AND archived_at IS NULL LIMIT 1;
 ;
 
+const archived_worktree_path_exists_sql =
+    \\SELECT 1 FROM worktrees WHERE path = ? AND archived_at IS NOT NULL LIMIT 1;
+;
+
 const worktree_branch_exists_sql =
     \\SELECT 1 FROM worktrees WHERE workspace_id = ? AND branch = ? AND archived_at IS NULL LIMIT 1;
 ;
@@ -1155,6 +1159,12 @@ pub const Database = struct {
 
     pub fn worktreePathExists(self: *Database, path: []const u8) !bool {
         var stmt = try self.handle.prepareDynamic(worktree_path_exists_sql);
+        defer stmt.deinit();
+        return (try stmt.one(u8, .{}, .{path})) != null;
+    }
+
+    pub fn archivedWorktreePathExists(self: *Database, path: []const u8) !bool {
+        var stmt = try self.handle.prepareDynamic(archived_worktree_path_exists_sql);
         defer stmt.deinit();
         return (try stmt.one(u8, .{}, .{path})) != null;
     }

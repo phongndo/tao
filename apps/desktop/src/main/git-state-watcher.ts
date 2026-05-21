@@ -220,9 +220,15 @@ export class GitStateWatcher {
     }
 
     entry.inFlight = true
+    const workspaceId = entry.record.id
     const previousFingerprint = entry.fingerprint
     try {
-      const workspace = await this.client().refreshWorkspace(entry.record.id)
+      const workspace = await this.client().refreshWorkspace(workspaceId)
+      if (this.entries.get(workspaceId) !== entry) {
+        entry.pending = false
+        this.disposeEntry(entry)
+        return
+      }
       const nextFingerprint = workspaceFingerprint(workspace)
       const gitCommonDir = resolveGitCommonDir(workspace)
       if (!gitCommonDir) {
@@ -240,7 +246,7 @@ export class GitStateWatcher {
       console.warn(`[git-state] Failed to refresh workspace ${entry.record.id}:`, error)
     } finally {
       entry.inFlight = false
-      if (entry.pending) {
+      if (this.entries.get(workspaceId) === entry && entry.pending) {
         entry.pending = false
         this.queueRefresh(entry)
       }

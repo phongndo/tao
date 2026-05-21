@@ -403,6 +403,7 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
             }
             continue;
         }
+        if (try archivedWorktreePathExistsAny(self.allocator, database, entry.path)) continue;
 
         const folder_name = try adoptedFolderNameAlloc(self.allocator, database, current.id, entry.path);
         defer self.allocator.free(folder_name);
@@ -435,6 +436,14 @@ fn findWorktreeByPathAny(allocator: std.mem.Allocator, database: *db.Database, p
     defer allocator.free(real_path);
     if (std.mem.eql(u8, real_path, path)) return null;
     return try database.findWorktreeByPath(allocator, real_path);
+}
+
+fn archivedWorktreePathExistsAny(allocator: std.mem.Allocator, database: *db.Database, path: []const u8) !bool {
+    if (try database.archivedWorktreePathExists(path)) return true;
+    const real_path = std.fs.realpathAlloc(allocator, path) catch return false;
+    defer allocator.free(real_path);
+    if (std.mem.eql(u8, real_path, path)) return false;
+    return try database.archivedWorktreePathExists(real_path);
 }
 
 pub fn adoptedFolderNameAlloc(allocator: std.mem.Allocator, database: *db.Database, workspace_id: []const u8, path: []const u8) ![]u8 {
@@ -813,6 +822,80 @@ test "workspace response json includes nested worktrees" {
     defer std.testing.allocator.free(response);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"worktrees\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "luminous-galileo-a13f") != null);
+}
+
+test "workspace reconciliation keeps archived external worktree hidden" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const tmp_root_rel = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(tmp_root_rel);
+    const tmp_root = try std.fs.cwd().realpathAlloc(allocator, tmp_root_rel);
+    defer allocator.free(tmp_root);
+
+    const repo_path = try std.fs.path.join(allocator, &.{ tmp_root, "repo" });
+    defer allocator.free(repo_path);
+    const external_path = try std.fs.path.join(allocator, &.{ tmp_root, "external-worktree" });
+    defer allocator.free(external_path);
+    try std.fs.cwd().makePath(repo_path);
+
+    const init_args = [_][]const u8{"init"};
+    var out = try git.runGitAlloc(allocator, repo_path, &init_args);
+    allocator.free(out);
+    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    out = try git.runGitAlloc(allocator, repo_path, &commit_args);
+    allocator.free(out);
+    try git.worktreeAddNewBranch(allocator, repo_path, "external-branch", external_path, "HEAD");
+
+    var database = try db.Database.openInMemory(allocator);
+    defer database.deinit();
+    try database.insertWorkspace(.{
+        .id = "workspace-1",
+        .name = "repo",
+        .root_path = repo_path,
+        .git_common_dir = ".git",
+        .workspace_slug = "repo",
+        .default_branch = null,
+        .order_index = 0,
+    });
+    try database.insertWorktree(.{
+        .id = "worktree-external",
+        .workspace_id = "workspace-1",
+        .title = "External",
+        .folder_name = "external-worktree",
+        .path = external_path,
+        .branch = "external-branch",
+        .state = "active",
+        .order_index = 0,
+        .created_by = "external",
+    });
+    try database.archiveWorktree("worktree-external");
+
+    var subject = struct {
+        allocator: std.mem.Allocator,
+
+        pub fn unlock(_: *@This()) void {}
+        pub fn lock(_: *@This()) void {}
+    }{ .allocator = allocator };
+
+    var workspace_row = (try database.findWorkspaceById(allocator, "workspace-1")).?;
+    defer workspace_row.deinit(allocator);
+    try reconcileWorkspaceWorktrees(&subject, &database, &workspace_row);
+
+    const active = try database.listWorktreesForWorkspace(allocator, "workspace-1");
+    defer {
+        for (active) |*row| row.deinit(allocator);
+        allocator.free(active);
+    }
+    try std.testing.expectEqual(@as(usize, 0), active.len);
+    try std.testing.expect(!try database.worktreePathExists(external_path));
+    try std.testing.expect(try database.archivedWorktreePathExists(external_path));
+    var archived = (try database.findWorktreeById(allocator, "worktree-external")).?;
+    defer archived.deinit(allocator);
+    try std.testing.expectEqualStrings("archived", archived.state);
+    try std.testing.expect(archived.archived_at != null);
 }
 
 const WorkspaceResponsesAllocationFailureDatabase = struct {
