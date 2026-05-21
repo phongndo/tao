@@ -107,11 +107,6 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     }
 
     if (request.branch) |manual_branch| {
-        if (generated_names) {
-            self.allocator.free(branch_name);
-            generated_branch = false;
-            generated_names = false;
-        }
         if (!worktree_name.isSafeBranchName(manual_branch)) return errorResponse(allocator, request, .invalid_name, "invalid branch");
         branch_name = @constCast(manual_branch);
     } else if (!generated_names) {
@@ -490,13 +485,14 @@ const GeneratedWorktreeNames = struct {
 };
 
 fn generateAvailableFolderAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow) ![]u8 {
+    const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
+    defer self.allocator.free(parent);
+
     var attempts: usize = 0;
     while (attempts < 64) : (attempts += 1) {
         const folder = try worktree_name.generatedFolderNameAlloc(self.allocator);
         var keep_folder = false;
         defer if (!keep_folder) self.allocator.free(folder);
-        const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
-        defer self.allocator.free(parent);
         const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
         defer self.allocator.free(candidate_path);
         const candidate_exists = blk: {
@@ -513,6 +509,9 @@ fn generateAvailableFolderAlloc(self: anytype, database: *db.Database, workspace
 }
 
 fn generateAvailableNamesAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow) !GeneratedWorktreeNames {
+    const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
+    defer self.allocator.free(parent);
+
     var suffix_len: usize = 4;
     var attempts: usize = 0;
     while (attempts < 64) : (attempts += 1) {
@@ -524,8 +523,6 @@ fn generateAvailableNamesAlloc(self: anytype, database: *db.Database, workspace_
         const branch = try worktree_name.generatedBranchNameAlloc(self.allocator, suffix_len);
         var keep_branch = false;
         defer if (!keep_branch) self.allocator.free(branch);
-        const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
-        defer self.allocator.free(parent);
         const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
         defer self.allocator.free(candidate_path);
         const candidate_exists = blk: {
@@ -638,17 +635,6 @@ test "generated create uses uuid folder and readable branch" {
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
-    var database = try db.Database.openInMemory(allocator);
-    try database.insertWorkspace(.{
-        .id = "workspace-1",
-        .name = "repo",
-        .root_path = repo_path,
-        .git_common_dir = ".git",
-        .workspace_slug = "repo",
-        .default_branch = "HEAD",
-        .order_index = 0,
-    });
-
     var subject = struct {
         allocator: std.mem.Allocator,
         config: struct { root_dir: []const u8 },
@@ -659,11 +645,20 @@ test "generated create uses uuid folder and readable branch" {
     }{
         .allocator = allocator,
         .config = .{ .root_dir = daemon_root },
-        .database = database,
+        .database = try db.Database.openInMemory(allocator),
     };
     defer {
         if (subject.database) |*subject_database| subject_database.deinit();
     }
+    try subject.database.?.insertWorkspace(.{
+        .id = "workspace-1",
+        .name = "repo",
+        .root_path = repo_path,
+        .git_common_dir = ".git",
+        .workspace_slug = "repo",
+        .default_branch = "HEAD",
+        .order_index = 0,
+    });
 
     const response = try handleCreateLocked(&subject, allocator, .{
         .id = "create",
