@@ -28,7 +28,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer if (generated_session_id) |value| allocator.free(value);
 
     const terminal_id = request.requestTerminalId() orelse return missingField(allocator, request, "terminal_id");
-    const workspace_id = request.requestWorkspaceId();
+    const workspace_id = request.requestWorkspaceId() orelse return missingField(allocator, request, "workspace_id");
     const cols = request.cols orelse return missingField(allocator, request, "cols");
     const rows = request.rows orelse return missingField(allocator, request, "rows");
 
