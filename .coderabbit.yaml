@@ -11,7 +11,7 @@ reviews:
   # Review ALL PRs from everyone — no gatekeeping
   auto_review:
     enabled: true
-    drafts: false
+    drafts: true
     base_branches: ['main']
 
   # Skip generated files and binaries
