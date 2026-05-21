@@ -113,7 +113,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 let mainWindow: BrowserWindow | null = null
 let taodBridge: TaodPtyBridge | null = null
-let taodWorkspaceClient: TaodClient | null = null
+let taodClient: TaodClient | null = null
 let gitStateWatcher: GitStateWatcher | null = null
 
 // ─── Window Creation ───
@@ -279,17 +279,17 @@ async function sendPtyPortToRenderer() {
 }
 
 function ensureTaodBridge(): TaodPtyBridge {
-  taodBridge ??= new TaodPtyBridge()
+  taodBridge ??= new TaodPtyBridge({ client: ensureTaodClient() })
   return taodBridge
 }
 
-function ensureTaodWorkspaceClient(): TaodClient {
-  taodWorkspaceClient ??= new TaodClient()
-  return taodWorkspaceClient
+function ensureTaodClient(): TaodClient {
+  taodClient ??= new TaodClient()
+  return taodClient
 }
 
 function ensureGitStateWatcher(): GitStateWatcher {
-  gitStateWatcher ??= new GitStateWatcher(ensureTaodWorkspaceClient, (workspace) => {
+  gitStateWatcher ??= new GitStateWatcher(ensureTaodClient, (workspace) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
     mainWindow.webContents.send('workspace:changed', workspace)
   })
@@ -301,8 +301,8 @@ function disposeSessionBackends() {
   gitStateWatcher = null
   taodBridge?.dispose()
   taodBridge = null
-  taodWorkspaceClient?.dispose()
-  taodWorkspaceClient = null
+  taodClient?.dispose()
+  taodClient = null
 }
 
 function authorizeRenderer(event: IpcMainInvokeEvent): Effect.Effect<void, WorkspaceError> {
@@ -398,7 +398,7 @@ async function runTaodWorkspaceRequest<A>(
   }
 
   try {
-    const client = ensureTaodWorkspaceClient()
+    const client = ensureTaodClient()
     const value = await run(client)
     return workspaceIpcSuccess(value)
   } catch (error) {

@@ -162,6 +162,7 @@ function waitForAttachStreamReady(stream: TaodSessionStream): Promise<void> {
 
 export class TaodPtyBridge {
   private readonly client: TaodClient
+  private readonly ownsClient: boolean
   private readonly defaultShell?: string
   private port: MessagePortMain | null = null
   private readonly sessions = new Map<string, BridgeSession>()
@@ -170,6 +171,7 @@ export class TaodPtyBridge {
 
   constructor(options: TaodPtyBridgeOptions = {}) {
     this.client = options.client ?? new TaodClient()
+    this.ownsClient = !options.client
     this.defaultShell = options.defaultShell
     this.cleanupTimer = setInterval(() => {
       void this.runSessionCleanup()
@@ -217,7 +219,7 @@ export class TaodPtyBridge {
     this.sessions.clear()
     this.port?.close()
     this.port = null
-    this.client.dispose()
+    if (this.ownsClient) this.client.dispose()
   }
 
   private async handleClientMessage(message: PtyClientMessage): Promise<void> {
