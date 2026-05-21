@@ -126,7 +126,11 @@ pub fn handleAddLocked(self: anytype, allocator: std.mem.Allocator, request: rpc
     };
     defer self.allocator.free(selected_path);
 
-    const git_root: ?[]u8 = git.toplevelAlloc(self.allocator, selected_path) catch |err| switch (err) {
+    const git_root: ?[]u8 = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.toplevelAlloc(self.allocator, selected_path);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => null,
         else => return err,
     };
@@ -136,9 +140,17 @@ pub fn handleAddLocked(self: anytype, allocator: std.mem.Allocator, request: rpc
     var existing = try database.findWorkspaceByRoot(self.allocator, root_path);
     defer if (existing) |*row| row.deinit(self.allocator);
 
-    const git_common_dir: ?[]u8 = if (git_root != null) git.commonDirAlloc(self.allocator, root_path) catch null else null;
+    const git_common_dir: ?[]u8 = if (git_root != null) blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.commonDirAlloc(self.allocator, root_path) catch null;
+    } else null;
     defer if (git_common_dir) |value| self.allocator.free(value);
-    const default_branch: ?[]u8 = if (git_root != null) git.defaultBranchAlloc(self.allocator, root_path) catch null else null;
+    const default_branch: ?[]u8 = if (git_root != null) blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.defaultBranchAlloc(self.allocator, root_path) catch null;
+    } else null;
     defer if (default_branch) |value| self.allocator.free(value);
     const workspace_slug = try worktree_name.workspaceSlugAlloc(self.allocator, root_path);
     defer self.allocator.free(workspace_slug);
@@ -290,29 +302,44 @@ pub fn handleReorderLocked(self: anytype, allocator: std.mem.Allocator, request:
 }
 
 pub fn refreshWorkspaceGitMetadata(self: anytype, database: *db.Database, row: *const db.WorkspaceRow) !void {
-    const common_dir: ?[]u8 = git.commonDirAlloc(self.allocator, row.root_path) catch |err| switch (err) {
+    const common_dir: ?[]u8 = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.commonDirAlloc(self.allocator, row.root_path);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => null,
         else => return err,
     };
     defer if (common_dir) |value| self.allocator.free(value);
-    const default_branch: ?[]u8 = if (common_dir != null) git.defaultBranchAlloc(self.allocator, row.root_path) catch null else null;
+    const default_branch: ?[]u8 = if (common_dir != null) blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.defaultBranchAlloc(self.allocator, row.root_path) catch null;
+    } else null;
     defer if (default_branch) |value| self.allocator.free(value);
     const slug = try worktree_name.workspaceSlugAlloc(self.allocator, row.root_path);
     defer self.allocator.free(slug);
+    var current = (try database.findWorkspaceById(self.allocator, row.id)) orelse return;
+    defer current.deinit(self.allocator);
+    if (current.archived_at != null) return;
     try database.updateWorkspace(.{
-        .id = row.id,
-        .name = row.name,
-        .root_path = row.root_path,
+        .id = current.id,
+        .name = current.name,
+        .root_path = current.root_path,
         .git_common_dir = common_dir,
         .workspace_slug = slug,
         .default_branch = default_branch,
-        .order_index = row.order_index,
-        .last_active_tab_id = row.last_active_tab_id,
+        .order_index = current.order_index,
+        .last_active_tab_id = current.last_active_tab_id,
     });
 }
 
 fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *const db.WorkspaceRow) !void {
-    const entries = git.worktreeListAlloc(self.allocator, row.root_path) catch |err| switch (err) {
+    const entries = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.worktreeListAlloc(self.allocator, row.root_path);
+    }) catch |err| switch (err) {
         error.GitFailed, error.GitNotFound => return,
         else => return err,
     };
@@ -321,9 +348,17 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
         self.allocator.free(entries);
     }
 
-    pruneGitWorktrees(self.allocator, row.root_path);
+    {
+        self.unlock();
+        defer self.lock();
+        pruneGitWorktrees(self.allocator, row.root_path);
+    }
 
-    const known_rows = try database.listWorktreesForWorkspace(self.allocator, row.id);
+    var current = (try database.findWorkspaceById(self.allocator, row.id)) orelse return;
+    defer current.deinit(self.allocator);
+    if (current.archived_at != null) return;
+
+    const known_rows = try database.listWorktreesForWorkspace(self.allocator, current.id);
     defer {
         for (known_rows) |*known| known.deinit(self.allocator);
         self.allocator.free(known_rows);
@@ -352,7 +387,7 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
     for (entries) |entry| {
         if (entry.bare) continue;
         if (entry.prunable) continue;
-        if (samePath(self.allocator, entry.path, row.root_path)) continue;
+        if (samePath(self.allocator, entry.path, current.root_path)) continue;
 
         if (try findWorktreeByPathAny(self.allocator, database, entry.path)) |existing_row| {
             var existing = existing_row;
@@ -363,13 +398,13 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
                 branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, existing.id);
                 break :blk branch_owned.?;
             };
-            if (std.mem.eql(u8, existing.workspace_id, row.id)) {
+            if (std.mem.eql(u8, existing.workspace_id, current.id)) {
                 try database.updateWorktreeGit(existing.id, branch, "active");
             }
             continue;
         }
 
-        const folder_name = try adoptedFolderNameAlloc(self.allocator, database, row.id, entry.path);
+        const folder_name = try adoptedFolderNameAlloc(self.allocator, database, current.id, entry.path);
         defer self.allocator.free(folder_name);
         const worktree_id = try idAlloc(self.allocator, "worktree");
         defer self.allocator.free(worktree_id);
@@ -382,13 +417,13 @@ fn reconcileWorkspaceWorktrees(self: anytype, database: *db.Database, row: *cons
         const title = branch;
         try database.insertWorktree(.{
             .id = worktree_id,
-            .workspace_id = row.id,
+            .workspace_id = current.id,
             .title = title,
             .folder_name = folder_name,
             .path = entry.path,
             .branch = branch,
             .state = "active",
-            .order_index = try database.nextWorktreeOrder(row.id),
+            .order_index = try database.nextWorktreeOrder(current.id),
             .created_by = "external",
         });
     }
@@ -474,11 +509,12 @@ pub fn workspaceResponsesAlloc(self: anytype, rows: []const db.WorkspaceRow, inc
             allocator.free(worktree_responses);
         }
         for (worktree_rows, 0..) |worktree_row, worktree_index| {
-            worktree_responses[worktree_index] = try worktreeResponseFromRowAlloc(allocator, worktree_row, if (include_status) worktreeStatusOrNull(allocator, worktree_row.path) else null);
+            const status = if (include_status) worktreeStatusOrNull(self, allocator, worktree_row.path) else null;
+            worktree_responses[worktree_index] = try worktreeResponseFromRowAlloc(allocator, worktree_row, status);
             initialized_worktrees += 1;
         }
 
-        responses[index] = try workspaceResponseFromRowAlloc(allocator, row, worktree_responses, include_status);
+        responses[index] = try workspaceResponseFromRowAlloc(self, row, worktree_responses, include_status);
         initialized += 1;
     }
     return responses;
@@ -534,7 +570,8 @@ pub fn freeWorktreeResponseFields(allocator: std.mem.Allocator, response: Worktr
     freeInitializedWorktreeResponses(allocator, (&[_]WorktreeResponse{response})[0..]);
 }
 
-fn workspaceResponseFromRowAlloc(allocator: std.mem.Allocator, row: db.WorkspaceRow, worktrees: []const WorktreeResponse, include_status: bool) !WorkspaceResponse {
+fn workspaceResponseFromRowAlloc(self: anytype, row: db.WorkspaceRow, worktrees: []const WorktreeResponse, include_status: bool) !WorkspaceResponse {
+    const allocator = self.allocator;
     var id: ?[]u8 = null;
     errdefer if (id) |value| allocator.free(value);
     id = try allocator.dupe(u8, row.id);
@@ -561,7 +598,7 @@ fn workspaceResponseFromRowAlloc(allocator: std.mem.Allocator, row: db.Workspace
 
     var branch: ?[]u8 = null;
     errdefer if (branch) |value| allocator.free(value);
-    branch = if (include_status) branchOrNull(allocator, row.root_path) else null;
+    branch = if (include_status) branchOrNull(self, allocator, row.root_path) else null;
 
     var last_active_tab_id: ?[]u8 = null;
     errdefer if (last_active_tab_id) |value| allocator.free(value);
@@ -587,7 +624,7 @@ fn workspaceResponseFromRowAlloc(allocator: std.mem.Allocator, row: db.Workspace
         .last_active_tab_id = last_active_tab_id,
         .created_at = created_at.?,
         .updated_at = updated_at.?,
-        .git_status = if (include_status) workspaceStatusOrNull(allocator, row.root_path) else null,
+        .git_status = if (include_status) workspaceStatusOrNull(self, allocator, row.root_path) else null,
         .worktrees = worktrees,
     };
     assertWorkspaceResponse(response);
@@ -726,17 +763,21 @@ fn dupeOptional(allocator: std.mem.Allocator, value: ?[]const u8) !?[]u8 {
     return if (value) |text| try allocator.dupe(u8, text) else null;
 }
 
-fn branchOrNull(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
+fn branchOrNull(self: anytype, allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
+    self.unlock();
+    defer self.lock();
     return git.currentBranchAlloc(allocator, path) catch null;
 }
 
-fn workspaceStatusOrNull(allocator: std.mem.Allocator, path: []const u8) ?GitStatusResponse {
+fn workspaceStatusOrNull(self: anytype, allocator: std.mem.Allocator, path: []const u8) ?GitStatusResponse {
+    self.unlock();
+    defer self.lock();
     const status = git.statusSummaryAlloc(allocator, path) catch return null;
     return .{ .changed = status.changed, .staged = status.staged };
 }
 
-fn worktreeStatusOrNull(allocator: std.mem.Allocator, path: []const u8) ?GitStatusResponse {
-    return workspaceStatusOrNull(allocator, path);
+fn worktreeStatusOrNull(self: anytype, allocator: std.mem.Allocator, path: []const u8) ?GitStatusResponse {
+    return workspaceStatusOrNull(self, allocator, path);
 }
 
 fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
@@ -825,9 +866,16 @@ fn testWorktreeRow() db.WorktreeRow {
 
 fn workspaceResponsesForAllocationFailure(allocator: std.mem.Allocator) !void {
     var database = WorkspaceResponsesAllocationFailureDatabase{};
-    var self = .{
+    const Subject = struct {
+        allocator: std.mem.Allocator,
+        database: ?*WorkspaceResponsesAllocationFailureDatabase,
+
+        pub fn unlock(_: *@This()) void {}
+        pub fn lock(_: *@This()) void {}
+    };
+    var self = Subject{
         .allocator = allocator,
-        .database = @as(?*WorkspaceResponsesAllocationFailureDatabase, &database),
+        .database = &database,
     };
     const rows = [_]db.WorkspaceRow{testWorkspaceRow()};
     const responses = try workspaceResponsesAlloc(&self, rows[0..], false);
