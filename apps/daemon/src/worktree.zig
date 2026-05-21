@@ -87,21 +87,29 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     var branch_name: []u8 = undefined;
     var generated_folder = false;
     var generated_branch = false;
+    var generated_names = false;
     defer if (generated_folder) self.allocator.free(folder_name);
     defer if (generated_branch) self.allocator.free(branch_name);
 
     if (request.requestFolderName()) |manual_folder| {
         if (!worktree_name.isValidFolderName(manual_folder)) return errorResponse(allocator, request, .invalid_name, "invalid folder_name");
         folder_name = @constCast(manual_folder);
-    } else {
+    } else if (request.branch != null) {
         folder_name = try generateAvailableFolderAlloc(self, database, &workspace_row);
         generated_folder = true;
+    } else {
+        const names = try generateAvailableNamesAlloc(self, database, &workspace_row);
+        folder_name = names.folder;
+        branch_name = names.branch;
+        generated_folder = true;
+        generated_branch = true;
+        generated_names = true;
     }
 
     if (request.branch) |manual_branch| {
         if (!worktree_name.isSafeBranchName(manual_branch)) return errorResponse(allocator, request, .invalid_name, "invalid branch");
         branch_name = @constCast(manual_branch);
-    } else {
+    } else if (!generated_names) {
         branch_name = try worktree_name.branchForFolderAlloc(self.allocator, folder_name);
         generated_branch = true;
     }
@@ -471,19 +479,50 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
     }
 }
 
+const GeneratedWorktreeNames = struct {
+    folder: []u8,
+    branch: []u8,
+};
+
 fn generateAvailableFolderAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow) ![]u8 {
+    const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
+    defer self.allocator.free(parent);
+
+    var attempts: usize = 0;
+    while (attempts < 64) : (attempts += 1) {
+        const folder = try worktree_name.generatedFolderNameAlloc(self.allocator);
+        var keep_folder = false;
+        defer if (!keep_folder) self.allocator.free(folder);
+        const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
+        defer self.allocator.free(candidate_path);
+        const candidate_exists = blk: {
+            self.unlock();
+            defer self.lock();
+            break :blk pathExists(candidate_path);
+        };
+        if (candidate_exists) continue;
+        if (try database.worktreeFolderExists(workspace_row.id, folder)) continue;
+        keep_folder = true;
+        return folder;
+    }
+    return error.TooManyCollisions;
+}
+
+fn generateAvailableNamesAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow) !GeneratedWorktreeNames {
+    const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
+    defer self.allocator.free(parent);
+
     var suffix_len: usize = 4;
     var attempts: usize = 0;
     while (attempts < 64) : (attempts += 1) {
         if (attempts == 16) suffix_len = 6;
         if (attempts == 32) suffix_len = 8;
-        const folder = try worktree_name.generatedFolderNameAlloc(self.allocator, suffix_len);
+        const folder = try worktree_name.generatedFolderNameAlloc(self.allocator);
         var keep_folder = false;
         defer if (!keep_folder) self.allocator.free(folder);
-        const branch = try worktree_name.branchForFolderAlloc(self.allocator, folder);
-        defer self.allocator.free(branch);
-        const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
-        defer self.allocator.free(parent);
+        const branch = try worktree_name.generatedBranchNameAlloc(self.allocator, suffix_len);
+        var keep_branch = false;
+        defer if (!keep_branch) self.allocator.free(branch);
         const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
         defer self.allocator.free(candidate_path);
         const candidate_exists = blk: {
@@ -501,7 +540,8 @@ fn generateAvailableFolderAlloc(self: anytype, database: *db.Database, workspace
         };
         if (branch_exists) continue;
         keep_folder = true;
-        return folder;
+        keep_branch = true;
+        return .{ .folder = folder, .branch = branch };
     }
     return error.TooManyCollisions;
 }
@@ -569,6 +609,81 @@ fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
 test "worktree path containment requires separator" {
     try std.testing.expect(isPathUnder("/tmp/root", "/tmp/root/child"));
     try std.testing.expect(!isPathUnder("/tmp/root", "/tmp/root-other/child"));
+}
+
+test "generated create uses uuid folder and readable branch" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const tmp_root_rel = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(tmp_root_rel);
+    const tmp_root = try std.fs.cwd().realpathAlloc(allocator, tmp_root_rel);
+    defer allocator.free(tmp_root);
+
+    const repo_path = try std.fs.path.join(allocator, &.{ tmp_root, "repo" });
+    defer allocator.free(repo_path);
+    const daemon_root = try std.fs.path.join(allocator, &.{ tmp_root, "taod" });
+    defer allocator.free(daemon_root);
+    try std.fs.cwd().makePath(repo_path);
+
+    const init_args = [_][]const u8{"init"};
+    var out = try git.runGitAlloc(allocator, repo_path, &init_args);
+    allocator.free(out);
+    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    out = try git.runGitAlloc(allocator, repo_path, &commit_args);
+    allocator.free(out);
+
+    var subject = struct {
+        allocator: std.mem.Allocator,
+        config: struct { root_dir: []const u8 },
+        database: ?db.Database,
+
+        pub fn unlock(_: *@This()) void {}
+        pub fn lock(_: *@This()) void {}
+    }{
+        .allocator = allocator,
+        .config = .{ .root_dir = daemon_root },
+        .database = try db.Database.openInMemory(allocator),
+    };
+    defer {
+        if (subject.database) |*subject_database| subject_database.deinit();
+    }
+    try subject.database.?.insertWorkspace(.{
+        .id = "workspace-1",
+        .name = "repo",
+        .root_path = repo_path,
+        .git_common_dir = ".git",
+        .workspace_slug = "repo",
+        .default_branch = "HEAD",
+        .order_index = 0,
+    });
+
+    const response = try handleCreateLocked(&subject, allocator, .{
+        .id = "create",
+        .method = "worktree.create",
+        .workspace_id = "workspace-1",
+        .base_branch = "HEAD",
+    });
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":true") != null);
+
+    const rows = try subject.database.?.listWorktreesForWorkspace(allocator, "workspace-1");
+    defer {
+        for (rows) |*row| row.deinit(allocator);
+        allocator.free(rows);
+    }
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqual(@as(usize, 36), rows[0].folder_name.len);
+    try std.testing.expectEqual(@as(u8, '-'), rows[0].folder_name[8]);
+    try std.testing.expectEqual(@as(u8, '-'), rows[0].folder_name[13]);
+    try std.testing.expectEqual(@as(u8, '-'), rows[0].folder_name[18]);
+    try std.testing.expectEqual(@as(u8, '-'), rows[0].folder_name[23]);
+    try std.testing.expect(!std.mem.eql(u8, rows[0].folder_name, rows[0].branch));
+    try std.testing.expect(worktree_name.isValidGeneratedBranchName(rows[0].branch));
+    try std.testing.expectEqualStrings(rows[0].folder_name, std.fs.path.basename(rows[0].path));
 }
 
 test "create rechecks branch reservation after unlocked git checks" {

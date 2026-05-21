@@ -108,7 +108,28 @@ const names = [_][]const u8{
 
 var counter = std.atomic.Value(u64).init(0);
 
-pub fn generatedFolderNameAlloc(allocator: std.mem.Allocator, suffix_hex_len: usize) ![]u8 {
+pub fn generatedFolderNameAlloc(allocator: std.mem.Allocator) ![]u8 {
+    var bytes: [16]u8 = undefined;
+    std.crypto.random.bytes(&bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    const hex = "0123456789abcdef";
+    var out = try allocator.alloc(u8, 36);
+    var out_index: usize = 0;
+    for (bytes, 0..) |byte, byte_index| {
+        if (byte_index == 4 or byte_index == 6 or byte_index == 8 or byte_index == 10) {
+            out[out_index] = '-';
+            out_index += 1;
+        }
+        out[out_index] = hex[byte >> 4];
+        out[out_index + 1] = hex[byte & 0x0f];
+        out_index += 2;
+    }
+    return out;
+}
+
+pub fn generatedBranchNameAlloc(allocator: std.mem.Allocator, suffix_hex_len: usize) ![]u8 {
     const suffix_len = @max(@as(usize, 4), suffix_hex_len);
     var random_seed: u64 = undefined;
     std.crypto.random.bytes(std.mem.asBytes(&random_seed));
@@ -207,11 +228,19 @@ pub fn workspaceSlugAlloc(allocator: std.mem.Allocator, name_or_path: []const u8
     return out.toOwnedSlice(allocator);
 }
 
-test "generated folder names are branch safe" {
-    const folder = try generatedFolderNameAlloc(std.testing.allocator, 4);
+test "generated folder and branch names are valid" {
+    const folder = try generatedFolderNameAlloc(std.testing.allocator);
     defer std.testing.allocator.free(folder);
     try std.testing.expect(isValidFolderName(folder));
-    const branch = try branchForFolderAlloc(std.testing.allocator, folder);
+
+    try std.testing.expectEqual(@as(usize, 36), folder.len);
+    try std.testing.expectEqual(@as(u8, '-'), folder[8]);
+    try std.testing.expectEqual(@as(u8, '-'), folder[13]);
+    try std.testing.expectEqual(@as(u8, '-'), folder[18]);
+    try std.testing.expectEqual(@as(u8, '-'), folder[23]);
+    try std.testing.expectEqual(@as(u8, '4'), folder[14]);
+
+    const branch = try generatedBranchNameAlloc(std.testing.allocator, 4);
     defer std.testing.allocator.free(branch);
     try std.testing.expect(isValidGeneratedBranchName(branch));
     const detached_branch = try detachedBranchForFolderAlloc(std.testing.allocator, folder);
