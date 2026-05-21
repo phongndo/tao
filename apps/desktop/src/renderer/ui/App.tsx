@@ -3,7 +3,6 @@ import {
   FiChevronRight,
   FiArchive,
   FiFolderPlus,
-  FiGitBranch,
   FiMenu,
   FiPlus,
   FiTerminal,
@@ -26,23 +25,22 @@ import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-componen
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData } from '@tao/shared/session'
 import {
-  LOCAL_WORKSPACE_ID,
   type Pane,
   type ReorderPlacement,
   selectPaneLayoutData,
   type Tab,
   useTaoStore,
   type Workspace,
+  worktreeContextId,
 } from '../state/store'
+import { runRendererEffect } from '../runtime'
+import { WorkspaceMetadataCache } from '../workspace-service'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
+import type { WorkspaceRecord } from '@tao/shared/workspace'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
-const SIDEBAR_COLLAPSED_WIDTH = 48
 const SIDEBAR_EXPANDED_MIN_WIDTH = 220
-const SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD = 156
-const SIDEBAR_COMPACT_THRESHOLD = 64
-const SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD = 148
 const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tao-tab'
@@ -267,10 +265,20 @@ function workspaceInitials(name: string): string {
   return initials || name.slice(0, 2).toUpperCase() || '•'
 }
 
+function workspaceFromRecord(record: WorkspaceRecord): Workspace {
+  return {
+    id: record.id,
+    name: record.name,
+    projectPath: record.rootPath,
+    branch: record.branch ?? record.defaultBranch ?? undefined,
+    worktrees: [...record.worktrees],
+    lastActiveTabId: record.lastActiveTabId ?? undefined,
+    order: record.orderIndex,
+  }
+}
+
 function normalizeSidebarWidth(nextWidth: number): number {
-  return nextWidth < SIDEBAR_SNAP_TO_COLLAPSED_THRESHOLD
-    ? SIDEBAR_COLLAPSED_WIDTH
-    : Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
 }
 
 function getDropPlacement(
@@ -301,66 +309,214 @@ function WorkspaceItem({
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
+  const selectWorktree = useTaoStore((state) => state.selectWorktree)
+  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
+  const upsertWorktree = useTaoStore((state) => state.upsertWorktree)
+  const removeWorktree = useTaoStore((state) => state.removeWorktree)
   const removeWorkspace = useTaoStore((state) => state.removeWorkspace)
+  const [isCreatingWorktree, setIsCreatingWorktree] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(true)
+  const [worktreeError, setWorktreeError] = useState<string | null>(null)
   const isActive = activeWorkspaceId === workspace.id
-  const branch = useGitBranch(workspace.projectPath, isActive)
+  const hasActiveWorktree = (workspace.worktrees ?? []).some(
+    (worktree) => activeWorkspaceId === worktreeContextId(worktree.id),
+  )
+  const branch = useGitBranch(workspace.projectPath, isExpanded || isActive || hasActiveWorktree)
   const branchLabel = branch.isError
     ? 'git error'
     : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
-  const label = `${workspace.name} — ${branchLabel}`
+  const label = `${workspace.name} — local branch ${branchLabel}`
+
+  async function handleCreateWorktree() {
+    if (isCreatingWorktree) return
+    setIsCreatingWorktree(true)
+    setWorktreeError(null)
+    setIsExpanded(true)
+    try {
+      const workspaceResponse = await window.electronAPI.addWorkspace({
+        rootPath: workspace.projectPath,
+        workspaceId: workspace.id,
+        name: workspace.name,
+        orderIndex: workspace.order,
+      })
+      if (!workspaceResponse.ok) {
+        setWorktreeError(workspaceResponse.error.message)
+        console.warn('[worktree] Failed to register workspace:', workspaceResponse.error.message)
+        return
+      }
+
+      upsertWorkspace(workspaceFromRecord(workspaceResponse.value))
+
+      const response = await window.electronAPI.createWorktree({
+        workspaceId: workspaceResponse.value.id,
+      })
+      if (!response.ok) {
+        setWorktreeError(response.error.message)
+        console.warn('[worktree] Failed to create worktree:', response.error.message)
+        return
+      }
+      setIsExpanded(true)
+      upsertWorktree(workspaceResponse.value.id, response.value)
+      selectWorktree(response.value.id)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWorktreeError(message)
+      console.warn('[worktree] Failed to create worktree:', error)
+    } finally {
+      setIsCreatingWorktree(false)
+    }
+  }
+
+  async function handleRemoveWorktree(worktreeId: string) {
+    try {
+      const response = await window.electronAPI.removeWorktree({ worktreeId })
+      if (!response.ok) {
+        setWorktreeError(response.error.message)
+        console.warn('[worktree] Failed to remove worktree:', response.error.message)
+        return
+      }
+      removeWorktree(workspace.id, worktreeId)
+      setWorktreeError(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWorktreeError(message)
+      console.warn('[worktree] Failed to remove worktree:', error)
+    }
+  }
+
+  async function handleRemoveWorkspace() {
+    try {
+      const response = await window.electronAPI.removeWorkspace(workspace.id)
+      if (!response.ok) {
+        setWorktreeError(response.error.message)
+        console.warn('[workspace] Failed to remove workspace:', response.error.message)
+        return
+      }
+      removeWorkspace(workspace.id)
+      setWorktreeError(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWorktreeError(message)
+      console.warn('[workspace] Failed to remove workspace:', error)
+    }
+  }
 
   return (
-    <div
-      className={isActive ? 'workspace-item workspace-item-active' : 'workspace-item'}
-      draggable
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = 'move'
-        event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
-        event.dataTransfer.setData('text/plain', workspace.id)
-      }}
-      onDragOver={(event) => {
-        if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = 'move'
-      }}
-      onDrop={(event) => {
-        const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
-        if (!workspaceId || workspaceId === workspace.id) return
-        event.preventDefault()
-        onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
-      }}
-    >
-      <button
-        type="button"
-        className="workspace-select-button"
-        onClick={() => selectWorkspace(workspace.id)}
-        aria-pressed={isActive}
-        aria-label={label}
-        title={label}
-      >
-        <span className="workspace-avatar" aria-hidden="true">
-          {workspaceInitials(workspace.name)}
-        </span>
-        <span className="workspace-details">
-          <span className="workspace-title">{workspace.name}</span>
-          <span className="workspace-branch-pill">
-            <FiGitBranch size={12} />
-            <span>{branchLabel}</span>
-          </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        className="icon-button workspace-danger-button"
-        aria-label={`Remove ${workspace.name}`}
-        title="Remove workspace"
-        onClick={(event) => {
-          event.stopPropagation()
-          removeWorkspace(workspace.id)
+    <div className="workspace-group">
+      <div
+        className="workspace-item"
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move'
+          event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, workspace.id)
+          event.dataTransfer.setData('text/plain', workspace.id)
+        }}
+        onDragOver={(event) => {
+          if (!dataTransferHasType(event.dataTransfer, WORKSPACE_DRAG_TYPE)) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={(event) => {
+          const workspaceId = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE)
+          if (!workspaceId || workspaceId === workspace.id) return
+          event.preventDefault()
+          onReorderWorkspace(workspaceId, workspace.id, getDropPlacement(event, 'vertical'))
         }}
       >
-        <FiTrash2 size={13} />
-      </button>
+        <button
+          type="button"
+          className="workspace-select-button workspace-dropdown-button"
+          onClick={() => setIsExpanded((expanded) => !expanded)}
+          aria-expanded={isExpanded}
+          aria-label={label}
+          title={label}
+        >
+          <span className="workspace-avatar" aria-hidden="true">
+            {workspaceInitials(workspace.name)}
+          </span>
+          <span className="workspace-details">
+            <span className="workspace-title">{workspace.name}</span>
+            <FiChevronRight
+              className={
+                isExpanded ? 'workspace-chevron workspace-chevron-expanded' : 'workspace-chevron'
+              }
+              size={13}
+            />
+          </span>
+        </button>
+        <button
+          type="button"
+          className="icon-button workspace-worktree-button"
+          aria-label={`New worktree for ${workspace.name}`}
+          title="New Worktree"
+          disabled={isCreatingWorktree}
+          onClick={(event) => {
+            event.stopPropagation()
+            void handleCreateWorktree()
+          }}
+        >
+          <FiPlus size={13} />
+        </button>
+        <button
+          type="button"
+          className="icon-button workspace-danger-button"
+          aria-label={`Remove ${workspace.name}`}
+          title="Remove workspace"
+          onClick={(event) => {
+            event.stopPropagation()
+            void handleRemoveWorkspace()
+          }}
+        >
+          <FiTrash2 size={13} />
+        </button>
+      </div>
+      {isExpanded ? (
+        <div className="workspace-branch-list">
+          <button
+            type="button"
+            className={isActive ? 'local-branch-row local-branch-row-active' : 'local-branch-row'}
+            aria-pressed={isActive}
+            title={`Local checkout — ${branchLabel}`}
+            onClick={() => selectWorkspace(workspace.id)}
+          >
+            <span className="worktree-details">
+              <span className="worktree-title">{branchLabel}</span>
+            </span>
+          </button>
+          {(workspace.worktrees ?? []).map((worktree) => {
+            const isWorktreeActive = activeWorkspaceId === worktreeContextId(worktree.id)
+            const title = worktree.branch
+            return (
+              <div
+                key={worktree.id}
+                className={isWorktreeActive ? 'worktree-row worktree-row-active' : 'worktree-row'}
+              >
+                <button
+                  type="button"
+                  className="worktree-item"
+                  aria-pressed={isWorktreeActive}
+                  title={`${title} — ${worktree.branch}`}
+                  onClick={() => selectWorktree(worktree.id)}
+                >
+                  <span className="worktree-details">
+                    <span className="worktree-title">{title}</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-button worktree-danger-button"
+                  aria-label={`Remove ${title}`}
+                  title="Remove worktree"
+                  onClick={() => void handleRemoveWorktree(worktree.id)}
+                >
+                  <FiTrash2 size={11} />
+                </button>
+              </div>
+            )
+          })}
+          {worktreeError ? <div className="worktree-error">{worktreeError}</div> : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -454,7 +610,7 @@ function ResizeShell({
       // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="separator"
       aria-orientation="vertical"
-      aria-valuemin={SIDEBAR_COLLAPSED_WIDTH}
+      aria-valuemin={SIDEBAR_EXPANDED_MIN_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
       aria-valuenow={displayWidth}
       aria-label="Resize sidebar"
@@ -480,16 +636,12 @@ function ResizeShell({
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
-          onResize(
-            displayWidth <= SIDEBAR_COMPACT_THRESHOLD
-              ? SIDEBAR_EXPANDED_MIN_WIDTH
-              : normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP),
-          )
+          onResize(normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP))
           return
         }
         if (event.key === 'Home') {
           event.preventDefault()
-          onResize(SIDEBAR_COLLAPSED_WIDTH)
+          onResize(SIDEBAR_EXPANDED_MIN_WIDTH)
           return
         }
         if (event.key === 'End') {
@@ -506,15 +658,7 @@ function ResizeShell({
     />
   )
 
-  const className = [
-    'tao-sidebar',
-    displayWidth <= SIDEBAR_COMPACT_THRESHOLD ? 'tao-sidebar-compact' : null,
-    displayWidth <= SIDEBAR_HIDE_HEADER_ACTIONS_THRESHOLD
-      ? 'tao-sidebar-header-actions-hidden'
-      : null,
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const className = ['tao-sidebar'].filter(Boolean).join(' ')
 
   return (
     <aside className={className} style={{ width: displayWidth }} aria-label="Workspaces">
@@ -535,6 +679,7 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace,
   onNextWorkspace,
   onNewTab,
+  canCreateTabs,
   onSelectTab,
   onCloseTab,
   onReorderTab,
@@ -550,6 +695,7 @@ const TabBar = memo(function TabBar({
   onPreviousWorkspace(): void
   onNextWorkspace(): void
   onNewTab(): void
+  canCreateTabs: boolean
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
@@ -636,7 +782,8 @@ const TabBar = memo(function TabBar({
         type="button"
         className="icon-button"
         aria-label="New tab"
-        title="New tab"
+        title={canCreateTabs ? 'New tab' : 'Add a workspace first'}
+        disabled={!canCreateTabs}
         onClick={onNewTab}
       >
         <FiPlus size={15} />
@@ -698,6 +845,8 @@ const HeaderNavigation = memo(function HeaderNavigation({
 const PaneTile = memo(function PaneTile({
   pane,
   terminalCwd,
+  terminalWorkspaceId,
+  terminalWorktreeId,
   isActive,
   focusToken,
   searchToken,
@@ -708,6 +857,8 @@ const PaneTile = memo(function PaneTile({
 }: {
   pane: Pane
   terminalCwd?: string
+  terminalWorkspaceId?: string
+  terminalWorktreeId?: string
   isActive: boolean
   focusToken: number
   searchToken: number
@@ -745,6 +896,8 @@ const PaneTile = memo(function PaneTile({
         <TerminalPane
           sessionId={pane.lastSessionId ?? pane.id}
           terminalId={pane.terminalId}
+          workspaceId={terminalWorkspaceId}
+          worktreeId={terminalWorktreeId}
           cwd={pane.cwd ?? terminalCwd}
           isActive={isActive}
           focusToken={focusToken}
@@ -765,6 +918,8 @@ const PaneTile = memo(function PaneTile({
 const PaneGrid = memo(function PaneGrid({
   tab,
   terminalCwd,
+  terminalWorkspaceId,
+  terminalWorktreeId,
   panesById,
   activePaneId,
   terminalFocusTokens,
@@ -777,6 +932,8 @@ const PaneGrid = memo(function PaneGrid({
 }: {
   tab: Tab
   terminalCwd?: string
+  terminalWorkspaceId?: string
+  terminalWorktreeId?: string
   panesById: Map<string, Pane>
   activePaneId: string | null
   terminalFocusTokens: ReadonlyMap<string, number>
@@ -821,6 +978,8 @@ const PaneGrid = memo(function PaneGrid({
         <PaneTile
           pane={pane}
           terminalCwd={terminalCwd}
+          terminalWorkspaceId={terminalWorkspaceId}
+          terminalWorktreeId={terminalWorktreeId}
           isActive={pane.id === activePaneId}
           focusToken={terminalFocusTokens.get(pane.id) ?? 0}
           searchToken={terminalSearchTokens.get(pane.id) ?? 0}
@@ -839,6 +998,8 @@ const PaneGrid = memo(function PaneGrid({
       onSelectPane,
       panesById,
       terminalCwd,
+      terminalWorkspaceId,
+      terminalWorktreeId,
       terminalFocusTokens,
       terminalSearchTokens,
     ],
@@ -896,20 +1057,19 @@ export function App() {
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
+  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
+  const removeWorktree = useTaoStore((state) => state.removeWorktree)
   const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
-  const activeWorkspaceKey = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+  const activeWorkspaceKey = activeWorkspaceId
+  const canCreateTerminal = activeWorkspaceKey !== null
   const sidebarSize = useMemo(
     () =>
-      Math.min(
-        SIDEBAR_MAX_WIDTH,
-        Math.max(
-          SIDEBAR_COLLAPSED_WIDTH,
-          sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_COLLAPSED_WIDTH,
-        ),
+      normalizeSidebarWidth(
+        sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_DEFAULT_WIDTH,
       ),
     [sidebarWidth],
   )
@@ -918,7 +1078,14 @@ export function App() {
     [workspaces],
   )
   const activeWorkspace = useMemo(
-    () => sortedWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
+    () =>
+      sortedWorkspaces.find(
+        (workspace) =>
+          workspace.id === activeWorkspaceId ||
+          (workspace.worktrees ?? []).some(
+            (worktree) => worktreeContextId(worktree.id) === activeWorkspaceId,
+          ),
+      ) ?? null,
     [activeWorkspaceId, sortedWorkspaces],
   )
   const activeWorkspaceIndex = activeWorkspace
@@ -929,27 +1096,38 @@ export function App() {
     activeWorkspaceIndex >= 0 && activeWorkspaceIndex < sortedWorkspaces.length - 1
   const workspaceTabs = useMemo(
     () =>
-      layoutLoaded
+      layoutLoaded && activeWorkspaceKey
         ? tabs
             .filter((tab) => tab.workspaceId === activeWorkspaceKey)
             .sort((a, b) => a.order - b.order)
         : [],
     [activeWorkspaceKey, layoutLoaded, tabs],
   )
+  const contextMetadataById = useMemo(() => {
+    const entries: Array<[string, { workspaceId?: string; worktreeId?: string; cwd?: string }]> = []
+    for (const workspace of workspaces) {
+      entries.push([workspace.id, { workspaceId: workspace.id, cwd: workspace.projectPath }])
+      for (const worktree of workspace.worktrees ?? []) {
+        entries.push([
+          worktreeContextId(worktree.id),
+          { workspaceId: workspace.id, worktreeId: worktree.id, cwd: worktree.path },
+        ])
+      }
+    }
+    return new Map(entries)
+  }, [workspaces])
   const mountedTabs = useMemo(
     () =>
       layoutLoaded
-        ? [...tabs].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order)
+        ? tabs
+            .filter((tab) => contextMetadataById.has(tab.workspaceId))
+            .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.order - b.order)
         : [],
-    [layoutLoaded, tabs],
+    [contextMetadataById, layoutLoaded, tabs],
   )
   const activeTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeTabId) ?? workspaceTabs[0] ?? null,
     [activeTabId, workspaceTabs],
-  )
-  const workspacePathById = useMemo(
-    () => new Map(workspaces.map((workspace) => [workspace.id, workspace.projectPath])),
-    [workspaces],
   )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
   const archivedTabIds = useMemo(
@@ -966,6 +1144,28 @@ export function App() {
   )
   const previousPaneSessionsRef = useRef(
     new Map(panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id])),
+  )
+  const applyWorkspaceRecord = useCallback(
+    (record: WorkspaceRecord) => {
+      const nextWorkspace = workspaceFromRecord(record)
+      const previousWorkspace = useTaoStore
+        .getState()
+        .workspaces.find(
+          (workspace) =>
+            workspace.id === nextWorkspace.id ||
+            workspace.projectPath === nextWorkspace.projectPath,
+        )
+      const nextWorktreeIds = new Set(
+        (nextWorkspace.worktrees ?? []).map((worktree) => worktree.id),
+      )
+      const removedWorktrees = (previousWorkspace?.worktrees ?? []).filter(
+        (worktree) => !nextWorktreeIds.has(worktree.id),
+      )
+
+      upsertWorkspace(nextWorkspace)
+      for (const worktree of removedWorktrees) removeWorktree(nextWorkspace.id, worktree.id)
+    },
+    [removeWorktree, upsertWorkspace],
   )
 
   useEffect(() => {
@@ -993,6 +1193,55 @@ export function App() {
   useEffect(() => {
     if (!layoutLoaded) return
 
+    let cancelled = false
+
+    async function syncDaemonWorkspaces() {
+      const currentWorkspaces = useTaoStore.getState().workspaces
+      for (const workspace of currentWorkspaces) {
+        try {
+          const response = await window.electronAPI.addWorkspace({
+            rootPath: workspace.projectPath,
+            workspaceId: workspace.id,
+            name: workspace.name,
+            orderIndex: workspace.order,
+          })
+          if (!cancelled && response.ok) applyWorkspaceRecord(response.value)
+        } catch (error) {
+          console.warn('[workspace] Failed to import workspace into taod:', error)
+        }
+      }
+
+      try {
+        const response = await window.electronAPI.listWorkspaces()
+        if (!cancelled && response.ok) {
+          for (const workspace of response.value) applyWorkspaceRecord(workspace)
+        }
+      } catch (error) {
+        console.warn('[workspace] Failed to list daemon workspaces:', error)
+      }
+    }
+
+    void syncDaemonWorkspaces()
+
+    return () => {
+      cancelled = true
+    }
+  }, [applyWorkspaceRecord, layoutLoaded])
+
+  useEffect(() => {
+    return window.electronAPI.onWorkspaceChanged((workspace) => {
+      applyWorkspaceRecord(workspace)
+      void runRendererEffect(
+        WorkspaceMetadataCache.use((cache) => cache.invalidateWorkspace(workspace.rootPath)),
+      ).catch((error) => {
+        console.warn('[workspace] Failed to invalidate Git metadata cache:', error)
+      })
+    })
+  }, [applyWorkspaceRecord])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
     let timer: ReturnType<typeof setTimeout> | null = null
     const unsubscribe = useTaoStore.subscribe((state) => {
       if (timer !== null) clearTimeout(timer)
@@ -1016,6 +1265,7 @@ export function App() {
 
   useEffect(() => {
     if (!layoutLoaded) return
+    if (!activeWorkspaceKey) return
     ensureWorkspaceTab(activeWorkspaceKey)
   }, [activeWorkspaceKey, ensureWorkspaceTab, layoutLoaded])
 
@@ -1073,7 +1323,7 @@ export function App() {
           toggleSidebar()
           break
         case 'new-tab':
-          newTab(activeWorkspaceKey)
+          newTab(activeWorkspaceKey ?? undefined)
           break
         case 'close-tab':
           closeActiveTab()
@@ -1128,6 +1378,18 @@ export function App() {
     )
       return
 
+    const response = await window.electronAPI.addWorkspace({
+      rootPath: projectPath,
+      name: workspaceNameFromPath(projectPath),
+      orderIndex: workspaces.length,
+    })
+    if (response.ok) {
+      addWorkspace(workspaceFromRecord(response.value))
+      return
+    }
+
+    console.warn('[workspace] Failed to add daemon workspace:', response.error.message)
+
     addWorkspace({
       id: projectPath,
       name: workspaceNameFromPath(projectPath),
@@ -1166,16 +1428,10 @@ export function App() {
   const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
     setSidebarResizePreviewWidth(nextWidth)
   }, [])
-  const isSidebarCompact =
-    sidebarExpanded && (sidebarResizePreviewWidth ?? sidebarSize) <= SIDEBAR_COMPACT_THRESHOLD
   const shellStyle = {
     '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
   } as CSSProperties & Record<'--tao-sidebar-width', string>
-  const shellClassName = [
-    'tao-shell',
-    sidebarExpanded ? null : 'tao-shell-sidebar-hidden',
-    isSidebarCompact ? 'tao-shell-sidebar-compact' : null,
-  ]
+  const shellClassName = ['tao-shell', sidebarExpanded ? null : 'tao-shell-sidebar-hidden']
     .filter(Boolean)
     .join(' ')
 
@@ -1191,16 +1447,14 @@ export function App() {
           onResize={handleResizeSidebar}
           onResizePreview={handleSidebarResizePreview}
         >
-          {!isSidebarCompact ? (
-            <HeaderNavigation
-              isSidebarVisible={sidebarExpanded}
-              canGoPreviousWorkspace={canGoPreviousWorkspace}
-              canGoNextWorkspace={canGoNextWorkspace}
-              onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
-              onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
-              onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            />
-          ) : null}
+          <HeaderNavigation
+            isSidebarVisible={sidebarExpanded}
+            canGoPreviousWorkspace={canGoPreviousWorkspace}
+            canGoNextWorkspace={canGoNextWorkspace}
+            onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+            onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
+            onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
+          />
           <div className="sidebar-top-actions">
             <button
               type="button"
@@ -1232,14 +1486,15 @@ export function App() {
           <TabBar
             tabs={workspaceTabs}
             activeTabId={activeTab?.id ?? null}
-            showHeaderNavigation={!sidebarExpanded || isSidebarCompact}
+            showHeaderNavigation={!sidebarExpanded}
             isSidebarVisible={sidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
             canGoNextWorkspace={canGoNextWorkspace}
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onNewTab={() => newTab(activeWorkspaceKey)}
+            onNewTab={() => newTab(activeWorkspaceKey ?? undefined)}
+            canCreateTabs={canCreateTerminal}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
@@ -1249,6 +1504,7 @@ export function App() {
             {mountedTabs.length > 0 ? (
               mountedTabs.map((tab) => {
                 const isTabActive = tab.id === activeTab?.id
+                const metadata = contextMetadataById.get(tab.workspaceId) ?? {}
                 return (
                   <div
                     className={
@@ -1259,7 +1515,9 @@ export function App() {
                   >
                     <PaneGrid
                       tab={tab}
-                      terminalCwd={workspacePathById.get(tab.workspaceId)}
+                      terminalCwd={metadata.cwd}
+                      terminalWorkspaceId={metadata.workspaceId}
+                      terminalWorktreeId={metadata.worktreeId}
                       panesById={panesById}
                       activePaneId={isTabActive ? activePaneId : null}
                       terminalFocusTokens={terminalFocusTokens}
@@ -1275,14 +1533,16 @@ export function App() {
               })
             ) : (
               <div className="pane-grid-empty">
-                <button
-                  type="button"
-                  className="empty-new-tab-button"
-                  aria-label="New tab"
-                  onClick={() => newTab(activeWorkspaceKey)}
-                >
-                  <FiPlus size={15} />
-                </button>
+                {canCreateTerminal ? (
+                  <button
+                    type="button"
+                    className="empty-new-tab-button"
+                    aria-label="New tab"
+                    onClick={() => newTab(activeWorkspaceKey ?? undefined)}
+                  >
+                    <FiPlus size={15} />
+                  </button>
+                ) : null}
               </div>
             )}
           </div>

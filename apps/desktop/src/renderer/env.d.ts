@@ -19,8 +19,13 @@ import type {
   WorkspaceGitBranchResponse,
   WorkspaceGitStatusResponse,
   WorkspaceGitWorktreesResponse,
+  WorkspaceIpcResponse,
+  WorkspaceListResponse,
   WorkspacePortsResponse,
   WorkspacePullRequestResponse,
+  WorkspaceRecord,
+  WorkspaceRecordResponse,
+  WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
 
 export interface ElectronAPI {
@@ -61,12 +66,37 @@ export interface ElectronAPI {
   ): () => void
   signalReady(): Promise<void>
   onAppCommand(callback: (command: AppCommand) => void): () => void
+  onWorkspaceChanged(callback: (workspace: WorkspaceRecord) => void): () => void
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse>
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse>
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>
+  listWorkspaces(): Promise<WorkspaceListResponse>
+  addWorkspace(input: {
+    rootPath: string
+    workspaceId?: string
+    name?: string
+    orderIndex?: number
+  }): Promise<WorkspaceRecordResponse>
+  refreshWorkspace(workspaceId: string): Promise<WorkspaceRecordResponse>
+  removeWorkspace(workspaceId: string): Promise<WorkspaceIpcResponse<void>>
+  createWorktree(input: {
+    workspaceId: string
+    baseBranch?: string
+    targetBranch?: string
+    branch?: string
+    folderName?: string
+    startPoint?: string
+    title?: string
+  }): Promise<WorkspaceWorktreeResponse>
+  refreshWorktree(worktreeId: string): Promise<WorkspaceWorktreeResponse>
+  removeWorktree(input: {
+    worktreeId: string
+    force?: boolean
+    deleteBranch?: boolean
+  }): Promise<WorkspaceIpcResponse<void>>
   readLayout(): Promise<PaneLayoutData | null>
   writeLayout(data: PaneLayoutData): Promise<void>
   readSettings(): Promise<SettingsData | null>

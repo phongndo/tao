@@ -3,10 +3,21 @@ import { Schema } from 'effect'
 import { create } from 'zustand'
 import type { PaneFocusDirection } from '@tao/shared/app-command'
 import type { PaneLayoutData } from '@tao/shared/session'
-import { type WorktreeInfo, WorktreeInfoSchema } from '@tao/shared/workspace'
+import { type WorkspaceWorktree, WorkspaceWorktreeSchema } from '@tao/shared/workspace'
 import { sanitizeTerminalTitle } from '../osc-title'
 
 export const LOCAL_WORKSPACE_ID = 'tao:local'
+export const WORKTREE_CONTEXT_PREFIX = 'worktree:'
+
+export function worktreeContextId(worktreeId: string): string {
+  return `${WORKTREE_CONTEXT_PREFIX}${worktreeId}`
+}
+
+export function worktreeIdFromContext(contextId: string): string | null {
+  return contextId.startsWith(WORKTREE_CONTEXT_PREFIX)
+    ? contextId.slice(WORKTREE_CONTEXT_PREFIX.length)
+    : null
+}
 
 export interface TaoState {
   workspaces: Workspace[]
@@ -20,8 +31,12 @@ export interface TaoState {
   sidebarWidth: number
   hydrateLayout(data: PaneLayoutData): void
   addWorkspace(workspace: Workspace): void
+  upsertWorkspace(workspace: Workspace): void
+  upsertWorktree(workspaceId: string, worktree: WorkspaceWorktree): void
+  removeWorktree(workspaceId: string, worktreeId: string): void
   removeWorkspace(workspaceId: string): void
   selectWorkspace(workspaceId: string): void
+  selectWorktree(worktreeId: string): void
   selectWorkspaceByIndex(index: number): void
   ensureWorkspaceTab(workspaceId?: string): void
   newTab(workspaceId?: string): void
@@ -55,7 +70,7 @@ export interface Workspace {
   name: string
   projectPath: string
   branch?: string
-  worktrees?: WorktreeInfo[]
+  worktrees?: WorkspaceWorktree[]
   lastActiveTabId?: string
   order: number
 }
@@ -100,7 +115,7 @@ const PersistedWorkspaceSchema = Schema.Struct({
   name: Schema.String,
   projectPath: Schema.String,
   branch: Schema.optional(Schema.String),
-  worktrees: Schema.optional(Schema.Array(WorktreeInfoSchema)),
+  worktrees: Schema.optional(Schema.Array(Schema.Unknown)),
   lastActiveTabId: Schema.optional(Schema.String),
   order: Schema.optional(Schema.Number),
 })
@@ -531,8 +546,6 @@ function ensureWorkspaceTabState(state: TaoState, workspaceId: string): Partial<
   }
 }
 
-const initialLocalTab = createTerminalTab(LOCAL_WORKSPACE_ID, 0)
-
 type PersistedTaoState = Schema.Schema.Type<typeof PersistedTaoStateSchema>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -621,7 +634,12 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
     .map<Workspace>((workspace, order) => ({
       ...workspace,
       name: sanitizeTerminalTitle(workspace.name) ?? workspaceNameFallback(workspace.projectPath),
-      worktrees: workspace.worktrees ? [...workspace.worktrees] : undefined,
+      worktrees: workspace.worktrees
+        ? workspace.worktrees.flatMap((worktree) => {
+            const decoded = Schema.decodeUnknownOption(WorkspaceWorktreeSchema)(worktree)
+            return decoded._tag === 'Some' ? [decoded.value] : []
+          })
+        : undefined,
       lastActiveTabId: isNonEmptyString(workspace.lastActiveTabId ?? '')
         ? workspace.lastActiveTabId
         : undefined,
@@ -650,6 +668,7 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
   const tabs = reorderAllWorkspaceTabs(
     (persisted.tabs ?? []).flatMap<Tab>((tab) => {
       if (!isNonEmptyString(tab.id) || !isNonEmptyString(tab.workspaceId)) return []
+      if (!contextExists(workspaces, tab.workspaceId)) return []
 
       const layout = decodePersistedLayout(tab.layout, paneIdsByTab.get(tab.id) ?? new Set())
       if (!layout) return []
@@ -690,8 +709,7 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
   return {
     workspaces: repairedWorkspaces,
     activeWorkspaceId:
-      persisted.activeWorkspaceId &&
-      workspaces.some((workspace) => workspace.id === persisted.activeWorkspaceId)
+      persisted.activeWorkspaceId && contextExists(workspaces, persisted.activeWorkspaceId)
         ? persisted.activeWorkspaceId
         : null,
     lastActiveLocalTabId,
@@ -710,26 +728,54 @@ function workspaceNameFallback(projectPath: string): string {
 
 function repairPersistedState(state: TaoState): TaoState {
   const hasActiveWorkspace =
-    state.activeWorkspaceId !== null &&
-    state.workspaces.some((workspace) => workspace.id === state.activeWorkspaceId)
+    state.activeWorkspaceId !== null && contextExists(state.workspaces, state.activeWorkspaceId)
   const activeWorkspaceId = hasActiveWorkspace ? state.activeWorkspaceId : null
   const nextState = { ...state, activeWorkspaceId }
-  const targetWorkspaceId = activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+
+  if (!activeWorkspaceId) return { ...nextState, activeTabId: null, activePaneId: null }
 
   return {
     ...nextState,
-    ...ensureWorkspaceTabState(nextState, targetWorkspaceId),
+    ...ensureWorkspaceTabState(nextState, activeWorkspaceId),
   }
+}
+
+function contextExists(workspaces: Workspace[], contextId: string): boolean {
+  if (workspaces.some((workspace) => workspace.id === contextId)) return true
+  const worktreeId = worktreeIdFromContext(contextId)
+  return worktreeId
+    ? workspaces.some((workspace) =>
+        (workspace.worktrees ?? []).some((worktree) => worktree.id === worktreeId),
+      )
+    : false
+}
+
+function upsertWorktreeInWorkspace(
+  workspaces: Workspace[],
+  workspaceId: string,
+  worktree: WorkspaceWorktree,
+): Workspace[] {
+  return workspaces.map((workspace) => {
+    if (workspace.id !== workspaceId) return workspace
+    const existing = workspace.worktrees ?? []
+    const nextWorktrees = existing.some((candidate) => candidate.id === worktree.id)
+      ? existing.map((candidate) => (candidate.id === worktree.id ? worktree : candidate))
+      : [...existing, worktree]
+    return {
+      ...workspace,
+      worktrees: nextWorktrees.sort((a, b) => a.orderIndex - b.orderIndex),
+    }
+  })
 }
 
 export const useTaoStore = create<TaoState>()((set) => ({
   workspaces: [],
   activeWorkspaceId: null,
-  lastActiveLocalTabId: initialLocalTab.tab.id,
-  tabs: [initialLocalTab.tab],
-  activeTabId: initialLocalTab.tab.id,
-  panes: [initialLocalTab.pane],
-  activePaneId: initialLocalTab.pane.id,
+  lastActiveLocalTabId: null,
+  tabs: [],
+  activeTabId: null,
+  panes: [],
+  activePaneId: null,
   sidebarExpanded: true,
   sidebarWidth: 240,
   hydrateLayout: (data) =>
@@ -779,25 +825,117 @@ export const useTaoStore = create<TaoState>()((set) => ({
         activePaneId: pane.id,
       }
     }),
+  upsertWorkspace: (workspace) =>
+    set((state) => {
+      const existingIndex = state.workspaces.findIndex(
+        (candidate) =>
+          candidate.id === workspace.id || candidate.projectPath === workspace.projectPath,
+      )
+      if (existingIndex === -1) {
+        return {
+          workspaces: [
+            ...state.workspaces,
+            {
+              ...workspace,
+              order: Number.isFinite(workspace.order) ? workspace.order : state.workspaces.length,
+            },
+          ].map((candidate, order) => ({ ...candidate, order })),
+        }
+      }
+
+      const existingWorkspace = state.workspaces[existingIndex]
+      if (!existingWorkspace) return {}
+      const oldWorkspaceId = existingWorkspace.id
+      const nextWorkspace = {
+        ...existingWorkspace,
+        ...workspace,
+        order: existingWorkspace.order,
+        lastActiveTabId: existingWorkspace.lastActiveTabId ?? workspace.lastActiveTabId,
+        worktrees: workspace.worktrees ?? existingWorkspace.worktrees,
+      }
+      const workspaceIdChanged = oldWorkspaceId !== nextWorkspace.id
+
+      return {
+        workspaces: state.workspaces.map((candidate, index) =>
+          index === existingIndex ? nextWorkspace : candidate,
+        ),
+        tabs: workspaceIdChanged
+          ? state.tabs.map((tab) =>
+              tab.workspaceId === oldWorkspaceId ? { ...tab, workspaceId: nextWorkspace.id } : tab,
+            )
+          : state.tabs,
+        activeWorkspaceId:
+          workspaceIdChanged && state.activeWorkspaceId === oldWorkspaceId
+            ? nextWorkspace.id
+            : state.activeWorkspaceId,
+      }
+    }),
+  upsertWorktree: (workspaceId, worktree) =>
+    set((state) => {
+      const workspaces = upsertWorktreeInWorkspace(state.workspaces, workspaceId, worktree)
+      const contextId = worktreeContextId(worktree.id)
+      const nextState = { ...state, workspaces, activeWorkspaceId: contextId }
+      return {
+        workspaces,
+        activeWorkspaceId: contextId,
+        ...ensureWorkspaceTabState(nextState, contextId),
+      }
+    }),
+  removeWorktree: (workspaceId, worktreeId) =>
+    set((state) => {
+      const contextId = worktreeContextId(worktreeId)
+      const workspaces = state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              worktrees: (workspace.worktrees ?? []).filter(
+                (worktree) => worktree.id !== worktreeId,
+              ),
+            }
+          : workspace,
+      )
+      const removedTabIds = new Set(
+        state.tabs.filter((tab) => tab.workspaceId === contextId).map((tab) => tab.id),
+      )
+      const tabs = state.tabs.filter((tab) => tab.workspaceId !== contextId)
+      const panes = state.panes.filter((pane) => !removedTabIds.has(pane.tabId))
+      const activeWorkspaceId =
+        state.activeWorkspaceId === contextId ? workspaceId : state.activeWorkspaceId
+      const nextState = { ...state, workspaces, tabs, panes, activeWorkspaceId }
+      return {
+        workspaces,
+        tabs,
+        panes,
+        activeWorkspaceId,
+        ...(state.activeWorkspaceId === contextId
+          ? ensureWorkspaceTabState(nextState, workspaceId)
+          : {}),
+      }
+    }),
   removeWorkspace: (workspaceId) =>
     set((state) => {
+      const removedWorkspace = state.workspaces.find(({ id }) => id === workspaceId)
+      const removedContextIds = new Set([
+        workspaceId,
+        ...(removedWorkspace?.worktrees ?? []).map((worktree) => worktreeContextId(worktree.id)),
+      ])
       const workspaces = state.workspaces
         .filter(({ id }) => id !== workspaceId)
         .map((workspace, order) => ({ ...workspace, order }))
       const removedTabIds = new Set(
-        state.tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => tab.id),
+        state.tabs.filter((tab) => removedContextIds.has(tab.workspaceId)).map((tab) => tab.id),
       )
-      const tabs = state.tabs.filter((tab) => tab.workspaceId !== workspaceId)
+      const tabs = state.tabs.filter((tab) => !removedContextIds.has(tab.workspaceId))
       const panes = state.panes.filter((pane) => !removedTabIds.has(pane.tabId))
       const activeWorkspaceId =
-        state.activeWorkspaceId === workspaceId
+        state.activeWorkspaceId !== null && removedContextIds.has(state.activeWorkspaceId)
           ? (workspaces.find(({ order }) => order === 0)?.id ?? null)
           : state.activeWorkspaceId
 
       const nextState = { ...state, workspaces, tabs, panes, activeWorkspaceId }
       const nextTab = activeWorkspaceId
         ? getPreferredWorkspaceTab(tabs, workspaces, activeWorkspaceId, state.lastActiveLocalTabId)
-        : getPreferredWorkspaceTab(tabs, workspaces, LOCAL_WORKSPACE_ID, state.lastActiveLocalTabId)
+        : null
 
       return {
         workspaces,
@@ -814,6 +952,15 @@ export const useTaoStore = create<TaoState>()((set) => ({
       activeWorkspaceId: workspaceId,
       ...ensureWorkspaceTabState(state, workspaceId),
     })),
+  selectWorktree: (worktreeId) =>
+    set((state) => {
+      const contextId = worktreeContextId(worktreeId)
+      if (!contextExists(state.workspaces, contextId)) return {}
+      return {
+        activeWorkspaceId: contextId,
+        ...ensureWorkspaceTabState(state, contextId),
+      }
+    }),
   selectWorkspaceByIndex: (index) =>
     set((state) => {
       const workspace = [...state.workspaces].sort((a, b) => a.order - b.order)[index]
@@ -825,12 +972,15 @@ export const useTaoStore = create<TaoState>()((set) => ({
       }
     }),
   ensureWorkspaceTab: (workspaceId) =>
-    set((state) =>
-      ensureWorkspaceTabState(state, workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID),
-    ),
+    set((state) => {
+      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId
+      if (!targetWorkspaceId || !contextExists(state.workspaces, targetWorkspaceId)) return {}
+      return ensureWorkspaceTabState(state, targetWorkspaceId)
+    }),
   newTab: (workspaceId) =>
     set((state) => {
-      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId
+      if (!targetWorkspaceId || !contextExists(state.workspaces, targetWorkspaceId)) return {}
       const order = getWorkspaceTabs(state.tabs, targetWorkspaceId).length
       const { tab, pane } = createTerminalTab(targetWorkspaceId, order)
 
@@ -862,7 +1012,8 @@ export const useTaoStore = create<TaoState>()((set) => ({
     }),
   selectTabByIndex: (index) =>
     set((state) => {
-      const workspaceId = state.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      const workspaceId = state.activeWorkspaceId
+      if (!workspaceId) return {}
       const tab = getWorkspaceTabs(state.tabs, workspaceId)[index]
       if (!tab) return {}
 

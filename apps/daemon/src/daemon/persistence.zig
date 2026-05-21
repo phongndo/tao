@@ -38,9 +38,11 @@ pub fn restoreSessionFromDatabaseLocked(
     const rows = request.rows orelse record.rows;
     const cwd = request.cwd orelse record.cwd;
     const terminal_id = request.requestTerminalId() orelse record.terminal_id;
+    const workspace_id = request.requestWorkspaceId() orelse record.workspace_id;
+    const worktree_id = request.requestWorktreeId() orelse record.worktree_id;
 
     if (mutable_resume_lookup) |lookup| {
-        if (try self.restoreSessionWithArgvJsonLocked(session_id, terminal_id, cwd, cols, rows, lookup.resume_argv_json, "resumed")) |restored| {
+        if (try self.restoreSessionWithArgvJsonLocked(session_id, terminal_id, workspace_id, worktree_id, cwd, cols, rows, lookup.resume_argv_json, "resumed")) |restored| {
             std.log.info("restored persisted session {s} with native agent resume", .{restored.id});
             var result: RestoreResult = .{
                 .item = restored,
@@ -56,7 +58,7 @@ pub fn restoreSessionFromDatabaseLocked(
     }
 
     const restart_argv_json = record.argv_json orelse return null;
-    const restored = (try self.restoreSessionWithArgvJsonLocked(session_id, terminal_id, cwd, cols, rows, restart_argv_json, "running")) orelse return null;
+    const restored = (try self.restoreSessionWithArgvJsonLocked(session_id, terminal_id, workspace_id, worktree_id, cwd, cols, rows, restart_argv_json, "running")) orelse return null;
     std.log.info("restored persisted session {s} with saved command", .{restored.id});
     return .{
         .item = restored,
@@ -68,6 +70,8 @@ pub fn restoreSessionWithArgvJsonLocked(
     self: anytype,
     session_id: []const u8,
     terminal_id: []const u8,
+    workspace_id: ?[]const u8,
+    worktree_id: ?[]const u8,
     cwd: ?[]const u8,
     cols: u16,
     rows: u16,
@@ -86,6 +90,8 @@ pub fn restoreSessionWithArgvJsonLocked(
     const restored = try self.sessions.create(.{
         .session_id = session_id,
         .terminal_id = terminal_id,
+        .workspace_id = workspace_id,
+        .worktree_id = worktree_id,
         .cols = cols,
         .rows = rows,
         .cwd = cwd,
@@ -262,6 +268,8 @@ pub fn recordTerminalSessionLocked(self: anytype, item: *const session.TerminalS
     database.recordTerminalSession(.{
         .id = item.id,
         .terminal_id = item.terminal_id,
+        .workspace_id = item.workspace_id,
+        .worktree_id = item.worktree_id,
         .cwd = item.cwd,
         .argv_json = argv_json,
         .status = item.status.text(),

@@ -18,15 +18,44 @@ pub fn Context(comptime Daemon: type) type {
         pub fn ensureSessionProcess(self: Self, item: *session.TerminalSession, argv: []const []const u8) !void {
             item.assertInvariants();
             const daemon = self.daemon;
-            if (item.pty_child) |child| {
+            if (item.pty_child) |*child| {
                 if (child.master_fd >= 0) return;
+                if (child.pid > 0) {
+                    _ = try daemon.pty_driver.tryWait(child) orelse return error.SpawnFailed;
+                }
+                child.close();
                 item.pty_child = null;
                 item.reader_started = false;
             }
             if (argv.len == 0) return;
 
+            var env_pairs: std.ArrayList(pty.EnvPair) = .empty;
+            defer env_pairs.deinit(daemon.allocator);
+            var workspace_row: ?@import("../db.zig").WorkspaceRow = null;
+            defer if (workspace_row) |*row| row.deinit(daemon.allocator);
+            var worktree_row: ?@import("../db.zig").WorktreeRow = null;
+            defer if (worktree_row) |*row| row.deinit(daemon.allocator);
+            if (daemon.database) |*database| {
+                if (item.workspace_id) |workspace_id| {
+                    workspace_row = database.findWorkspaceById(daemon.allocator, workspace_id) catch null;
+                }
+                if (item.worktree_id) |worktree_id| {
+                    worktree_row = database.findWorktreeById(daemon.allocator, worktree_id) catch null;
+                }
+            }
+            if (item.workspace_id) |workspace_id| try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKSPACE_ID", .value = workspace_id });
+            if (workspace_row) |row| try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKSPACE_ROOT", .value = row.root_path });
+            if (worktree_row) |row| {
+                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_ID", .value = row.id });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_PATH", .value = row.path });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_BRANCH", .value = row.branch });
+                if (row.base_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAO_BASE_BRANCH", .value = value });
+                if (row.target_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAO_TARGET_BRANCH", .value = value });
+            }
+
             item.pty_child = try daemon.pty_driver.spawn(.{
                 .argv = argv,
+                .env = env_pairs.items,
                 .cwd = item.cwd,
                 .cols = item.cols,
                 .rows = item.rows,
@@ -40,13 +69,12 @@ pub fn Context(comptime Daemon: type) type {
             if (item.reader_started) return;
             const child = item.pty_child orelse return;
             if (child.master_fd < 0) return;
-            item.reader_started = true;
             const owned_session_id = try std.heap.smp_allocator.dupe(u8, item.id);
             errdefer std.heap.smp_allocator.free(owned_session_id);
-            const thread = std.Thread.spawn(.{}, sessionReaderThread, .{ self, owned_session_id }) catch |err| {
-                item.reader_started = false;
-                return err;
-            };
+            _ = self.daemon.active_session_readers.fetchAdd(1, .release);
+            errdefer _ = self.daemon.active_session_readers.fetchSub(1, .acquire);
+            const thread = try std.Thread.spawn(.{}, sessionReaderThread, .{ self, owned_session_id });
+            item.reader_started = true;
             thread.detach();
         }
 
@@ -190,8 +218,7 @@ pub fn Context(comptime Daemon: type) type {
             }
             item.assertInvariants();
             item.transitionTo(.exited);
-            if (item.pty_child) |*child| child.close();
-            item.pty_child = null;
+            releasePtyChildForBackgroundReap(daemon, item, "synthetic exit");
             item.reader_started = false;
             if (item.event_log_path) |path| {
                 _ = event_log.appendExit(daemon.allocator, path, &item.last_seq, exit_code, signal_value) catch |err| {
@@ -218,12 +245,38 @@ pub fn Context(comptime Daemon: type) type {
         }
 
         fn sessionReaderThread(context: Self, session_id: []u8) void {
-            defer std.heap.smp_allocator.free(session_id);
+            defer {
+                std.heap.smp_allocator.free(session_id);
+                _ = context.daemon.active_session_readers.fetchSub(1, .acquire);
+            }
 
             context.runSessionReader(session_id) catch |err| {
                 std.log.warn("session reader failed for {s}: {t}", .{ session_id, err });
                 _ = context.markExitedAndBroadcast(session_id, -1, 0) catch {};
             };
+        }
+
+        fn releasePtyChildForBackgroundReap(daemon: Daemon, item: *session.TerminalSession, reason: []const u8) void {
+            if (item.pty_child) |*child| {
+                pty.reapInBackground(child) catch |err| {
+                    std.log.warn("failed to start PTY reaper for {s} after {s}: {t}", .{ item.id, reason, err });
+                    var detached_child = child.*;
+                    child.pid = 0;
+                    child.close();
+                    item.pty_child = null;
+
+                    daemon.unlock();
+                    defer daemon.lock();
+
+                    var driver = pty.Driver.init(std.heap.smp_allocator);
+                    _ = driver.wait(&detached_child) catch |wait_err| {
+                        std.log.warn("failed to synchronously reap PTY for {s} after {s}: {t}", .{ item.id, reason, wait_err });
+                    };
+                    detached_child.close();
+                    return;
+                };
+                item.pty_child = null;
+            }
         }
     };
 }

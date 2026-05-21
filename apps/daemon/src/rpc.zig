@@ -12,6 +12,17 @@ pub const RequestType = enum {
     clear_history,
     cleanup,
     configure_persistence,
+    workspace_list,
+    workspace_add,
+    workspace_remove,
+    workspace_refresh,
+    workspace_reorder,
+    worktree_list,
+    worktree_create,
+    worktree_remove,
+    worktree_adopt,
+    worktree_refresh,
+    worktree_reorder,
     ping,
     unknown,
 
@@ -28,6 +39,39 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "configure-persistence")) return .configure_persistence;
         if (std.mem.eql(u8, text, "configurePersistence")) return .configure_persistence;
         if (std.mem.eql(u8, text, "configure_persistence")) return .configure_persistence;
+        if (std.mem.eql(u8, text, "workspace.list")) return .workspace_list;
+        if (std.mem.eql(u8, text, "workspace:list")) return .workspace_list;
+        if (std.mem.eql(u8, text, "workspace-list")) return .workspace_list;
+        if (std.mem.eql(u8, text, "workspace.add")) return .workspace_add;
+        if (std.mem.eql(u8, text, "workspace:add")) return .workspace_add;
+        if (std.mem.eql(u8, text, "workspace-add")) return .workspace_add;
+        if (std.mem.eql(u8, text, "workspace.remove")) return .workspace_remove;
+        if (std.mem.eql(u8, text, "workspace:remove")) return .workspace_remove;
+        if (std.mem.eql(u8, text, "workspace-remove")) return .workspace_remove;
+        if (std.mem.eql(u8, text, "workspace.refresh")) return .workspace_refresh;
+        if (std.mem.eql(u8, text, "workspace:refresh")) return .workspace_refresh;
+        if (std.mem.eql(u8, text, "workspace-refresh")) return .workspace_refresh;
+        if (std.mem.eql(u8, text, "workspace.reorder")) return .workspace_reorder;
+        if (std.mem.eql(u8, text, "workspace:reorder")) return .workspace_reorder;
+        if (std.mem.eql(u8, text, "workspace-reorder")) return .workspace_reorder;
+        if (std.mem.eql(u8, text, "worktree.list")) return .worktree_list;
+        if (std.mem.eql(u8, text, "worktree:list")) return .worktree_list;
+        if (std.mem.eql(u8, text, "worktree-list")) return .worktree_list;
+        if (std.mem.eql(u8, text, "worktree.create")) return .worktree_create;
+        if (std.mem.eql(u8, text, "worktree:create")) return .worktree_create;
+        if (std.mem.eql(u8, text, "worktree-create")) return .worktree_create;
+        if (std.mem.eql(u8, text, "worktree.remove")) return .worktree_remove;
+        if (std.mem.eql(u8, text, "worktree:remove")) return .worktree_remove;
+        if (std.mem.eql(u8, text, "worktree-remove")) return .worktree_remove;
+        if (std.mem.eql(u8, text, "worktree.adopt")) return .worktree_adopt;
+        if (std.mem.eql(u8, text, "worktree:adopt")) return .worktree_adopt;
+        if (std.mem.eql(u8, text, "worktree-adopt")) return .worktree_adopt;
+        if (std.mem.eql(u8, text, "worktree.refresh")) return .worktree_refresh;
+        if (std.mem.eql(u8, text, "worktree:refresh")) return .worktree_refresh;
+        if (std.mem.eql(u8, text, "worktree-refresh")) return .worktree_refresh;
+        if (std.mem.eql(u8, text, "worktree.reorder")) return .worktree_reorder;
+        if (std.mem.eql(u8, text, "worktree:reorder")) return .worktree_reorder;
+        if (std.mem.eql(u8, text, "worktree-reorder")) return .worktree_reorder;
         if (std.mem.eql(u8, text, "ping")) return .ping;
         return .unknown;
     }
@@ -41,6 +85,29 @@ pub const ControlRequestJson = struct {
     sessionId: ?[]const u8 = null,
     terminal_id: ?[]const u8 = null,
     terminalId: ?[]const u8 = null,
+    workspace_id: ?[]const u8 = null,
+    workspaceId: ?[]const u8 = null,
+    worktree_id: ?[]const u8 = null,
+    worktreeId: ?[]const u8 = null,
+    root_path: ?[]const u8 = null,
+    rootPath: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    folder_name: ?[]const u8 = null,
+    folderName: ?[]const u8 = null,
+    branch: ?[]const u8 = null,
+    base_branch: ?[]const u8 = null,
+    baseBranch: ?[]const u8 = null,
+    target_branch: ?[]const u8 = null,
+    targetBranch: ?[]const u8 = null,
+    start_point: ?[]const u8 = null,
+    startPoint: ?[]const u8 = null,
+    order_index: ?i64 = null,
+    orderIndex: ?i64 = null,
+    force: ?bool = null,
+    delete_branch: ?bool = null,
+    deleteBranch: ?bool = null,
     cols: ?u16 = null,
     rows: ?u16 = null,
     cwd: ?[]const u8 = null,
@@ -75,6 +142,46 @@ pub const ControlRequestJson = struct {
         return self.terminal_id orelse self.terminalId;
     }
 
+    pub fn requestWorkspaceId(self: ControlRequestJson) ?[]const u8 {
+        return self.workspace_id orelse self.workspaceId;
+    }
+
+    pub fn requestWorktreeId(self: ControlRequestJson) ?[]const u8 {
+        return self.worktree_id orelse self.worktreeId;
+    }
+
+    pub fn requestRootPath(self: ControlRequestJson) ?[]const u8 {
+        return self.root_path orelse self.rootPath orelse self.path;
+    }
+
+    pub fn requestFolderName(self: ControlRequestJson) ?[]const u8 {
+        return self.folder_name orelse self.folderName;
+    }
+
+    pub fn requestBaseBranch(self: ControlRequestJson) ?[]const u8 {
+        return self.base_branch orelse self.baseBranch;
+    }
+
+    pub fn requestTargetBranch(self: ControlRequestJson) ?[]const u8 {
+        return self.target_branch orelse self.targetBranch;
+    }
+
+    pub fn requestStartPoint(self: ControlRequestJson) ?[]const u8 {
+        return self.start_point orelse self.startPoint;
+    }
+
+    pub fn requestOrderIndex(self: ControlRequestJson) ?i64 {
+        return self.order_index orelse self.orderIndex;
+    }
+
+    pub fn requestForce(self: ControlRequestJson) bool {
+        return self.force orelse false;
+    }
+
+    pub fn requestDeleteBranch(self: ControlRequestJson) bool {
+        return self.delete_branch orelse self.deleteBranch orelse false;
+    }
+
     pub fn requestSessionIds(self: ControlRequestJson) ?[][]const u8 {
         return self.session_ids orelse self.sessionIds;
     }
@@ -103,6 +210,8 @@ pub const ControlRequestJson = struct {
 pub const CreateRequest = struct {
     session_id: []const u8,
     terminal_id: []const u8,
+    workspace_id: ?[]const u8 = null,
+    worktree_id: ?[]const u8 = null,
     cols: u16,
     rows: u16,
     cwd: ?[]const u8 = null,

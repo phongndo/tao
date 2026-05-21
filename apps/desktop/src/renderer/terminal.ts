@@ -33,6 +33,8 @@ import { createBatchedTerminalWriter } from './terminal-output-writer'
 
 type CreateTerminalOptions = {
   readonly terminalId?: string
+  readonly workspaceId?: string
+  readonly worktreeId?: string
   readonly cwd?: string
   readonly onTitle?: (title: string) => void
   readonly onArchived?: () => void
@@ -660,6 +662,8 @@ export async function createTerminal(
     const attachedSession = await window.electronAPI.attachSession({
       sessionId,
       terminalId: options.terminalId,
+      workspaceId: options.workspaceId,
+      worktreeId: options.worktreeId,
       cols: term.cols,
       rows: term.rows,
       cwd: options.cwd,

@@ -37,6 +37,8 @@ export const AttachSessionModeSchema = Schema.Union([
 
 export const CreateSessionInputSchema = Schema.Struct({
   terminalId: NonEmptyString,
+  workspaceId: NonEmptyString,
+  worktreeId: Schema.optional(NonEmptyString),
   cols: Schema.Number,
   rows: Schema.Number,
   cwd: Schema.optional(Schema.String),
@@ -51,6 +53,8 @@ export const CreateSessionResultSchema = Schema.Struct({
 export const AttachSessionInputSchema = Schema.Struct({
   sessionId: Schema.optional(NonEmptyString),
   terminalId: Schema.optional(NonEmptyString),
+  workspaceId: Schema.optional(NonEmptyString),
+  worktreeId: Schema.optional(NonEmptyString),
   cols: Schema.optional(Schema.Number),
   rows: Schema.optional(Schema.Number),
   cwd: Schema.optional(Schema.String),

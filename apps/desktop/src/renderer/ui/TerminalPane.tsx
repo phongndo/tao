@@ -75,6 +75,8 @@ function renderAfterWindowShown(terminal: Terminal, isCurrent: () => boolean): (
 export function TerminalPane({
   sessionId,
   terminalId,
+  workspaceId,
+  worktreeId,
   cwd,
   isActive,
   focusToken,
@@ -85,6 +87,8 @@ export function TerminalPane({
 }: {
   sessionId: string
   terminalId?: string
+  workspaceId?: string
+  worktreeId?: string
   cwd?: string
   isActive: boolean
   focusToken: number
@@ -144,6 +148,8 @@ export function TerminalPane({
         onArchiveStateChangeRef.current?.(false)
         const terminal = await createTerminal(surface, sessionId, {
           terminalId,
+          workspaceId,
+          worktreeId,
           cwd: cwdRef.current,
           onTitle: (title) => onTitleChangeRef.current?.(title),
           onArchived: () => {
@@ -202,7 +208,7 @@ export function TerminalPane({
       terminalRef.current?.dispose()
       terminalRef.current = null
     }
-  }, [sessionId, terminalId])
+  }, [sessionId, terminalId, workspaceId, worktreeId])
 
   useEffect(() => {
     const terminal = terminalRef.current

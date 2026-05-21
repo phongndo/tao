@@ -10,6 +10,8 @@ pub const subscribers_per_session_max = 1024;
 pub const pending_output_frames_max = 4096;
 pub const pending_output_bytes_max = 1024 * 1024;
 pub const pending_client_bytes_max = 1024 * 1024;
+pub const control_connections_max = 256;
+pub const control_first_line_timeout_ms: i32 = 5000;
 pub const session_dirs_scan_max = 64 * 1024;
 pub const db_event_log_refs_max = 64 * 1024;
 pub const db_search_results_max = 1024;
@@ -29,6 +31,8 @@ comptime {
     assert(pending_output_frames_max > 0);
     assert(pending_output_bytes_max > 0);
     assert(pending_client_bytes_max > 0);
+    assert(control_connections_max > 0);
+    assert(control_first_line_timeout_ms > 0);
     assert(session_dirs_scan_max > 0);
     assert(db_event_log_refs_max > 0);
     assert(db_search_results_max > 0);

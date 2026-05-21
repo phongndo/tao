@@ -1,11 +1,14 @@
 const std = @import("std");
 const db = @import("db.zig");
 const event_log = @import("event_log.zig");
+const limits = @import("limits.zig");
 const pty = @import("pty.zig");
 const rpc = @import("rpc.zig");
 const session = @import("session.zig");
 const snapshot = @import("snapshot.zig");
 const vt = @import("vt.zig");
+const workspace_mod = @import("workspace.zig");
+const worktree_mod = @import("worktree.zig");
 
 const daemon_config = @import("daemon/config.zig");
 const fd_io = @import("daemon/fd_io.zig");
@@ -43,6 +46,8 @@ test {
     _ = stream_mod;
     _ = agent_index;
     _ = screen;
+    _ = workspace_mod;
+    _ = worktree_mod;
 }
 
 pub const Daemon = struct {
@@ -53,6 +58,8 @@ pub const Daemon = struct {
     database: ?db.Database,
     persistence: PersistencePolicy,
     mutex: std.Thread.Mutex = .{},
+    active_control_connections: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    active_session_readers: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     const ProcessContext = process.Context(*Daemon);
     const StreamContext = stream_mod.Context(*Daemon);
@@ -69,8 +76,44 @@ pub const Daemon = struct {
     }
 
     pub fn deinit(self: *Daemon) void {
+        self.stopSessionProcessesForDeinit();
+        self.waitForSessionReadersForDeinit();
         if (self.database) |*database| database.deinit();
         self.sessions.deinit();
+    }
+
+    fn stopSessionProcessesForDeinit(self: *Daemon) void {
+        self.lock();
+        defer self.unlock();
+
+        for (self.sessions.sessions.items) |*item| {
+            if (item.pty_child) |*child| {
+                if (child.pid > 0) {
+                    self.pty_driver.terminate(child) catch |err| {
+                        std.log.warn("failed to terminate PTY during daemon teardown for {s}: {t}", .{ item.id, err });
+                        child.close();
+                    };
+                    _ = self.pty_driver.wait(child) catch |err| {
+                        std.log.warn("failed to reap PTY during daemon teardown for {s}: {t}", .{ item.id, err });
+                    };
+                } else {
+                    child.close();
+                }
+                item.pty_child = null;
+            }
+            item.reader_started = false;
+            item.assertInvariants();
+        }
+    }
+
+    fn waitForSessionReadersForDeinit(self: *Daemon) void {
+        var spins: usize = 0;
+        while (self.active_session_readers.load(.acquire) != 0) : (spins += 1) {
+            if (spins != 0 and spins % 400 == 0) {
+                std.log.warn("daemon teardown still waiting for {d} session readers", .{self.active_session_readers.load(.acquire)});
+            }
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
     }
 
     pub fn prepareStorage(self: *Daemon) !void {
@@ -129,6 +172,50 @@ pub const Daemon = struct {
         return control.handleConfigurePersistenceLocked(self, allocator, request);
     }
 
+    pub fn handleWorkspaceListLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleListLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceAddLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleAddLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceRemoveLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleRemoveLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceRefreshLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleRefreshLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceReorderLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleReorderLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeListLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleListLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeCreateLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleCreateLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeRemoveLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleRemoveLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeAdoptLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleAdoptLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeRefreshLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleRefreshLocked(self, allocator, request);
+    }
+
+    pub fn handleWorktreeReorderLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleReorderLocked(self, allocator, request);
+    }
+
     pub fn restoreSessionFromDatabaseLocked(
         self: *Daemon,
         session_id: []const u8,
@@ -141,13 +228,15 @@ pub const Daemon = struct {
         self: *Daemon,
         session_id: []const u8,
         terminal_id: []const u8,
+        workspace_id: ?[]const u8,
+        worktree_id: ?[]const u8,
         cwd: ?[]const u8,
         cols: u16,
         rows: u16,
         argv_json: []const u8,
         agent_status: []const u8,
     ) !?*session.TerminalSession {
-        return persistence.restoreSessionWithArgvJsonLocked(self, session_id, terminal_id, cwd, cols, rows, argv_json, agent_status);
+        return persistence.restoreSessionWithArgvJsonLocked(self, session_id, terminal_id, workspace_id, worktree_id, cwd, cols, rows, argv_json, agent_status);
     }
 
     pub fn ensureSessionPersistence(self: *Daemon, item: *session.TerminalSession) !void {
@@ -355,10 +444,53 @@ pub const Daemon = struct {
         self.mutex.unlock();
     }
 
+    pub fn reserveControlConnection(self: *Daemon) bool {
+        while (true) {
+            const active = self.active_control_connections.load(.monotonic);
+            std.debug.assert(active <= limits.control_connections_max);
+            if (active >= limits.control_connections_max) return false;
+            if (self.active_control_connections.cmpxchgWeak(active, active + 1, .acquire, .monotonic) == null) {
+                std.debug.assert(self.active_control_connections.load(.monotonic) <= limits.control_connections_max);
+                return true;
+            }
+        }
+    }
+
+    pub fn releaseControlConnection(self: *Daemon) void {
+        const previous = self.active_control_connections.fetchSub(1, .release);
+        std.debug.assert(previous > 0);
+        std.debug.assert(previous <= limits.control_connections_max);
+    }
+
     pub fn writePidFile(self: *Daemon) !void {
         return server.writePidFile(self);
     }
 };
+
+test "daemon control connection reservations enforce configured cap" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    var reserved: usize = 0;
+    while (reserved < limits.control_connections_max) : (reserved += 1) {
+        try std.testing.expect(daemon.reserveControlConnection());
+    }
+
+    try std.testing.expect(!daemon.reserveControlConnection());
+    try std.testing.expectEqual(limits.control_connections_max, daemon.active_control_connections.load(.monotonic));
+
+    while (reserved > 0) {
+        reserved -= 1;
+        daemon.releaseControlConnection();
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), daemon.active_control_connections.load(.monotonic));
+    try std.testing.expect(daemon.reserveControlConnection());
+    daemon.releaseControlConnection();
+}
 
 test "daemon control RPC creates and updates sessions" {
     var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
@@ -368,7 +500,7 @@ test "daemon control RPC creates and updates sessions" {
     defer daemon.deinit();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"s1","terminal_id":"t1","cols":80,"rows":24}
+        \\{"id":"1","method":"create","session_id":"s1","terminal_id":"t1","workspace_id":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(created);
 
@@ -384,7 +516,7 @@ test "daemon control RPC creates and updates sessions" {
     try std.testing.expect(std.mem.indexOf(u8, resized, "\"cols\":120") != null);
 
     const recreated = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"2b","method":"create","session_id":"s1","terminal_id":"t1b","cols":90,"rows":25,"cwd":"/tmp"}
+        \\{"id":"2b","method":"create","session_id":"s1","terminal_id":"t1b","workspace_id":"workspace-1","cols":90,"rows":25,"cwd":"/tmp"}
     );
     defer std.testing.allocator.free(recreated);
 
@@ -393,11 +525,28 @@ test "daemon control RPC creates and updates sessions" {
     try std.testing.expectEqual(@as(u16, 90), daemon.sessions.find("s1").?.cols);
 
     const protocol_created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"3","type":"create","sessionId":"s2","terminalId":"t2","cols":80,"rows":24}
+        \\{"id":"3","type":"create","sessionId":"s2","terminalId":"t2","workspaceId":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(protocol_created);
 
     try std.testing.expect(daemon.sessions.find("s2") != null);
+}
+
+test "daemon control RPC accepts legacy session creation without workspace" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"1","method":"create","session_id":"s1","terminal_id":"t1","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(response);
+
+    const item = daemon.sessions.find("s1").?;
+    try std.testing.expect(item.workspace_id == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":true") != null);
 }
 
 test "daemon control RPC reports missing sessions" {
@@ -457,7 +606,7 @@ test "daemon persistence privacy toggle avoids session log creation" {
     try std.testing.expect(std.mem.indexOf(u8, configured, "\"persistence_enabled\":false") != null);
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"private-session","terminal_id":"private-terminal","cols":80,"rows":24}
+        \\{"id":"1","method":"create","session_id":"private-session","terminal_id":"private-terminal","workspace_id":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(created);
 
@@ -475,7 +624,7 @@ test "daemon drops failed stream subscribers without blocking pending output" {
     defer daemon.deinit();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"stream-session","terminal_id":"stream-terminal","cols":80,"rows":24}
+        \\{"id":"1","method":"create","session_id":"stream-session","terminal_id":"stream-terminal","workspace_id":"workspace-1","cols":80,"rows":24}
     );
     defer std.testing.allocator.free(created);
 
@@ -516,9 +665,32 @@ test "daemon falls back to saved command when agent resume metadata is corrupt" 
     try daemon.prepareStorage();
 
     if (daemon.database) |*database| {
+        try database.insertWorkspace(.{
+            .id = "workspace-resume",
+            .name = "resume",
+            .root_path = home,
+            .git_common_dir = null,
+            .workspace_slug = "resume",
+            .default_branch = null,
+            .order_index = 0,
+        });
+        try database.insertWorktree(.{
+            .id = "worktree-resume",
+            .workspace_id = "workspace-resume",
+            .title = "Resume worktree",
+            .folder_name = "resume-worktree-a13f",
+            .path = home,
+            .branch = "resume-worktree-a13f",
+            .base_branch = "main",
+            .target_branch = "main",
+            .state = "active",
+            .order_index = 0,
+        });
         try database.recordTerminalSession(.{
             .id = "resume-session",
             .terminal_id = "resume-terminal",
+            .workspace_id = "workspace-resume",
+            .worktree_id = "worktree-resume",
             .argv_json = "[\"/bin/sh\",\"-c\",\"sleep 2\"]",
             .status = "exited",
             .cols = 80,
@@ -543,10 +715,58 @@ test "daemon falls back to saved command when agent resume metadata is corrupt" 
 
     try std.testing.expect(std.mem.indexOf(u8, attached, "\"ok\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, attached, "\"attach_kind\":\"command-resume\"") != null);
-    try std.testing.expect(daemon.sessions.find("resume-session") != null);
+    const restored = daemon.sessions.find("resume-session").?;
+    try std.testing.expectEqualStrings("workspace-resume", restored.workspace_id.?);
+    try std.testing.expectEqualStrings("worktree-resume", restored.worktree_id.?);
 
     const killed = try daemon.handleControlPayload(std.testing.allocator,
         \\{"id":"kill","type":"kill","sessionId":"resume-session"}
+    );
+    defer std.testing.allocator.free(killed);
+    try std.testing.expect(std.mem.indexOf(u8, killed, "\"ok\":true") != null);
+}
+
+test "daemon restores legacy persisted sessions without workspace" {
+    if (!fileExists("/bin/sh")) return;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/home", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+
+    var config = try Config.fromHome(std.testing.allocator, home);
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+    try daemon.prepareStorage();
+
+    if (daemon.database) |*database| {
+        try database.recordTerminalSession(.{
+            .id = "legacy-session",
+            .terminal_id = "legacy-terminal",
+            .argv_json = "[\"/bin/sh\",\"-c\",\"sleep 2\"]",
+            .status = "exited",
+            .cols = 80,
+            .rows = 24,
+            .event_log_path = "/tmp/tao-legacy-session/events.taoev",
+            .last_seq = 0,
+        });
+    } else unreachable;
+
+    const attached = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"attach","type":"attach","sessionId":"legacy-session","terminalId":"legacy-terminal","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(attached);
+
+    try std.testing.expect(std.mem.indexOf(u8, attached, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, attached, "\"attach_kind\":\"command-resume\"") != null);
+    const restored = daemon.sessions.find("legacy-session").?;
+    try std.testing.expect(restored.workspace_id == null);
+
+    const killed = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"kill","type":"kill","sessionId":"legacy-session"}
     );
     defer std.testing.allocator.free(killed);
     try std.testing.expect(std.mem.indexOf(u8, killed, "\"ok\":true") != null);
@@ -569,7 +789,7 @@ test "daemon detach checkpoints current-screen snapshot" {
     try daemon.prepareStorage();
 
     const created = try daemon.handleControlPayload(std.testing.allocator,
-        \\{"id":"1","method":"create","session_id":"snapshot-session","terminal_id":"snapshot-terminal","cols":24,"rows":4}
+        \\{"id":"1","method":"create","session_id":"snapshot-session","terminal_id":"snapshot-terminal","workspace_id":"workspace-1","cols":24,"rows":4}
     );
     defer std.testing.allocator.free(created);
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const cleanup = @import("../cleanup.zig");
 const event_log = @import("../event_log.zig");
+const pty = @import("../pty.zig");
 const rpc = @import("../rpc.zig");
 const session = @import("../session.zig");
 
@@ -27,16 +28,19 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     defer if (generated_session_id) |value| allocator.free(value);
 
     const terminal_id = request.requestTerminalId() orelse return missingField(allocator, request, "terminal_id");
+    const workspace_id = request.requestWorkspaceId();
     const cols = request.cols orelse return missingField(allocator, request, "cols");
     const rows = request.rows orelse return missingField(allocator, request, "rows");
 
     const created = if (self.sessions.find(session_id)) |existing| blk: {
         existing.transitionTo(.live);
-        try existing.updateCreateMetadata(self.allocator, terminal_id, request.cwd, cols, rows);
+        try existing.updateCreateMetadata(self.allocator, terminal_id, workspace_id, request.requestWorktreeId(), request.cwd, cols, rows);
         break :blk existing;
     } else try self.sessions.create(.{
         .session_id = session_id,
         .terminal_id = terminal_id,
+        .workspace_id = workspace_id,
+        .worktree_id = request.requestWorktreeId(),
         .cols = cols,
         .rows = rows,
         .cwd = request.cwd,
@@ -45,6 +49,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     try self.ensureSessionPersistence(created);
     try self.ensureSessionProcess(created, request.argv orelse &.{});
+    errdefer if (!created.reader_started) terminateUnstartedPtyChildLocked(self, created);
     if (created.event_log_path) |path| {
         _ = event_log.appendResize(self.allocator, path, &created.last_seq, cols, rows) catch |err| {
             std.log.warn("failed to append create resize frame for {s}: {t}", .{ created.id, err });
@@ -85,6 +90,34 @@ pub fn handleAttachLocked(self: anytype, allocator: std.mem.Allocator, request: 
             .error_message = "session is not live",
         });
     }
+    const terminal_id = request.requestTerminalId() orelse attached.terminal_id;
+    const workspace_id = request.requestWorkspaceId() orelse attached.workspace_id;
+    const workspace_changed = !optionalTextEql(workspace_id, attached.workspace_id);
+    const worktree_id = if (request.requestWorktreeId()) |requested_worktree_id| blk: {
+        if (workspace_id) |selected_workspace_id| {
+            if (self.database) |*database| {
+                var row = (try database.findWorktreeById(self.allocator, requested_worktree_id)) orelse return rpc.responseJsonAlloc(allocator, .{
+                    .id = request.requestId(),
+                    .ok = false,
+                    .error_code = "invalid-worktree",
+                    .error_message = "worktree not found",
+                });
+                defer row.deinit(self.allocator);
+                if (!std.mem.eql(u8, row.workspace_id, selected_workspace_id)) {
+                    return rpc.responseJsonAlloc(allocator, .{
+                        .id = request.requestId(),
+                        .ok = false,
+                        .error_code = "invalid-worktree",
+                        .error_message = "worktree does not belong to workspace",
+                    });
+                }
+            }
+        }
+        break :blk requested_worktree_id;
+    } else if (workspace_changed) null else attached.worktree_id;
+    const cols = request.cols orelse attached.cols;
+    const rows = request.rows orelse attached.rows;
+    try attached.updateCreateMetadata(self.allocator, terminal_id, workspace_id, worktree_id, request.cwd orelse attached.cwd, cols, rows);
     self.recordTerminalSessionLocked(attached, null);
     const metadata: SessionResponseMetadata = if (restored_result) |result| .{
         .attach_kind = result.attach_kind,
@@ -128,14 +161,17 @@ pub fn handleKillLocked(self: anytype, allocator: std.mem.Allocator, request: rp
         self.pty_driver.terminate(child) catch |err| {
             std.log.warn("failed to terminate PTY for {s}: {t}", .{ item.id, err });
         };
-        child.close();
+        pty.reapInBackground(child) catch |err| {
+            std.log.warn("failed to start PTY reaper for killed session {s}: {t}", .{ item.id, err });
+            reapPtyChildUnlocked(self, item, child, "killed");
+        };
+        item.pty_child = null;
     }
     if (item.event_log_path) |path| {
         _ = event_log.appendExit(self.allocator, path, &item.last_seq, 0, 15) catch |err| {
             std.log.warn("failed to append kill exit frame for {s}: {t}", .{ item.id, err });
         };
     }
-    item.pty_child = null;
     item.reader_started = false;
     try self.broadcastExitFrameLocked(item, item.last_seq, 0, 15);
     if (!self.sessions.kill(session_id)) return notFound(allocator, request);
@@ -152,6 +188,43 @@ pub fn handleKillLocked(self: anytype, allocator: std.mem.Allocator, request: rp
     self.lock();
 
     return response;
+}
+
+fn terminateUnstartedPtyChildLocked(self: anytype, item: *session.TerminalSession) void {
+    if (item.pty_child) |*child| {
+        self.pty_driver.terminate(child) catch |err| {
+            std.log.warn("failed to terminate unstarted PTY for {s}: {t}", .{ item.id, err });
+        };
+        pty.reapInBackground(child) catch |err| {
+            std.log.warn("failed to start PTY reaper for unstarted session {s}: {t}", .{ item.id, err });
+            reapPtyChildUnlocked(self, item, child, "unstarted");
+        };
+        item.pty_child = null;
+    }
+    item.reader_started = false;
+}
+
+fn reapPtyChildUnlocked(self: anytype, item: *session.TerminalSession, child: *pty.Child, reason: []const u8) void {
+    var detached_child = child.*;
+    child.pid = 0;
+    child.close();
+    item.pty_child = null;
+
+    self.unlock();
+    defer self.lock();
+
+    _ = self.pty_driver.wait(&detached_child) catch |wait_err| {
+        std.log.warn("failed to synchronously reap {s} PTY for {s}: {t}", .{ reason, item.id, wait_err });
+    };
+    detached_child.close();
+}
+
+fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |left_value| {
+        const right_value = right orelse return false;
+        return std.mem.eql(u8, left_value, right_value);
+    }
+    return right == null;
 }
 
 pub fn handleClearHistoryLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {

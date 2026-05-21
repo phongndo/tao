@@ -18,14 +18,20 @@ import type {
 import {
   WorkspaceError,
   WorkspacePickDirectoryResponseSchema,
+  WorkspaceRecordSchema,
   decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
   workspaceErrorFromUnknown,
   type WorkspaceGitBranchResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
+  type WorkspaceIpcResponse,
+  type WorkspaceListResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
+  type WorkspaceRecord,
+  type WorkspaceRecordResponse,
+  type WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
@@ -39,6 +45,7 @@ type AgentStatusCallback = (status: AgentStatus) => void
 type PtyErrorCallback = (error: string) => void
 type PtyExitCallback = (info: PtyExitInfo) => void
 type AppCommandCallback = (command: AppCommand) => void
+type WorkspaceChangedCallback = (workspace: WorkspaceRecord) => void
 type WorkspaceIpcProgram<T> = (
   workspaceIpc: typeof PreloadWorkspaceIpc.Service,
 ) => Effect.Effect<T, WorkspaceError>
@@ -518,6 +525,10 @@ const electronAPI = {
     if (!input || typeof input.terminalId !== 'string' || input.terminalId.length === 0) {
       return Promise.reject(new Error('terminalId is required'))
     }
+    const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : ''
+    if (workspaceId.length === 0) {
+      return Promise.reject(new Error('workspaceId is required'))
+    }
     if (!isValidTerminalSize(input.cols, input.rows)) {
       return Promise.reject(new Error('Session size must use positive integer cols and rows'))
     }
@@ -525,10 +536,13 @@ const electronAPI = {
     const sessionId = createSessionId()
     const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
+    const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
     queuePtyMessage({
       type: 'spawn',
       sessionId,
       terminalId: input.terminalId,
+      workspaceId,
+      ...(worktreeId.length > 0 ? { worktreeId } : {}),
       cols: input.cols,
       rows: input.rows,
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
@@ -554,10 +568,17 @@ const electronAPI = {
     const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
     const terminalId = typeof input.terminalId === 'string' ? input.terminalId.trim() : ''
+    const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : ''
+    if (workspaceId.length === 0) {
+      return Promise.reject(new Error('workspaceId is required'))
+    }
+    const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
     queuePtyMessage({
       type: 'attach',
       sessionId,
       ...(terminalId.length > 0 ? { terminalId } : {}),
+      workspaceId,
+      ...(worktreeId.length > 0 ? { worktreeId } : {}),
       cols,
       rows,
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),
@@ -762,6 +783,21 @@ const electronAPI = {
     }
   },
 
+  onWorkspaceChanged(callback: WorkspaceChangedCallback): () => void {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const decoded = Schema.decodeUnknownOption(WorkspaceRecordSchema)(payload)
+      if (decoded._tag === 'Some') {
+        callback(decoded.value)
+      } else {
+        console.debug('[preload] Invalid workspace:changed payload received', payload)
+      }
+    }
+    ipcRenderer.on('workspace:changed', listener)
+    return () => {
+      ipcRenderer.removeListener('workspace:changed', listener)
+    }
+  },
+
   pickWorkspaceDirectory(): Promise<string | null> {
     return pickWorkspaceDirectory()
   },
@@ -786,6 +822,59 @@ const electronAPI = {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getPullRequestInfo(workspacePath))
   },
 
+  listWorkspaces(): Promise<WorkspaceListResponse> {
+    return invokeWorkspaceDaemon('workspace:list') as Promise<WorkspaceListResponse>
+  },
+
+  addWorkspace(input: {
+    rootPath: string
+    workspaceId?: string
+    name?: string
+    orderIndex?: number
+  }): Promise<WorkspaceRecordResponse> {
+    return invokeWorkspaceDaemon('workspace:add', input) as Promise<WorkspaceRecordResponse>
+  },
+
+  refreshWorkspace(workspaceId: string): Promise<WorkspaceRecordResponse> {
+    return invokeWorkspaceDaemon(
+      'workspace:refresh',
+      workspaceId,
+    ) as Promise<WorkspaceRecordResponse>
+  },
+
+  removeWorkspace(workspaceId: string): Promise<WorkspaceIpcResponse<void>> {
+    return invokeWorkspaceDaemon('workspace:remove', workspaceId) as Promise<
+      WorkspaceIpcResponse<void>
+    >
+  },
+
+  createWorktree(input: {
+    workspaceId: string
+    baseBranch?: string
+    targetBranch?: string
+    branch?: string
+    folderName?: string
+    startPoint?: string
+    title?: string
+  }): Promise<WorkspaceWorktreeResponse> {
+    return invokeWorkspaceDaemon('worktree:create', input) as Promise<WorkspaceWorktreeResponse>
+  },
+
+  refreshWorktree(worktreeId: string): Promise<WorkspaceWorktreeResponse> {
+    return invokeWorkspaceDaemon(
+      'worktree:refresh',
+      worktreeId,
+    ) as Promise<WorkspaceWorktreeResponse>
+  },
+
+  removeWorktree(input: {
+    worktreeId: string
+    force?: boolean
+    deleteBranch?: boolean
+  }): Promise<WorkspaceIpcResponse<void>> {
+    return invokeWorkspaceDaemon('worktree:remove', input) as Promise<WorkspaceIpcResponse<void>>
+  },
+
   readLayout(): Promise<PaneLayoutData | null> {
     return ipcRenderer.invoke('layout:read') as Promise<PaneLayoutData | null>
   },
@@ -806,6 +895,12 @@ const electronAPI = {
 function runWorkspaceIpc<T>(program: WorkspaceIpcProgram<T>): Promise<T> {
   return runPreloadEffect(PreloadWorkspaceIpc.use(program)).catch(
     (error) => workspaceIpcFailure(error, 'ipc-failed') as T,
+  )
+}
+
+function invokeWorkspaceDaemon(channel: string, input?: unknown): Promise<unknown> {
+  return (ipcRenderer.invoke(channel, input) as Promise<unknown>).catch((error) =>
+    workspaceIpcFailure(error, 'ipc-failed'),
   )
 }
 

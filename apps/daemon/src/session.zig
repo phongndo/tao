@@ -69,6 +69,8 @@ pub const Status = enum {
 pub const TerminalSession = struct {
     id: []const u8,
     terminal_id: []const u8,
+    workspace_id: ?[]const u8,
+    worktree_id: ?[]const u8,
     cwd: ?[]const u8,
     session_dir: ?[]const u8,
     event_log_path: ?[]const u8,
@@ -102,6 +104,28 @@ pub const TerminalSession = struct {
         if (self.status == .detached) assert(self.subscribers.items.len == 0);
 
         assert(self.pending_output_bytes <= max_pending_output_bytes);
+        var pending_output_bytes: usize = 0;
+        for (self.pending_output.items) |frame| {
+            assert(frame.seq > 0);
+            assert(frame.payload.len > 0);
+            pending_output_bytes += frame.payload.len;
+        }
+        assert(self.pending_output_bytes == pending_output_bytes);
+
+        const has_session_dir = self.session_dir != null;
+        assert((self.event_log_path != null) == has_session_dir);
+        assert((self.excerpt_path != null) == has_session_dir);
+        assert((self.snapshot_path != null) == has_session_dir);
+
+        if (self.pty_child) |*child| {
+            child.assertInvariants();
+            if (self.reader_started) {
+                assert(child.master_fd >= 0);
+                assert(self.status == .live or self.status == .detached);
+            }
+        } else {
+            assert(!self.reader_started);
+        }
     }
 
     pub fn deinit(self: *TerminalSession, allocator: std.mem.Allocator) void {
@@ -112,6 +136,8 @@ pub const TerminalSession = struct {
         self.subscribers.deinit(allocator);
         allocator.free(self.id);
         allocator.free(self.terminal_id);
+        if (self.workspace_id) |value| allocator.free(value);
+        if (self.worktree_id) |value| allocator.free(value);
         if (self.cwd) |cwd| allocator.free(cwd);
         if (self.session_dir) |path| allocator.free(path);
         if (self.event_log_path) |path| allocator.free(path);
@@ -171,6 +197,8 @@ pub const TerminalSession = struct {
         self: *TerminalSession,
         allocator: std.mem.Allocator,
         terminal_id: []const u8,
+        workspace_id: ?[]const u8,
+        worktree_id: ?[]const u8,
         cwd: ?[]const u8,
         cols: u16,
         rows: u16,
@@ -189,6 +217,18 @@ pub const TerminalSession = struct {
             const next_cwd = if (cwd) |value| try allocator.dupe(u8, value) else null;
             if (self.cwd) |value| allocator.free(value);
             self.cwd = next_cwd;
+        }
+
+        if (!optionalTextEql(self.workspace_id, workspace_id)) {
+            const next_workspace_id = if (workspace_id) |value| try allocator.dupe(u8, value) else null;
+            if (self.workspace_id) |value| allocator.free(value);
+            self.workspace_id = next_workspace_id;
+        }
+
+        if (!optionalTextEql(self.worktree_id, worktree_id)) {
+            const next_worktree_id = if (worktree_id) |value| try allocator.dupe(u8, value) else null;
+            if (self.worktree_id) |value| allocator.free(value);
+            self.worktree_id = next_worktree_id;
         }
 
         try self.resizeVt(allocator, cols, rows);
@@ -295,6 +335,10 @@ pub const Manager = struct {
         errdefer self.allocator.free(id);
         const terminal_id = try self.allocator.dupe(u8, input.terminal_id);
         errdefer self.allocator.free(terminal_id);
+        const workspace_id = if (input.workspace_id) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (workspace_id) |value| self.allocator.free(value);
+        const worktree_id = if (input.worktree_id) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (worktree_id) |value| self.allocator.free(value);
         const cwd = if (input.cwd) |value| try self.allocator.dupe(u8, value) else null;
         errdefer if (cwd) |value| self.allocator.free(value);
         var vt_terminal = try vt.Terminal.init(self.allocator, input.cols, input.rows);
@@ -303,6 +347,8 @@ pub const Manager = struct {
         try self.sessions.append(self.allocator, .{
             .id = id,
             .terminal_id = terminal_id,
+            .workspace_id = workspace_id,
+            .worktree_id = worktree_id,
             .cwd = cwd,
             .session_dir = null,
             .event_log_path = null,
@@ -499,7 +545,7 @@ test "terminal session create metadata can be refreshed for restart fallback" {
         .argv = &.{},
     });
 
-    try created.updateCreateMetadata(std.testing.allocator, "term-new", "/new", 100, 40);
+    try created.updateCreateMetadata(std.testing.allocator, "term-new", null, null, "/new", 100, 40);
     try std.testing.expectEqualStrings("term-new", created.terminal_id);
     try std.testing.expectEqualStrings("/new", created.cwd.?);
     try std.testing.expectEqual(@as(u16, 100), created.cols);
@@ -619,7 +665,7 @@ fn sessionCreateForAllocationFailure(allocator: std.mem.Allocator) !void {
         .argv = &.{},
     });
     try created.bufferPendingOutput(allocator, 1, "owned pending output");
-    try created.updateCreateMetadata(allocator, "term-oom-2", "/tmp/next", 24, 6);
+    try created.updateCreateMetadata(allocator, "term-oom-2", null, null, "/tmp/next", 24, 6);
     try std.testing.expect(manager.remove("session-oom"));
 }
 

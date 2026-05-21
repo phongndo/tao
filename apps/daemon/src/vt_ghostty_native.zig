@@ -90,7 +90,8 @@ pub const Terminal = struct {
             .emit = .vt,
             .trim = false,
         });
-        formatter.extra = .all;
+        formatter.extra = .styles;
+        formatter.extra.screen.cursor = true;
         try formatter.format(&body.writer);
 
         const vt_bytes = body.writer.buffered();

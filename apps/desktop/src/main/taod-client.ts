@@ -16,6 +16,12 @@ import {
   TaodStreamFrameParser,
   type TaodParsedStreamFrame,
 } from './taod-stream'
+import type {
+  GitStatus,
+  WorkspaceRecord,
+  WorkspaceWorktree,
+  WorkspaceWorktreeState,
+} from '@tao/shared/workspace'
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 500
 const DEFAULT_START_TIMEOUT_MS = 3000
@@ -45,9 +51,65 @@ export type TaodControlResponse = {
   readonly error_message?: string
 }
 
+type TaodRawControlResponse = TaodControlResponse & Record<string, unknown>
+
+type RawGitStatus = {
+  readonly changed?: unknown
+  readonly staged?: unknown
+}
+
+type RawWorktree = {
+  readonly id?: unknown
+  readonly workspace_id?: unknown
+  readonly workspaceId?: unknown
+  readonly title?: unknown
+  readonly folder_name?: unknown
+  readonly folderName?: unknown
+  readonly path?: unknown
+  readonly branch?: unknown
+  readonly base_branch?: unknown
+  readonly baseBranch?: unknown
+  readonly target_branch?: unknown
+  readonly targetBranch?: unknown
+  readonly state?: unknown
+  readonly order_index?: unknown
+  readonly orderIndex?: unknown
+  readonly last_active_tab_id?: unknown
+  readonly lastActiveTabId?: unknown
+  readonly last_error?: unknown
+  readonly lastError?: unknown
+  readonly created_by?: unknown
+  readonly createdBy?: unknown
+  readonly git_status?: unknown
+  readonly gitStatus?: unknown
+}
+
+type RawWorkspace = {
+  readonly id?: unknown
+  readonly name?: unknown
+  readonly root_path?: unknown
+  readonly rootPath?: unknown
+  readonly git_common_dir?: unknown
+  readonly gitCommonDir?: unknown
+  readonly workspace_slug?: unknown
+  readonly workspaceSlug?: unknown
+  readonly default_branch?: unknown
+  readonly defaultBranch?: unknown
+  readonly branch?: unknown
+  readonly order_index?: unknown
+  readonly orderIndex?: unknown
+  readonly last_active_tab_id?: unknown
+  readonly lastActiveTabId?: unknown
+  readonly git_status?: unknown
+  readonly gitStatus?: unknown
+  readonly worktrees?: unknown
+}
+
 export type TaodCreateSessionInput = {
   readonly sessionId: string
   readonly terminalId: string
+  readonly workspaceId: string
+  readonly worktreeId?: string
   readonly cols: number
   readonly rows: number
   readonly cwd?: string
@@ -57,6 +119,8 @@ export type TaodCreateSessionInput = {
 export type TaodAttachSessionInput = {
   readonly sessionId: string
   readonly terminalId?: string
+  readonly workspaceId?: string
+  readonly worktreeId?: string
   readonly cols?: number
   readonly rows?: number
   readonly cwd?: string
@@ -71,6 +135,29 @@ export type TaodCleanupSessionsInput = {
 export type TaodPersistenceSettingsInput = {
   readonly enabled: boolean
   readonly persistInput: boolean
+}
+
+export type TaodAddWorkspaceInput = {
+  readonly rootPath: string
+  readonly workspaceId?: string
+  readonly name?: string
+  readonly orderIndex?: number
+}
+
+export type TaodCreateWorktreeInput = {
+  readonly workspaceId: string
+  readonly baseBranch?: string
+  readonly targetBranch?: string
+  readonly branch?: string
+  readonly folderName?: string
+  readonly startPoint?: string
+  readonly title?: string
+}
+
+export type TaodRemoveWorktreeInput = {
+  readonly worktreeId: string
+  readonly force?: boolean
+  readonly deleteBranch?: boolean
 }
 
 export type TaodSessionStreamEvents = {
@@ -102,10 +189,104 @@ function responseError(response: TaodControlResponse): Error {
   return error
 }
 
-function parseControlResponse(line: Buffer): TaodControlResponse {
-  const parsed = JSON.parse(line.toString('utf8')) as TaodControlResponse
+function parseControlResponse(line: Buffer): TaodRawControlResponse {
+  const parsed = JSON.parse(line.toString('utf8')) as TaodRawControlResponse
   if (!parsed || typeof parsed.ok !== 'boolean') throw new Error('Invalid taod control response')
   return parsed
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function optionalNullableString(value: unknown): string | null | undefined {
+  return value === null ? null : optionalString(value)
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+const VALID_WORKTREE_STATES = new Set<WorkspaceWorktreeState>([
+  'creating',
+  'active',
+  'missing',
+  'removing',
+  'archived',
+  'error',
+  'untracked',
+])
+
+function isWorkspaceWorktreeState(value: string): value is WorkspaceWorktreeState {
+  return VALID_WORKTREE_STATES.has(value as WorkspaceWorktreeState)
+}
+
+function normalizeGitStatus(value: unknown): GitStatus | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as RawGitStatus
+  return {
+    changed: numberOr(raw.changed, 0),
+    staged: numberOr(raw.staged, 0),
+  }
+}
+
+function normalizeWorktree(value: unknown): WorkspaceWorktree {
+  if (!value || typeof value !== 'object') throw new Error('Invalid taod worktree')
+  const raw = value as RawWorktree
+  const id = optionalString(raw.id)
+  const workspaceId = optionalString(raw.workspace_id ?? raw.workspaceId)
+  const folderName = optionalString(raw.folder_name ?? raw.folderName)
+  const path = optionalString(raw.path)
+  const branch = optionalString(raw.branch)
+  const state = optionalString(raw.state)
+  if (!id || !workspaceId || !folderName || !path || !branch || !state) {
+    throw new Error('Invalid taod worktree')
+  }
+  if (!isWorkspaceWorktreeState(state)) {
+    throw new Error('Invalid taod worktree')
+  }
+
+  return {
+    id,
+    workspaceId,
+    title: optionalNullableString(raw.title),
+    folderName,
+    path,
+    branch,
+    baseBranch: optionalNullableString(raw.base_branch ?? raw.baseBranch),
+    targetBranch: optionalNullableString(raw.target_branch ?? raw.targetBranch),
+    state,
+    orderIndex: numberOr(raw.order_index ?? raw.orderIndex, 0),
+    lastActiveTabId: optionalNullableString(raw.last_active_tab_id ?? raw.lastActiveTabId),
+    lastError: optionalNullableString(raw.last_error ?? raw.lastError),
+    createdBy: optionalString(raw.created_by ?? raw.createdBy) ?? 'tao',
+    gitStatus: normalizeGitStatus(raw.git_status ?? raw.gitStatus) ?? null,
+  }
+}
+
+function normalizeWorkspace(value: unknown): WorkspaceRecord {
+  if (!value || typeof value !== 'object') throw new Error('Invalid taod workspace')
+  const raw = value as RawWorkspace
+  const id = optionalString(raw.id)
+  const name = optionalString(raw.name)
+  const rootPath = optionalString(raw.root_path ?? raw.rootPath)
+  const workspaceSlug = optionalString(raw.workspace_slug ?? raw.workspaceSlug)
+  if (!id || !name || !rootPath || !workspaceSlug) throw new Error('Invalid taod workspace')
+  const rawWorktrees = Array.isArray(raw.worktrees) ? raw.worktrees : []
+
+  return {
+    id,
+    name,
+    rootPath,
+    gitCommonDir: optionalNullableString(raw.git_common_dir ?? raw.gitCommonDir),
+    workspaceSlug,
+    defaultBranch: optionalNullableString(raw.default_branch ?? raw.defaultBranch),
+    branch: optionalNullableString(raw.branch),
+    orderIndex: numberOr(raw.order_index ?? raw.orderIndex, 0),
+    lastActiveTabId: optionalNullableString(raw.last_active_tab_id ?? raw.lastActiveTabId),
+    gitStatus: normalizeGitStatus(raw.git_status ?? raw.gitStatus) ?? null,
+    worktrees: rawWorktrees.map(normalizeWorktree),
+  }
 }
 
 function candidateTaodPaths(): string[] {
@@ -223,7 +404,7 @@ function connectUnixSocket(socketPath: string, timeoutMs: number): Promise<net.S
 function readNdjsonResponse(
   socket: net.Socket,
   timeoutMs: number,
-): Promise<{ response: TaodControlResponse; tail: Buffer }> {
+): Promise<{ response: TaodRawControlResponse; tail: Buffer }> {
   return new Promise((resolveResponse, rejectResponse) => {
     let buffered = Buffer.alloc(0)
     let settled = false
@@ -402,6 +583,8 @@ export class TaodClient {
       id: nextRequestId('create'),
       sessionId: input.sessionId,
       terminalId: input.terminalId,
+      workspaceId: input.workspaceId,
+      ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
       cols: input.cols,
       rows: input.rows,
       ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -423,6 +606,8 @@ export class TaodClient {
       id: nextRequestId('attach'),
       sessionId: input.sessionId,
       ...(input.terminalId ? { terminalId: input.terminalId } : {}),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
       ...(input.cols ? { cols: input.cols } : {}),
       ...(input.rows ? { rows: input.rows } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -502,6 +687,86 @@ export class TaodClient {
     })
     if (!response.ok) throw responseError(response)
     return response
+  }
+
+  async listWorkspaces(): Promise<readonly WorkspaceRecord[]> {
+    const response = await this.request({
+      type: 'workspace.list',
+      id: nextRequestId('workspace-list'),
+    })
+    if (!response.ok) throw responseError(response)
+    const workspaces = response.workspaces
+    if (!Array.isArray(workspaces)) throw new Error('Invalid workspace.list response')
+    return workspaces.map(normalizeWorkspace)
+  }
+
+  async addWorkspace(input: TaodAddWorkspaceInput): Promise<WorkspaceRecord> {
+    const response = await this.request({
+      type: 'workspace.add',
+      id: nextRequestId('workspace-add'),
+      rootPath: input.rootPath,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.name ? { name: input.name } : {}),
+      ...(typeof input.orderIndex === 'number' ? { orderIndex: input.orderIndex } : {}),
+    })
+    if (!response.ok) throw responseError(response)
+    return normalizeWorkspace(response.workspace)
+  }
+
+  async refreshWorkspace(workspaceId: string): Promise<WorkspaceRecord> {
+    const response = await this.request({
+      type: 'workspace.refresh',
+      id: nextRequestId('workspace-refresh'),
+      workspaceId,
+    })
+    if (!response.ok) throw responseError(response)
+    return normalizeWorkspace(response.workspace)
+  }
+
+  async removeWorkspace(workspaceId: string): Promise<void> {
+    const response = await this.request({
+      type: 'workspace.remove',
+      id: nextRequestId('workspace-remove'),
+      workspaceId,
+    })
+    if (!response.ok) throw responseError(response)
+  }
+
+  async createWorktree(input: TaodCreateWorktreeInput): Promise<WorkspaceWorktree> {
+    const response = await this.request({
+      type: 'worktree.create',
+      id: nextRequestId('worktree-create'),
+      workspaceId: input.workspaceId,
+      ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+      ...(input.targetBranch ? { targetBranch: input.targetBranch } : {}),
+      ...(input.branch ? { branch: input.branch } : {}),
+      ...(input.folderName ? { folderName: input.folderName } : {}),
+      ...(input.startPoint ? { startPoint: input.startPoint } : {}),
+      ...(input.title ? { title: input.title } : {}),
+    })
+    if (!response.ok) throw responseError(response)
+    return normalizeWorktree(response.worktree)
+  }
+
+  async refreshWorktree(worktreeId: string): Promise<WorkspaceWorktree> {
+    const response = await this.request({
+      type: 'worktree.refresh',
+      id: nextRequestId('worktree-refresh'),
+      worktreeId,
+    })
+    if (!response.ok) throw responseError(response)
+    return normalizeWorktree(response.worktree)
+  }
+
+  async removeWorktree(input: TaodRemoveWorktreeInput): Promise<void> {
+    const response = await this.request({
+      type: 'worktree.remove',
+      id: nextRequestId('worktree-remove'),
+      worktreeId: input.worktreeId,
+      ...(input.force ? { force: input.force } : {}),
+      ...(input.deleteBranch ? { deleteBranch: input.deleteBranch } : {}),
+    })
+    if (!response.ok) throw responseError(response)
   }
 
   private async canConnect(): Promise<boolean> {
@@ -598,7 +863,7 @@ export class TaodClient {
   private async request(
     request: TaodRequest,
     options: { ensure?: boolean } = {},
-  ): Promise<TaodControlResponse> {
+  ): Promise<TaodRawControlResponse> {
     if (options.ensure !== false) await this.ensureRunning()
 
     const socket = await connectUnixSocket(this.socketPath, this.connectTimeoutMs)
