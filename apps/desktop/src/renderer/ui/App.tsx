@@ -1037,7 +1037,6 @@ export function App() {
   const sidebarExpanded = useTaoStore((state) => state.sidebarExpanded)
   const sidebarWidth = useTaoStore((state) => state.sidebarWidth)
   const addWorkspace = useTaoStore((state) => state.addWorkspace)
-  const ensureWorkspaceTab = useTaoStore((state) => state.ensureWorkspaceTab)
   const selectWorkspaceByIndex = useTaoStore((state) => state.selectWorkspaceByIndex)
   const newTab = useTaoStore((state) => state.newTab)
   const closeTab = useTaoStore((state) => state.closeTab)
@@ -1264,12 +1263,6 @@ export function App() {
       if (timer !== null) clearTimeout(timer)
     }
   }, [layoutLoaded])
-
-  useEffect(() => {
-    if (!layoutLoaded) return
-    if (!activeWorkspaceKey) return
-    ensureWorkspaceTab(activeWorkspaceKey)
-  }, [activeWorkspaceKey, ensureWorkspaceTab, layoutLoaded])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -1503,50 +1496,51 @@ export function App() {
             archivedTabIds={archivedTabIds}
           />
           <div className="pane-grid">
-            {mountedTabs.length > 0 ? (
-              mountedTabs.map((tab) => {
-                const isTabActive = tab.id === activeTab?.id
-                const metadata = contextMetadataById.get(tab.workspaceId) ?? {}
-                return (
-                  <div
-                    className={
-                      isTabActive ? 'pane-grid-layer pane-grid-layer-active' : 'pane-grid-layer'
-                    }
-                    key={tab.id}
-                    aria-hidden={!isTabActive}
-                  >
-                    <PaneGrid
-                      tab={tab}
-                      terminalCwd={metadata.cwd}
-                      terminalWorkspaceId={metadata.workspaceId}
-                      terminalWorktreeId={metadata.worktreeId}
-                      panesById={panesById}
-                      activePaneId={isTabActive ? activePaneId : null}
-                      terminalFocusTokens={terminalFocusTokens}
-                      terminalSearchTokens={terminalSearchTokens}
-                      onLayoutRelease={setTabLayout}
-                      onSelectPane={selectPane}
-                      onPaneTitle={setPaneTitle}
-                      onRestartPaneSession={restartPaneSession}
-                      onPaneArchiveState={handlePaneArchiveState}
-                    />
-                  </div>
-                )
-              })
-            ) : (
-              <div className="pane-grid-empty">
-                {canCreateTerminal ? (
-                  <button
-                    type="button"
-                    className="empty-new-tab-button"
-                    aria-label="New tab"
-                    onClick={() => newTab(activeWorkspaceKey ?? undefined)}
-                  >
-                    <FiPlus size={15} />
-                  </button>
-                ) : null}
+            {mountedTabs.map((tab) => {
+              const isTabActive = tab.id === activeTab?.id
+              const metadata = contextMetadataById.get(tab.workspaceId) ?? {}
+              return (
+                <div
+                  className={
+                    isTabActive ? 'pane-grid-layer pane-grid-layer-active' : 'pane-grid-layer'
+                  }
+                  key={tab.id}
+                  aria-hidden={!isTabActive}
+                >
+                  <PaneGrid
+                    tab={tab}
+                    terminalCwd={metadata.cwd}
+                    terminalWorkspaceId={metadata.workspaceId}
+                    terminalWorktreeId={metadata.worktreeId}
+                    panesById={panesById}
+                    activePaneId={isTabActive ? activePaneId : null}
+                    terminalFocusTokens={terminalFocusTokens}
+                    terminalSearchTokens={terminalSearchTokens}
+                    onLayoutRelease={setTabLayout}
+                    onSelectPane={selectPane}
+                    onPaneTitle={setPaneTitle}
+                    onRestartPaneSession={restartPaneSession}
+                    onPaneArchiveState={handlePaneArchiveState}
+                  />
+                </div>
+              )
+            })}
+            {!activeTab ? (
+              <div className="pane-grid-layer pane-grid-layer-active">
+                <div className="pane-grid-empty">
+                  {canCreateTerminal ? (
+                    <button
+                      type="button"
+                      className="empty-new-tab-button"
+                      aria-label="New tab"
+                      onClick={() => newTab(activeWorkspaceKey ?? undefined)}
+                    >
+                      <FiPlus size={15} />
+                    </button>
+                  ) : null}
+                </div>
               </div>
-            )}
+            ) : null}
           </div>
         </main>
       </section>
