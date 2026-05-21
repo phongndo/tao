@@ -224,8 +224,14 @@ export class GitStateWatcher {
     try {
       const workspace = await this.client().refreshWorkspace(entry.record.id)
       const nextFingerprint = workspaceFingerprint(workspace)
+      const gitCommonDir = resolveGitCommonDir(workspace)
+      if (!gitCommonDir) {
+        this.untrackWorkspace(entry.record.id)
+        if (nextFingerprint !== previousFingerprint) this.notifyWorkspaceChanged(workspace)
+        return
+      }
       entry.record = workspace
-      entry.gitCommonDir = resolveGitCommonDir(workspace) ?? entry.gitCommonDir
+      entry.gitCommonDir = gitCommonDir
       entry.fingerprint = nextFingerprint
       this.installWatchers(entry)
       if (nextFingerprint !== previousFingerprint) this.notifyWorkspaceChanged(workspace)

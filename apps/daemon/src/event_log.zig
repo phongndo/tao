@@ -658,7 +658,7 @@ const ReplayOutputRecorder = struct {
         });
         self.total_bytes += payload.len;
 
-        while (self.total_bytes > self.max_bytes and self.frames.items.len > 1) {
+        while (self.total_bytes > self.max_bytes and self.frames.items.len > 0) {
             var dropped = self.frames.orderedRemove(0);
             self.total_bytes -= dropped.payload.len;
             dropped.deinit(self.allocator);
@@ -948,6 +948,32 @@ test "event log recovery streams valid files beyond a whole-file payload cap" {
     const repaired_file = (try openReadFile(std.testing.allocator, files.event_log_path)).?;
     defer _ = std.c.close(repaired_file.fd);
     try std.testing.expectEqual(expected_size, repaired_file.size);
+}
+
+test "event log replay output enforces max bytes for oversized newest frame" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const sessions_dir = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/sessions",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(sessions_dir);
+
+    var files = try resetPersistentSession(std.testing.allocator, sessions_dir, "session:replay/cap");
+    defer files.deinit(std.testing.allocator);
+
+    var last_seq = files.last_seq;
+    _ = try appendOutput(std.testing.allocator, files.event_log_path, null, &last_seq, "oversized");
+
+    const zero_frames = try readReplayOutputFrames(std.testing.allocator, files.event_log_path, 0);
+    defer deinitOwnedFrames(std.testing.allocator, zero_frames);
+    try std.testing.expectEqual(@as(usize, 0), zero_frames.len);
+
+    const capped_frames = try readReplayOutputFrames(std.testing.allocator, files.event_log_path, 4);
+    defer deinitOwnedFrames(std.testing.allocator, capped_frames);
+    try std.testing.expectEqual(@as(usize, 0), capped_frames.len);
 }
 
 test "event log parser deterministic malformed-input sweep" {

@@ -260,7 +260,11 @@ pub fn Context(comptime Daemon: type) type {
             if (item.pty_child) |*child| {
                 pty.reapInBackground(child) catch |err| {
                     std.log.warn("failed to start PTY reaper for {s} after {s}: {t}", .{ item.id, reason, err });
-                    return;
+                    var driver = pty.Driver.init(std.heap.smp_allocator);
+                    _ = driver.wait(child) catch |wait_err| {
+                        std.log.warn("failed to synchronously reap PTY for {s} after {s}: {t}", .{ item.id, reason, wait_err });
+                    };
+                    child.close();
                 };
                 item.pty_child = null;
             }

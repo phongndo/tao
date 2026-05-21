@@ -128,9 +128,12 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
         .state = "creating",
         .order_index = order_index,
     });
+    var inserted_row = (try database.findWorktreeByPath(self.allocator, worktree_path)) orelse return errorResponse(allocator, request, .invalid_worktree, "created worktree not found");
+    defer inserted_row.deinit(self.allocator);
+    const effective_worktree_id = inserted_row.id;
 
     std.fs.cwd().makePath(parent_path) catch |err| {
-        try database.updateWorktreeState(worktree_id, "error", @errorName(err));
+        try database.updateWorktreeState(effective_worktree_id, "error", @errorName(err));
         return errorResponse(allocator, request, .invalid_path, "failed to create worktree parent directory");
     };
 
@@ -139,11 +142,11 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
 
     git.worktreeAddNewBranch(self.allocator, workspace_row.root_path, branch_name, worktree_path, start_point) catch |err| {
         safeDeletePartialWorktree(self.allocator, self.config.root_dir, worktree_path);
-        try database.updateWorktreeState(worktree_id, "error", @errorName(err));
+        try database.updateWorktreeState(effective_worktree_id, "error", @errorName(err));
         return errorResponse(allocator, request, .git_failed, "git worktree add failed");
     };
 
-    try database.updateWorktreeState(worktree_id, "active", null);
+    try database.updateWorktreeState(effective_worktree_id, "active", null);
     var row = (try database.findWorktreeByPath(self.allocator, worktree_path)) orelse return errorResponse(allocator, request, .invalid_worktree, "created worktree not found");
     defer row.deinit(self.allocator);
     const response = try workspace.worktreeResponseFromRowAlloc(self.allocator, row, null);
@@ -347,7 +350,11 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
             };
             try database.updateWorktreeGit(row.id, branch, "active");
         } else {
-            try database.updateWorktreeState(row.id, "missing", null);
+            if (!pathExists(row.path)) {
+                try database.archiveWorktree(row.id);
+            } else {
+                try database.updateWorktreeState(row.id, "missing", null);
+            }
         }
     }
 }

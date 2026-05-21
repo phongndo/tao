@@ -111,7 +111,10 @@ pub const Daemon = struct {
         while (self.active_session_readers.load(.acquire) != 0 and spins < 400) : (spins += 1) {
             std.Thread.sleep(10 * std.time.ns_per_ms);
         }
-        std.debug.assert(self.active_session_readers.load(.acquire) == 0);
+        const remaining = self.active_session_readers.load(.acquire);
+        if (remaining != 0) {
+            std.log.warn("daemon teardown timed out waiting for {d} session readers", .{remaining});
+        }
     }
 
     pub fn prepareStorage(self: *Daemon) !void {

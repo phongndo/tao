@@ -536,12 +536,13 @@ const electronAPI = {
     const sessionId = createSessionId()
     const state = beginReadyState(sessionId)
     const trimmedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : ''
+    const worktreeId = typeof input.worktreeId === 'string' ? input.worktreeId.trim() : ''
     queuePtyMessage({
       type: 'spawn',
       sessionId,
       terminalId: input.terminalId,
       workspaceId,
-      ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
+      ...(worktreeId.length > 0 ? { worktreeId } : {}),
       cols: input.cols,
       rows: input.rows,
       ...(trimmedCwd.length > 0 ? { cwd: trimmedCwd } : {}),

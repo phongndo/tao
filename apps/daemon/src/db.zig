@@ -301,6 +301,13 @@ const insert_workspace_sql =
 const update_workspace_sql =
     \\UPDATE workspaces
     \\SET name = ?, git_common_dir = ?, workspace_slug = ?, default_branch = ?,
+    \\    order_index = ?, last_active_tab_id = ?
+    \\WHERE id = ?;
+;
+
+const reactivate_workspace_sql =
+    \\UPDATE workspaces
+    \\SET name = ?, git_common_dir = ?, workspace_slug = ?, default_branch = ?,
     \\    order_index = ?, last_active_tab_id = ?, archived_at = NULL
     \\WHERE id = ?;
 ;
@@ -945,6 +952,20 @@ pub const Database = struct {
         });
     }
 
+    pub fn reactivateWorkspace(self: *Database, record: WorkspaceRecord) !void {
+        var stmt = try self.handle.prepareDynamic(reactivate_workspace_sql);
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{
+            record.name,
+            record.git_common_dir,
+            record.workspace_slug,
+            record.default_branch,
+            record.order_index,
+            record.last_active_tab_id,
+            record.id,
+        });
+    }
+
     pub fn archiveWorkspace(self: *Database, workspace_id: []const u8) !void {
         var stmt = try self.handle.prepareDynamic(archive_workspace_sql);
         defer stmt.deinit();
@@ -1386,6 +1407,33 @@ test "sqlite database records workspaces and worktrees" {
     try std.testing.expectEqualStrings("untracked", recreated.state);
 
     try database.archiveWorkspace("workspace-1");
+    var archived_workspace = (try database.findWorkspaceById(std.testing.allocator, "workspace-1")).?;
+    defer archived_workspace.deinit(std.testing.allocator);
+    try std.testing.expect(archived_workspace.archived_at != null);
+    try database.updateWorkspace(.{
+        .id = "workspace-1",
+        .name = "tao",
+        .root_path = "/repo/tao",
+        .git_common_dir = "/repo/tao/.git",
+        .workspace_slug = "tao",
+        .default_branch = "main",
+        .order_index = 0,
+    });
+    var still_archived_workspace = (try database.findWorkspaceById(std.testing.allocator, "workspace-1")).?;
+    defer still_archived_workspace.deinit(std.testing.allocator);
+    try std.testing.expect(still_archived_workspace.archived_at != null);
+    try database.reactivateWorkspace(.{
+        .id = "workspace-1",
+        .name = "tao",
+        .root_path = "/repo/tao",
+        .git_common_dir = "/repo/tao/.git",
+        .workspace_slug = "tao",
+        .default_branch = "main",
+        .order_index = 0,
+    });
+    var reactivated_workspace = (try database.findWorkspaceById(std.testing.allocator, "workspace-1")).?;
+    defer reactivated_workspace.deinit(std.testing.allocator);
+    try std.testing.expect(reactivated_workspace.archived_at == null);
     try database.archiveWorktreesForWorkspace("workspace-1");
     const archived_worktrees = try database.listWorktreesForWorkspace(std.testing.allocator, "workspace-1");
     defer std.testing.allocator.free(archived_worktrees);

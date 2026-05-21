@@ -164,7 +164,7 @@ pub fn handleAddLocked(self: anytype, allocator: std.mem.Allocator, request: rpc
     }
 
     if (existing) |_| {
-        try database.updateWorkspace(.{
+        try database.reactivateWorkspace(.{
             .id = workspace_id,
             .name = name,
             .root_path = root_path,
@@ -272,6 +272,8 @@ pub fn handleRefreshLocked(self: anytype, allocator: std.mem.Allocator, request:
 pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
     const database = if (self.database) |*database| database else return errorJsonAlloc(allocator, request, ErrorCode.state_conflict.text(), "database is unavailable");
     const workspace_id = request.requestWorkspaceId() orelse return errorJsonAlloc(allocator, request, ErrorCode.invalid_workspace.text(), "workspace_id is required");
+    var row = (try database.findWorkspaceById(self.allocator, workspace_id)) orelse return errorJsonAlloc(allocator, request, ErrorCode.invalid_workspace.text(), "workspace not found");
+    row.deinit(self.allocator);
     try database.archiveWorkspace(workspace_id);
     try database.archiveWorktreesForWorkspace(workspace_id);
     return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
@@ -281,6 +283,8 @@ pub fn handleReorderLocked(self: anytype, allocator: std.mem.Allocator, request:
     const database = if (self.database) |*database| database else return errorJsonAlloc(allocator, request, ErrorCode.state_conflict.text(), "database is unavailable");
     const workspace_id = request.requestWorkspaceId() orelse return errorJsonAlloc(allocator, request, ErrorCode.invalid_workspace.text(), "workspace_id is required");
     const order_index = request.requestOrderIndex() orelse return errorJsonAlloc(allocator, request, ErrorCode.state_conflict.text(), "order_index is required");
+    var row = (try database.findWorkspaceById(self.allocator, workspace_id)) orelse return errorJsonAlloc(allocator, request, ErrorCode.invalid_workspace.text(), "workspace not found");
+    row.deinit(self.allocator);
     try database.reorderWorkspace(workspace_id, order_index);
     return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
 }

@@ -164,12 +164,19 @@ pub fn isSafeBranchName(value: []const u8) bool {
     if (std.mem.indexOf(u8, value, "//") != null) return false;
     if (std.mem.startsWith(u8, value, "-") or std.mem.endsWith(u8, value, ".lock")) return false;
 
-    for (value) |ch| {
+    var component_start: usize = 0;
+    for (value, 0..) |ch, index| {
         const ok = (ch >= 'a' and ch <= 'z') or
             (ch >= 'A' and ch <= 'Z') or
             (ch >= '0' and ch <= '9') or
             ch == '/' or ch == '-' or ch == '_' or ch == '.';
         if (!ok) return false;
+        if (index == component_start and ch == '.') return false;
+        if (ch == '/') {
+            const component = value[component_start..index];
+            if (std.mem.endsWith(u8, component, ".lock")) return false;
+            component_start = index + 1;
+        }
     }
 
     return true;
@@ -221,6 +228,9 @@ test "folder and branch validators reject unsafe names" {
     try std.testing.expect(!isSafeBranchName("../main"));
     try std.testing.expect(!isSafeBranchName("bad branch"));
     try std.testing.expect(!isSafeBranchName("topic.lock"));
+    try std.testing.expect(!isSafeBranchName(".hidden/topic"));
+    try std.testing.expect(!isSafeBranchName("foo.lock/bar"));
+    try std.testing.expect(!isSafeBranchName("topic/.dot"));
 }
 
 test "workspace slug is lowercase and path safe" {

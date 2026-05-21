@@ -92,7 +92,29 @@ pub fn handleAttachLocked(self: anytype, allocator: std.mem.Allocator, request: 
     }
     const terminal_id = request.requestTerminalId() orelse attached.terminal_id;
     const workspace_id = request.requestWorkspaceId() orelse attached.workspace_id;
-    const worktree_id = request.requestWorktreeId() orelse attached.worktree_id;
+    const workspace_changed = !optionalTextEql(workspace_id, attached.workspace_id);
+    const worktree_id = if (request.requestWorktreeId()) |requested_worktree_id| blk: {
+        if (workspace_id) |selected_workspace_id| {
+            if (self.database) |*database| {
+                var row = (try database.findWorktreeById(self.allocator, requested_worktree_id)) orelse return rpc.responseJsonAlloc(allocator, .{
+                    .id = request.requestId(),
+                    .ok = false,
+                    .error_code = "invalid-worktree",
+                    .error_message = "worktree not found",
+                });
+                defer row.deinit(self.allocator);
+                if (!std.mem.eql(u8, row.workspace_id, selected_workspace_id)) {
+                    return rpc.responseJsonAlloc(allocator, .{
+                        .id = request.requestId(),
+                        .ok = false,
+                        .error_code = "invalid-worktree",
+                        .error_message = "worktree does not belong to workspace",
+                    });
+                }
+            }
+        }
+        break :blk requested_worktree_id;
+    } else if (workspace_changed) null else attached.worktree_id;
     const cols = request.cols orelse attached.cols;
     const rows = request.rows orelse attached.rows;
     try attached.updateCreateMetadata(self.allocator, terminal_id, workspace_id, worktree_id, request.cwd orelse attached.cwd, cols, rows);
@@ -141,6 +163,10 @@ pub fn handleKillLocked(self: anytype, allocator: std.mem.Allocator, request: rp
         };
         pty.reapInBackground(child) catch |err| {
             std.log.warn("failed to start PTY reaper for killed session {s}: {t}", .{ item.id, err });
+            _ = self.pty_driver.wait(child) catch |wait_err| {
+                std.log.warn("failed to synchronously reap killed PTY for {s}: {t}", .{ item.id, wait_err });
+            };
+            child.close();
         };
     }
     if (item.event_log_path) |path| {
@@ -176,12 +202,22 @@ fn terminateUnstartedPtyChildLocked(self: anytype, item: *session.TerminalSessio
         };
         pty.reapInBackground(child) catch |err| {
             std.log.warn("failed to start PTY reaper for unstarted session {s}: {t}", .{ item.id, err });
-            item.reader_started = false;
-            return;
+            _ = self.pty_driver.wait(child) catch |wait_err| {
+                std.log.warn("failed to synchronously reap unstarted PTY for {s}: {t}", .{ item.id, wait_err });
+            };
+            child.close();
         };
         item.pty_child = null;
     }
     item.reader_started = false;
+}
+
+fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |left_value| {
+        const right_value = right orelse return false;
+        return std.mem.eql(u8, left_value, right_value);
+    }
+    return right == null;
 }
 
 pub fn handleClearHistoryLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {

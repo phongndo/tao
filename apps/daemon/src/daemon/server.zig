@@ -215,7 +215,7 @@ fn removeInactiveSocketPath(path: []const u8) !void {
         stream.close();
         return error.ActiveSocketAlreadyExists;
     } else |err| switch (err) {
-        error.ConnectionRefused => {},
+        error.ConnectionRefused => return error.ActiveSocketAlreadyExists,
         else => return err,
     }
 
@@ -261,7 +261,7 @@ fn verifyPeerOwner(socket_fd: std.c.fd_t) !void {
             if (getpeereid(socket_fd, &euid, &egid) != 0) return error.UnauthorizedPeer;
             if (euid != std.c.geteuid()) return error.UnauthorizedPeer;
         },
-        else => {},
+        else => return error.UnsupportedPlatform,
     }
 }
 
@@ -312,7 +312,7 @@ test "daemon stale socket cleanup refuses unsafe paths" {
     try std.testing.expectEqual(@as(u64, "not a socket".len), stat.size);
 }
 
-test "daemon stale socket cleanup removes only inactive owned sockets" {
+test "daemon stale socket cleanup refuses live and ambiguous owned sockets" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 
@@ -331,8 +331,8 @@ test "daemon stale socket cleanup removes only inactive owned sockets" {
     try std.testing.expectError(error.ActiveSocketAlreadyExists, removeInactiveSocketPath(config.socket_path));
     listener.deinit();
 
-    try removeInactiveSocketPath(config.socket_path);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().statFile(config.socket_path));
+    try std.testing.expectError(error.ActiveSocketAlreadyExists, removeInactiveSocketPath(config.socket_path));
+    try std.fs.cwd().deleteFile(config.socket_path);
 }
 
 test "daemon peer owner check accepts same-user local sockets" {
