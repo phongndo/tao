@@ -197,6 +197,7 @@ pub fn handleRefreshLocked(self: anytype, allocator: std.mem.Allocator, request:
         refreshSingleWorktree(self, database, worktree_id) catch |err| switch (err) {
             error.InvalidWorktree => return errorResponse(allocator, request, .invalid_worktree, "worktree not found"),
             error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "workspace not found"),
+            error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
             else => return err,
         };
         var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return errorResponse(allocator, request, .invalid_worktree, "worktree not found");
@@ -209,6 +210,7 @@ pub fn handleRefreshLocked(self: anytype, allocator: std.mem.Allocator, request:
     const workspace_id = request.requestWorkspaceId() orelse return errorResponse(allocator, request, .invalid_workspace, "workspace_id is required");
     refreshWorkspaceWorktrees(self, database, workspace_id) catch |err| switch (err) {
         error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "workspace not found"),
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
         else => return err,
     };
     return handleListLocked(self, allocator, request);
@@ -397,6 +399,8 @@ pub fn handleReorderLocked(self: anytype, allocator: std.mem.Allocator, request:
     const database = if (self.database) |*database| database else return errorResponse(allocator, request, .state_conflict, "database is unavailable");
     const worktree_id = request.requestWorktreeId() orelse return errorResponse(allocator, request, .invalid_worktree, "worktree_id is required");
     const order_index = request.requestOrderIndex() orelse return errorResponse(allocator, request, .state_conflict, "order_index is required");
+    var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return errorResponse(allocator, request, .invalid_worktree, "worktree not found");
+    row.deinit(self.allocator);
     try database.reorderWorktree(worktree_id, order_index);
     return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
 }
@@ -415,10 +419,7 @@ fn refreshWorkspaceWorktrees(self: anytype, database: *db.Database, workspace_id
         defer self.lock();
         break :blk git.worktreeListAlloc(self.allocator, workspace_row.root_path);
     }) catch |err| switch (err) {
-        error.GitFailed, error.GitNotFound => {
-            std.log.warn("git worktree list failed for {s}: {t}", .{ workspace_row.root_path, err });
-            return;
-        },
+        error.GitFailed, error.GitNotFound => return err,
         else => return err,
     };
     defer {

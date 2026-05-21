@@ -218,7 +218,7 @@ pub fn Context(comptime Daemon: type) type {
             }
             item.assertInvariants();
             item.transitionTo(.exited);
-            releasePtyChildForBackgroundReap(item, "synthetic exit");
+            releasePtyChildForBackgroundReap(daemon, item, "synthetic exit");
             item.reader_started = false;
             if (item.event_log_path) |path| {
                 _ = event_log.appendExit(daemon.allocator, path, &item.last_seq, exit_code, signal_value) catch |err| {
@@ -256,15 +256,24 @@ pub fn Context(comptime Daemon: type) type {
             };
         }
 
-        fn releasePtyChildForBackgroundReap(item: *session.TerminalSession, reason: []const u8) void {
+        fn releasePtyChildForBackgroundReap(daemon: Daemon, item: *session.TerminalSession, reason: []const u8) void {
             if (item.pty_child) |*child| {
                 pty.reapInBackground(child) catch |err| {
                     std.log.warn("failed to start PTY reaper for {s} after {s}: {t}", .{ item.id, reason, err });
+                    var detached_child = child.*;
+                    child.pid = 0;
+                    child.close();
+                    item.pty_child = null;
+
+                    daemon.unlock();
+                    defer daemon.lock();
+
                     var driver = pty.Driver.init(std.heap.smp_allocator);
-                    _ = driver.wait(child) catch |wait_err| {
+                    _ = driver.wait(&detached_child) catch |wait_err| {
                         std.log.warn("failed to synchronously reap PTY for {s} after {s}: {t}", .{ item.id, reason, wait_err });
                     };
-                    child.close();
+                    detached_child.close();
+                    return;
                 };
                 item.pty_child = null;
             }

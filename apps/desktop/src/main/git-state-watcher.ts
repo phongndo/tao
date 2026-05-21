@@ -226,6 +226,7 @@ export class GitStateWatcher {
       const nextFingerprint = workspaceFingerprint(workspace)
       const gitCommonDir = resolveGitCommonDir(workspace)
       if (!gitCommonDir) {
+        entry.pending = false
         this.untrackWorkspace(entry.record.id)
         if (nextFingerprint !== previousFingerprint) this.notifyWorkspaceChanged(workspace)
         return

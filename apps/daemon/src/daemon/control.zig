@@ -163,19 +163,14 @@ pub fn handleKillLocked(self: anytype, allocator: std.mem.Allocator, request: rp
         };
         pty.reapInBackground(child) catch |err| {
             std.log.warn("failed to start PTY reaper for killed session {s}: {t}", .{ item.id, err });
-            _ = self.pty_driver.wait(child) catch |wait_err| {
-                std.log.warn("failed to synchronously reap killed PTY for {s}: {t}", .{ item.id, wait_err });
-            };
-            child.close();
+            reapPtyChildUnlocked(self, item, child, "killed");
         };
+        item.pty_child = null;
     }
     if (item.event_log_path) |path| {
         _ = event_log.appendExit(self.allocator, path, &item.last_seq, 0, 15) catch |err| {
             std.log.warn("failed to append kill exit frame for {s}: {t}", .{ item.id, err });
         };
-    }
-    if (item.pty_child) |child| {
-        if (child.pid <= 0) item.pty_child = null;
     }
     item.reader_started = false;
     try self.broadcastExitFrameLocked(item, item.last_seq, 0, 15);
@@ -202,14 +197,26 @@ fn terminateUnstartedPtyChildLocked(self: anytype, item: *session.TerminalSessio
         };
         pty.reapInBackground(child) catch |err| {
             std.log.warn("failed to start PTY reaper for unstarted session {s}: {t}", .{ item.id, err });
-            _ = self.pty_driver.wait(child) catch |wait_err| {
-                std.log.warn("failed to synchronously reap unstarted PTY for {s}: {t}", .{ item.id, wait_err });
-            };
-            child.close();
+            reapPtyChildUnlocked(self, item, child, "unstarted");
         };
         item.pty_child = null;
     }
     item.reader_started = false;
+}
+
+fn reapPtyChildUnlocked(self: anytype, item: *session.TerminalSession, child: *pty.Child, reason: []const u8) void {
+    var detached_child = child.*;
+    child.pid = 0;
+    child.close();
+    item.pty_child = null;
+
+    self.unlock();
+    defer self.lock();
+
+    _ = self.pty_driver.wait(&detached_child) catch |wait_err| {
+        std.log.warn("failed to synchronously reap {s} PTY for {s}: {t}", .{ reason, item.id, wait_err });
+    };
+    detached_child.close();
 }
 
 fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
