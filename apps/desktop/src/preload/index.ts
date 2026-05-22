@@ -873,6 +873,10 @@ const electronAPI = {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.stagePath(input))
   },
 
+  unstagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.unstagePath(input))
+  },
+
   revertPath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.revertPath(input))
   },

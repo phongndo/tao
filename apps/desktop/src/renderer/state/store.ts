@@ -41,6 +41,7 @@ export interface TaoState {
   selectWorktree(worktreeId: string): void
   selectWorkspaceByIndex(index: number): void
   newTab(workspaceId?: string): void
+  openChangesTab(workspaceId?: string): void
   closeTab(tabId: string): void
   closeActiveTab(): void
   selectTab(tabId: string): void
@@ -101,7 +102,7 @@ export interface Pane {
   lastSessionId?: string
 }
 
-export type PaneType = 'terminal' | 'webview'
+export type PaneType = 'terminal' | 'webview' | 'changes'
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review' | 'archived'
 export type ReorderPlacement = 'before' | 'after'
 
@@ -112,7 +113,11 @@ const PaneStatusSchema = Schema.Union([
   Schema.Literal('review'),
   Schema.Literal('archived'),
 ])
-const PaneTypeSchema = Schema.Union([Schema.Literal('terminal'), Schema.Literal('webview')])
+const PaneTypeSchema = Schema.Union([
+  Schema.Literal('terminal'),
+  Schema.Literal('webview'),
+  Schema.Literal('changes'),
+])
 
 const PersistedWorkspaceSchema = Schema.Struct({
   id: Schema.String,
@@ -201,6 +206,34 @@ function createTerminalTab(workspaceId: string, order: number): { tab: Tab; pane
       id: tabId,
       workspaceId,
       name: order === 0 ? 'Terminal' : `Terminal ${order + 1}`,
+      layout: pane.id,
+      lastActivePaneId: pane.id,
+      order,
+    },
+    pane,
+  }
+}
+
+function createChangesPane(tabId: string): Pane {
+  return {
+    id: createId('pane'),
+    terminalId: createId('term'),
+    tabId,
+    type: 'changes',
+    name: 'Changes',
+    status: 'idle',
+  }
+}
+
+function createChangesTab(workspaceId: string, order: number): { tab: Tab; pane: Pane } {
+  const tabId = createId('tab')
+  const pane = createChangesPane(tabId)
+
+  return {
+    tab: {
+      id: tabId,
+      workspaceId,
+      name: 'Changes',
       layout: pane.id,
       lastActivePaneId: pane.id,
       order,
@@ -989,6 +1022,41 @@ export const useTaoStore = create<TaoState>()((set) => ({
         activePaneId: pane.id,
       }
     }),
+  openChangesTab: (workspaceId) =>
+    set((state) => {
+      const targetWorkspaceId = workspaceId ?? state.activeWorkspaceId
+      if (!targetWorkspaceId || !contextExists(state.workspaces, targetWorkspaceId)) return {}
+
+      const existingPane = state.panes.find(
+        (pane) =>
+          pane.type === 'changes' &&
+          state.tabs.some((tab) => tab.id === pane.tabId && tab.workspaceId === targetWorkspaceId),
+      )
+      const existingTab = existingPane
+        ? state.tabs.find((tab) => tab.id === existingPane.tabId)
+        : null
+
+      if (existingTab && existingPane) {
+        return {
+          workspaces: rememberWorkspaceTab(state.workspaces, targetWorkspaceId, existingTab.id),
+          ...rememberLocalTab(targetWorkspaceId, existingTab.id),
+          activeTabId: existingTab.id,
+          activePaneId: existingPane.id,
+        }
+      }
+
+      const order = getWorkspaceTabs(state.tabs, targetWorkspaceId).length
+      const { tab, pane } = createChangesTab(targetWorkspaceId, order)
+
+      return {
+        workspaces: rememberWorkspaceTab(state.workspaces, targetWorkspaceId, tab.id),
+        ...rememberLocalTab(targetWorkspaceId, tab.id),
+        tabs: [...state.tabs, tab],
+        activeTabId: tab.id,
+        panes: [...state.panes, pane],
+        activePaneId: pane.id,
+      }
+    }),
   closeTab: (tabId) => set((state) => closeTabState(state, tabId)),
   closeActiveTab: () =>
     set((state) => (state.activeTabId ? closeTabState(state, state.activeTabId) : {})),
@@ -1114,6 +1182,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
       if (!name) return {}
 
       const tab = state.tabs.find((candidate) => candidate.id === pane.tabId)
+      const paneIds = tab ? getPaneIdsInLayout(tab.layout) : []
       const nextPanes =
         pane.name === name
           ? state.panes
@@ -1121,7 +1190,10 @@ export const useTaoStore = create<TaoState>()((set) => ({
               candidate.id === pane.id ? { ...candidate, name } : candidate,
             )
       const nextTabs =
-        tab && paneId === state.activePaneId && tab.name !== name
+        tab &&
+        tab.name !== name &&
+        (paneId === state.activePaneId || paneIds.length === 1) &&
+        paneIds.includes(paneId)
           ? state.tabs.map((candidate) =>
               candidate.id === tab.id ? { ...candidate, name } : candidate,
             )

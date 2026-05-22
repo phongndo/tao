@@ -51,6 +51,9 @@ export class PreloadWorkspaceIpc extends Context.Service<
     readonly stagePath: (
       input: WorkspaceGitPathActionInput,
     ) => Effect.Effect<WorkspaceGitPathActionResponse, WorkspaceError>
+    readonly unstagePath: (
+      input: WorkspaceGitPathActionInput,
+    ) => Effect.Effect<WorkspaceGitPathActionResponse, WorkspaceError>
     readonly revertPath: (
       input: WorkspaceGitPathActionInput,
     ) => Effect.Effect<WorkspaceGitPathActionResponse, WorkspaceError>
@@ -109,6 +112,8 @@ const PreloadWorkspaceIpcLive = Layer.succeed(PreloadWorkspaceIpc)({
     invokeWorkspace('workspace:getWorkspaceDiffPatch', input, WorkspaceDiffPatchResponseSchema),
   stagePath: (input) =>
     invokeWorkspace('workspace:stagePath', input, WorkspaceGitPathActionResponseSchema),
+  unstagePath: (input) =>
+    invokeWorkspace('workspace:unstagePath', input, WorkspaceGitPathActionResponseSchema),
   revertPath: (input) =>
     invokeWorkspace('workspace:revertPath', input, WorkspaceGitPathActionResponseSchema),
   getWorkspacePorts: (workspacePath) =>

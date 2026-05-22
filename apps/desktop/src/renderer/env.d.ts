@@ -81,6 +81,7 @@ export interface ElectronAPI {
   getWorkspaceFileTree(workspacePath: string): Promise<WorkspaceFileTreeResponse>
   getWorkspaceDiffPatch(input: WorkspaceDiffPatchInput): Promise<WorkspaceDiffPatchResponse>
   stagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse>
+  unstagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse>
   revertPath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse>
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>

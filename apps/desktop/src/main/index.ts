@@ -231,7 +231,7 @@ function createWindow() {
 
     if (key === 'l' && !input.shift) {
       event.preventDefault()
-      sendAppCommand({ type: 'close-right-sidebar' })
+      sendAppCommand({ type: 'toggle-right-sidebar' })
       return
     }
 
@@ -599,7 +599,7 @@ function workspaceGitPathActionRequest(
   action: (
     service: typeof WorkspaceService.Service,
     workspacePath: string,
-    path: string,
+    path: string | readonly string[],
   ) => Effect.Effect<void, WorkspaceError>,
 ) {
   return runWorkspaceRequest(
@@ -622,6 +622,12 @@ function workspaceGitPathActionRequest(
 ipcMain.handle('workspace:stagePath', async (event, input: unknown) =>
   workspaceGitPathActionRequest(event, input, (service, workspacePath, path) =>
     service.stageWorkspacePath(workspacePath, path),
+  ),
+)
+
+ipcMain.handle('workspace:unstagePath', async (event, input: unknown) =>
+  workspaceGitPathActionRequest(event, input, (service, workspacePath, path) =>
+    service.unstageWorkspacePath(workspacePath, path),
   ),
 )
 

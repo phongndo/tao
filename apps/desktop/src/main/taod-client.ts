@@ -24,6 +24,7 @@ import type {
 } from '@tao/shared/workspace'
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 500
+const DEFAULT_CONTROL_RESPONSE_TIMEOUT_MS = 5000
 const DEFAULT_START_TIMEOUT_MS = 3000
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 10_000
 const DEFAULT_RESTART_BACKOFF_MS = 750
@@ -536,6 +537,7 @@ export class TaodSessionStream extends EventEmitter<TaodSessionStreamEvents> {
 export class TaodClient {
   private readonly socketPath: string
   private readonly connectTimeoutMs: number
+  private readonly controlResponseTimeoutMs: number
   private readonly startTimeoutMs: number
   private readonly healthCheckIntervalMs: number
   private readonly restartBackoffMs: number
@@ -549,6 +551,7 @@ export class TaodClient {
     options: {
       socketPath?: string
       connectTimeoutMs?: number
+      controlResponseTimeoutMs?: number
       startTimeoutMs?: number
       healthCheckIntervalMs?: number
       restartBackoffMs?: number
@@ -556,6 +559,8 @@ export class TaodClient {
   ) {
     this.socketPath = options.socketPath ?? defaultSocketPath()
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
+    this.controlResponseTimeoutMs =
+      options.controlResponseTimeoutMs ?? DEFAULT_CONTROL_RESPONSE_TIMEOUT_MS
     this.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS
     this.healthCheckIntervalMs = options.healthCheckIntervalMs ?? DEFAULT_HEALTH_CHECK_INTERVAL_MS
     this.restartBackoffMs = options.restartBackoffMs ?? DEFAULT_RESTART_BACKOFF_MS
@@ -624,7 +629,7 @@ export class TaodClient {
     let response: TaodControlResponse
     let tail: Buffer
     try {
-      ;({ response, tail } = await readNdjsonResponse(socket, this.connectTimeoutMs))
+      ;({ response, tail } = await readNdjsonResponse(socket, this.controlResponseTimeoutMs))
     } catch (error) {
       socket.end()
       socket.destroy()
@@ -886,7 +891,7 @@ export class TaodClient {
     const socket = await connectUnixSocket(this.socketPath, this.connectTimeoutMs)
     try {
       socket.write(`${JSON.stringify(request)}\n`)
-      const { response } = await readNdjsonResponse(socket, this.connectTimeoutMs)
+      const { response } = await readNdjsonResponse(socket, this.controlResponseTimeoutMs)
       return response
     } finally {
       socket.end()

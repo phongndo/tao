@@ -58,11 +58,15 @@ export class WorkspaceService extends Context.Service<
     ) => Effect.Effect<WorkspaceDiffPatch, WorkspaceError>
     readonly stageWorkspacePath: (
       workspacePath: string,
-      path: string,
+      path: string | readonly string[],
+    ) => Effect.Effect<void, WorkspaceError>
+    readonly unstageWorkspacePath: (
+      workspacePath: string,
+      path: string | readonly string[],
     ) => Effect.Effect<void, WorkspaceError>
     readonly revertWorkspacePath: (
       workspacePath: string,
-      path: string,
+      path: string | readonly string[],
     ) => Effect.Effect<void, WorkspaceError>
     readonly getWorkspacePorts: (workspacePath: string) => Effect.Effect<PortInfo[], WorkspaceError>
     readonly getPullRequestInfo: (
@@ -160,12 +164,20 @@ function diffArgsForScope(
   }
 }
 
-function validateGitPath(path: string): Effect.Effect<string, WorkspaceError> {
-  const trimmed = path.trim()
-  if (trimmed.length === 0 || trimmed.startsWith('-') || trimmed.includes('\0')) {
-    return Effect.fail(new WorkspaceError('invalid-path', `Invalid path: ${path}`))
+function validateGitPaths(
+  path: string | readonly string[],
+): Effect.Effect<string[], WorkspaceError> {
+  const values = Array.isArray(path) ? path : [path]
+  const trimmedValues = values.map((value) => value.trim())
+  if (
+    trimmedValues.length === 0 ||
+    trimmedValues.some(
+      (value) => value.length === 0 || value.startsWith('-') || value.includes('\0'),
+    )
+  ) {
+    return Effect.fail(new WorkspaceError('invalid-path', 'Invalid path'))
   }
-  return Effect.succeed(trimmed)
+  return Effect.succeed(trimmedValues)
 }
 
 function decodeWorktree(info: MutableWorktreeInfo): WorktreeInfo | null {
@@ -379,14 +391,26 @@ const WorkspaceServiceLiveValue: typeof WorkspaceService.Service = {
     ),
 
   stageWorkspacePath: (workspacePath, path) =>
-    validateGitPath(path).pipe(
-      Effect.flatMap((validatedPath) => runGit(workspacePath, ['add', '--', validatedPath])),
+    validateGitPaths(path).pipe(
+      Effect.flatMap((validatedPaths) =>
+        runGit(workspacePath, ['add', '--all', '--', ...validatedPaths]),
+      ),
+      Effect.asVoid,
+    ),
+
+  unstageWorkspacePath: (workspacePath, path) =>
+    validateGitPaths(path).pipe(
+      Effect.flatMap((validatedPaths) =>
+        runGit(workspacePath, ['restore', '--staged', '--', ...validatedPaths]),
+      ),
       Effect.asVoid,
     ),
 
   revertWorkspacePath: (workspacePath, path) =>
-    validateGitPath(path).pipe(
-      Effect.flatMap((validatedPath) => runGit(workspacePath, ['restore', '--', validatedPath])),
+    validateGitPaths(path).pipe(
+      Effect.flatMap((validatedPaths) =>
+        runGit(workspacePath, ['restore', '--', ...validatedPaths]),
+      ),
       Effect.asVoid,
     ),
 

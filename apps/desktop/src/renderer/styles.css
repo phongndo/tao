@@ -119,6 +119,7 @@ body {
   align-self: stretch;
   flex: 1 1 auto;
   gap: 0;
+  padding-right: 40px;
 }
 
 .right-sidebar-view-tab {
@@ -172,8 +173,12 @@ body {
 }
 
 .right-sidebar-toggle-button {
-  margin: 0 8px;
+  position: absolute;
+  top: calc((var(--tao-titlebar-height) - 24px) / 2);
+  right: 8px;
+  z-index: 20;
   flex: 0 0 auto;
+  -webkit-app-region: no-drag;
 }
 
 .right-sidebar-content {
@@ -191,6 +196,14 @@ body {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+}
+
+.right-sidebar-file-tree-icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .right-sidebar-diff {
@@ -257,7 +270,14 @@ body {
   min-height: 39px;
   height: auto;
   align-items: flex-start;
-  padding: 7px 8px 7px 10px;
+  padding: 5px 8px 5px 10px;
+}
+
+.right-sidebar-diff-toolbar-sidebar {
+  min-height: 0;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-top: 0;
 }
 
 .right-sidebar-diff-full-pane .right-sidebar-diff-toolbar {
@@ -273,6 +293,10 @@ body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  gap: 4px;
+}
+
+.right-sidebar-diff-full-pane .right-sidebar-diff-toolbar-main {
   gap: 8px;
 }
 
@@ -303,8 +327,8 @@ body {
 }
 
 .right-sidebar-diff-full-pane .right-sidebar-diff-branch-name {
-  flex: 0 1 max-content;
-  max-width: min(42vw, 620px);
+  flex: 0 1 auto;
+  max-width: min(36vw, 520px);
 }
 
 .right-sidebar-diff-branch-from {
@@ -324,8 +348,8 @@ body {
 }
 
 .right-sidebar-diff-full-pane .right-sidebar-diff-branch-picker {
-  width: min(32vw, 360px);
-  flex-basis: min(32vw, 360px);
+  width: auto;
+  flex: 1 1 280px;
 }
 
 .right-sidebar-diff-branch-base-input {
@@ -408,6 +432,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.right-sidebar-diff-control-row > .right-sidebar-file-tree-actions {
+  margin-left: auto;
 }
 
 .right-sidebar-diff-scope-group {
@@ -628,6 +656,23 @@ body {
   font-size: 10px;
 }
 
+.right-sidebar-diff-file-tree-group-label .right-sidebar-diff-file-tree-group-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  color: #747783;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.right-sidebar-diff-file-tree-group-name svg {
+  flex: 0 0 auto;
+  color: #747783;
+}
+
 .right-sidebar-diff-file-tree-directory-label,
 .right-sidebar-diff-file-tree-item {
   --diff-tree-depth: 0;
@@ -655,6 +700,37 @@ body {
   color: #747783;
 }
 
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon {
+  flex: 0 0 auto;
+  color: var(--trees-file-icon-color, #9699a8);
+}
+
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='git'],
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='npm'] {
+  color: var(--trees-file-icon-color-git, #e06c4f);
+}
+
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='json'] {
+  color: var(--trees-file-icon-color-json, #e6b99d);
+}
+
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='markdown'] {
+  color: var(--trees-file-icon-color-markdown, #90b99f);
+}
+
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='typescript'],
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='react'] {
+  color: var(--trees-file-icon-color-typescript, #6f8dbd);
+}
+
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='yml'] {
+  color: var(--trees-file-icon-color-yml, #f5a191);
+}
+
+.right-sidebar-diff-file-tree-item .right-sidebar-diff-file-tree-icon[data-icon-token='zig'] {
+  color: #e6b99d;
+}
+
 .right-sidebar-diff-file-tree-item {
   cursor: pointer;
 }
@@ -669,7 +745,7 @@ body {
 
 .right-sidebar-diff-file-tree-name {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -685,6 +761,7 @@ body {
 }
 
 .right-sidebar-diff-file-actions {
+  margin-left: auto;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;

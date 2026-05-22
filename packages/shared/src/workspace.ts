@@ -49,7 +49,7 @@ export const WorkspaceDiffPatchInputSchema = Schema.Struct({
 })
 export const WorkspaceGitPathActionInputSchema = Schema.Struct({
   workspacePath: WorkspacePathSchema,
-  path: Schema.Trim.check(Schema.isNonEmpty()),
+  path: Schema.Union([Schema.Trim.check(Schema.isNonEmpty()), Schema.Array(Schema.String)]),
 })
 
 export const WorkspaceWorktreeStateSchema = Schema.Union([
