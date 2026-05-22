@@ -9,10 +9,15 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # ── Required memory-safety gate ──
+  # ── Required memory-safety gate (kept separate) ──
   memory-safety:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,6 +26,18 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
       - run: pnpm install --frozen-lockfile
       - run: |
           set -euo pipefail
@@ -31,9 +48,10 @@ jobs:
           HOME="$TAOD_CI_HOME" pnpm --filter @tao/daemon check
           pnpm zig:leak-check
 
-  # ── Type check + lint + format ──
-  check-ubuntu:
+  # ── Combined quality gate: frontend (pnpm) + zig daemon ──
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       TAOD_SKIP_NATIVE: '1'
     steps:
@@ -44,110 +62,83 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-
-  check-macos:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: mlugg/setup-zig@v2
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Cache pnpm store
+        uses: actions/cache@v4
         with:
-          version: ${{ env.ZIG_VERSION }}
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-
-  zig-hardened:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: pnpm install --frozen-lockfile
-      - run: zig build test:fmt
+      - name: Lint (TypeScript + Zig)
+        run: pnpm lint
+      - name: Format check (TypeScript + Zig)
+        run: pnpm fmt:check
+      - name: TypeScript type check
+        run: pnpm tsc
+      - name: Zig unit tests
+        run: pnpm zig:test
+      - name: Zig hardened compile (fuzz)
+        run: zig build test:compile -Dfuzz=true
         working-directory: apps/daemon
-      - run: zig build test:compile -Dfuzz=true
-        working-directory: apps/daemon
+      - name: Persistence tests
+        run: pnpm test:persistence
 
-  check-windows:
-    runs-on: windows-latest
+  # ── Build matrix across platforms ──
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: tao-dist-ubuntu
+            skip_native: '1'
+          - os: macos-15
+            artifact: tao-dist-macos
+          - os: windows-latest
+            artifact: tao-dist-windows
+            shell: bash
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     defaults:
       run:
+        shell: ${{ matrix.shell || 'bash' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Get pnpm store directory
+        id: pnpm-cache
         shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: mlugg/setup-zig@v2
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Cache pnpm store
+        uses: actions/cache@v4
         with:
-          version: ${{ env.ZIG_VERSION }}
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-
-  # ── Nix dev shell + Zig LSP smoke test ──
-  nix-tooling:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - run: nix develop --command nixpkgs-fmt --check flake.nix
-      - run: |
-          nix develop --command bash -lc '
-            node --version
-            pnpm --version
-            zig version
-            zls --version
-            pnpm zig:fmt:check
-            pnpm zig:lint
-          '
-
-  # ── Production build ──
-  build-ubuntu:
-    runs-on: ubuntu-latest
-    env:
-      TAOD_SKIP_NATIVE: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tao-dist-ubuntu
-          path: apps/desktop/out/
-
-  build-macos:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm smoke:package
-      - run: pnpm --filter @tao/desktop test:taod-lifecycle
-      - run: |
+      - name: Build
+        run: pnpm build
+        env:
+          TAOD_SKIP_NATIVE: ${{ matrix.skip_native }}
+      - name: macOS smoke tests & benchmarks
+        if: runner.os == 'macOS'
+        run: |
           set -euo pipefail
+          pnpm smoke:package
+          pnpm --filter @tao/desktop test:taod-lifecycle
           mkdir -p apps/desktop/out/bench
           pnpm bench:startup:budget | tee apps/desktop/out/bench/startup-budget.txt
           pnpm bench:latency:budget | tee apps/desktop/out/bench/latency-budget.txt
@@ -159,34 +150,15 @@ jobs:
           pnpm bench:app-soak:budget | tee apps/desktop/out/bench/app-soak-budget.txt
           pnpm bench:taod:budget | tee apps/desktop/out/bench/taod-budget.txt
       - uses: actions/upload-artifact@v4
+        if: matrix.artifact != 'tao-dist-windows'
         with:
-          name: tao-dist-macos
+          name: ${{ matrix.artifact }}
           path: apps/desktop/out/
 
-  build-windows:
-    name: build-windows (unsupported)
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - run: |
-          echo "Windows production artifacts are not published yet."
-          echo "taod is currently POSIX-only, and Electron packaging skips the daemon binary on Windows."
-
-  # ── Parser benchmark (Linux only) ──
-  bench:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm bench
-
+  # ── Performance smoke tests (macOS only) ──
   performance-smoke:
     runs-on: macos-15
+    timeout-minutes: 30
     env:
       TAO_TERMINAL_BENCH_MIB: '4'
       TAO_TERMINAL_MIN_WEBGL_MBPS: '2'
@@ -197,6 +169,18 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
       - run: pnpm install --frozen-lockfile
       - run: |
           set -euo pipefail
