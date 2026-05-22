@@ -606,6 +606,42 @@ fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
     return out.toOwnedSlice();
 }
 
+fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    const path = try std.fs.path.join(allocator, &.{ "../../packages/shared/fixtures/taod-protocol", name });
+    defer allocator.free(path);
+    return std.fs.cwd().readFileAlloc(allocator, path, 4096);
+}
+
+test "worktree response matches shared golden fixture" {
+    const allocator = std.testing.allocator;
+    const worktree_response = workspace.WorktreeResponse{
+        .id = "worktree-fixture",
+        .workspace_id = "workspace-fixture",
+        .title = "Feature Worktree",
+        .folder_name = "feature-worktree",
+        .path = "/tmp/tao-workspace/feature-worktree",
+        .branch = "feature/demo",
+        .base_branch = "main",
+        .target_branch = "feature/demo",
+        .state = "active",
+        .order_index = 2,
+        .last_active_tab_id = "tab-2",
+        .created_by = "tao",
+        .created_at = "2026-05-22T00:00:02Z",
+        .updated_at = "2026-05-22T00:00:03Z",
+        .git_status = .{ .changed = 3, .staged = 1 },
+    };
+
+    const json = try jsonAlloc(allocator, WorktreePayload{
+        .id = "worktree-response-fixture",
+        .worktree = worktree_response,
+    });
+    defer allocator.free(json);
+    const golden = try readProtocolFixtureAlloc(allocator, "control-worktree-response.ndjson");
+    defer allocator.free(golden);
+    try std.testing.expectEqualStrings(golden, json);
+}
+
 test "worktree path containment requires separator" {
     try std.testing.expect(isPathUnder("/tmp/root", "/tmp/root/child"));
     try std.testing.expect(!isPathUnder("/tmp/root", "/tmp/root-other/child"));

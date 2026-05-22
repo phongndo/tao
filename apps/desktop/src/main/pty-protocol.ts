@@ -106,7 +106,26 @@ export const PtyServiceMessageSchema = Schema.Union([
   }),
 ])
 
+export const TaodPtyBridgeDiagnosticsSchema = Schema.Struct({
+  portConnected: Schema.Boolean,
+  activeSessions: Schema.Number,
+  activeStreams: Schema.Number,
+  messagesPostedTotal: Schema.Number,
+  dataMessagesPostedTotal: Schema.Number,
+  dataCharsPostedTotal: Schema.Number,
+  snapshotMessagesPostedTotal: Schema.Number,
+  snapshotBytesPostedTotal: Schema.Number,
+  messagesDroppedNoPortTotal: Schema.Number,
+  postFailuresTotal: Schema.Number,
+  lastMessageType: Schema.optional(Schema.String),
+  lastDataChars: Schema.optional(Schema.Number),
+  lastPostedAt: Schema.optional(Schema.Number),
+  lastFailureAt: Schema.optional(Schema.Number),
+  lastError: Schema.optional(Schema.String),
+})
+
 export type PtySize = Schema.Schema.Type<typeof PtySizeSchema>
 export type PtyExitInfo = Schema.Schema.Type<typeof PtyExitInfoSchema>
 export type PtyClientMessage = Schema.Schema.Type<typeof PtyClientMessageSchema>
 export type PtyServiceMessage = Schema.Schema.Type<typeof PtyServiceMessageSchema>
+export type TaodPtyBridgeDiagnostics = Schema.Schema.Type<typeof TaodPtyBridgeDiagnosticsSchema>

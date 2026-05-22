@@ -8,6 +8,15 @@ export const TAOD_STREAM_SESSION_ID_SIZE = 64
 export const TAOD_STREAM_HEADER_SIZE = 88
 export const TAOD_STREAM_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
+export const TAOD_CONTROL_PROTOCOL_VERSION = 1
+export const TAOD_CONTROL_CAPABILITIES = [
+  'sessions-v1',
+  'stream-frames-v1',
+  'workspaces-v1',
+  'worktrees-v1',
+  'persistence-v1',
+] as const
+
 export const TaodStreamFrameKind = {
   Output: 1,
   Input: 2,
@@ -18,6 +27,120 @@ export const TaodStreamFrameKind = {
 } as const
 
 export type TaodStreamFrameKind = (typeof TaodStreamFrameKind)[keyof typeof TaodStreamFrameKind]
+export type TaodControlCapability = (typeof TAOD_CONTROL_CAPABILITIES)[number]
+
+export const TaodLifecycleStateSchema = Schema.Union([
+  Schema.Literal('absent'),
+  Schema.Literal('starting'),
+  Schema.Literal('owned-live'),
+  Schema.Literal('external-live'),
+  Schema.Literal('stale-socket'),
+  Schema.Literal('crashed'),
+  Schema.Literal('version-mismatch'),
+  Schema.Literal('stopping'),
+  Schema.Literal('disposed'),
+])
+
+export const TaodDaemonOwnershipSchema = Schema.Union([
+  Schema.Literal('none'),
+  Schema.Literal('external'),
+  Schema.Literal('owned-attached'),
+  Schema.Literal('owned-detached'),
+  Schema.Literal('released-detached'),
+])
+
+export const TaodLifecycleRecoveryActionSchema = Schema.Union([
+  Schema.Literal('none'),
+  Schema.Literal('start-daemon'),
+  Schema.Literal('wait-for-start'),
+  Schema.Literal('reuse-external-daemon'),
+  Schema.Literal('keep-detached-daemon'),
+  Schema.Literal('clear-stale-socket-and-start'),
+  Schema.Literal('restart-owned-daemon'),
+  Schema.Literal('replace-incompatible-daemon'),
+])
+
+export const TaodLifecycleRecoveryInputSchema = TaodLifecycleRecoveryActionSchema
+
+export const TaodLifecycleEventSchema = Schema.Struct({
+  state: TaodLifecycleStateSchema,
+  at: Schema.Number,
+  reason: Schema.optional(Schema.String),
+})
+
+export const TaodControlRequestDiagnosticsSchema = Schema.Struct({
+  id: Schema.String,
+  traceId: Schema.String,
+  responseTraceId: Schema.optional(Schema.String),
+  type: Schema.String,
+  at: Schema.Number,
+  durationMs: Schema.Number,
+  ok: Schema.Boolean,
+  error: Schema.optional(Schema.String),
+})
+
+export const TaodStreamDiagnosticsSchema = Schema.Struct({
+  activeSubscribers: Schema.Number,
+  pendingOutputSessions: Schema.Number,
+  pendingOutputFrames: Schema.Number,
+  pendingOutputBytes: Schema.Number,
+  inputFramesTotal: Schema.Number,
+  inputBytesTotal: Schema.Number,
+  outputFramesTotal: Schema.Number,
+  outputBytesTotal: Schema.Number,
+  slowSubscriberDropsTotal: Schema.Number,
+  pendingOutputDroppedFramesTotal: Schema.Number,
+  pendingOutputDroppedBytesTotal: Schema.Number,
+  pendingOutputTruncatedBytesTotal: Schema.Number,
+})
+
+export const TaodDaemonControlDiagnosticsSchema = Schema.Struct({
+  requestCount: Schema.Number,
+  failureCount: Schema.Number,
+  lastRequestType: Schema.optional(Schema.String),
+  lastTraceId: Schema.optional(Schema.String),
+  lastDurationMs: Schema.optional(Schema.Number),
+  lastOk: Schema.optional(Schema.Boolean),
+  lastRecordedAtMs: Schema.optional(Schema.Number),
+})
+
+export const TaodLifecycleTimingDiagnosticsSchema = Schema.Struct({
+  clientCreatedAt: Schema.Number,
+  lastTransitionAt: Schema.Number,
+  lastPingStartedAt: Schema.optional(Schema.Number),
+  lastPingDurationMs: Schema.optional(Schema.Number),
+  lastSuccessfulPingAt: Schema.optional(Schema.Number),
+  lastFailedPingAt: Schema.optional(Schema.Number),
+  lastStartRequestedAt: Schema.optional(Schema.Number),
+  lastStartDurationMs: Schema.optional(Schema.Number),
+})
+
+export const TaodLifecycleDiagnosticsSchema = Schema.Struct({
+  clientTraceId: Schema.String,
+  state: TaodLifecycleStateSchema,
+  socketPath: Schema.String,
+  detachDaemon: Schema.Boolean,
+  healthChecksEnabled: Schema.Boolean,
+  healthChecksStarted: Schema.Boolean,
+  startInFlight: Schema.Boolean,
+  restartScheduled: Schema.Boolean,
+  daemonOwnership: TaodDaemonOwnershipSchema,
+  recoveryAction: TaodLifecycleRecoveryActionSchema,
+  spawnedPid: Schema.optional(Schema.Number),
+  releasedDetachedPid: Schema.optional(Schema.Number),
+  daemonVersion: Schema.optional(Schema.String),
+  protocolVersion: Schema.optional(Schema.Number),
+  capabilities: Schema.Array(Schema.String),
+  lastReason: Schema.optional(Schema.String),
+  lastError: Schema.optional(Schema.String),
+  controlRequestCount: Schema.Number,
+  controlRequestFailureCount: Schema.Number,
+  lastControlRequest: Schema.optional(TaodControlRequestDiagnosticsSchema),
+  streamDiagnostics: Schema.optional(TaodStreamDiagnosticsSchema),
+  daemonControlDiagnostics: Schema.optional(TaodDaemonControlDiagnosticsSchema),
+  timing: TaodLifecycleTimingDiagnosticsSchema,
+  transitions: Schema.Array(TaodLifecycleEventSchema),
+})
 
 export const TaodStreamFrameKindSchema = Schema.Union([
   Schema.Literal(TaodStreamFrameKind.Output),
@@ -105,3 +228,21 @@ export type OutputFrame = Schema.Schema.Type<typeof OutputFrameSchema>
 export type CurrentScreenSnapshotFrame = Schema.Schema.Type<typeof CurrentScreenSnapshotFrameSchema>
 export type ExitInfo = Schema.Schema.Type<typeof ExitInfoSchema>
 export type AgentStatus = Schema.Schema.Type<typeof AgentStatusSchema>
+export type TaodLifecycleState = Schema.Schema.Type<typeof TaodLifecycleStateSchema>
+export type TaodDaemonOwnership = Schema.Schema.Type<typeof TaodDaemonOwnershipSchema>
+export type TaodLifecycleRecoveryAction = Schema.Schema.Type<
+  typeof TaodLifecycleRecoveryActionSchema
+>
+export type TaodLifecycleRecoveryInput = Schema.Schema.Type<typeof TaodLifecycleRecoveryInputSchema>
+export type TaodLifecycleEvent = Schema.Schema.Type<typeof TaodLifecycleEventSchema>
+export type TaodControlRequestDiagnostics = Schema.Schema.Type<
+  typeof TaodControlRequestDiagnosticsSchema
+>
+export type TaodStreamDiagnostics = Schema.Schema.Type<typeof TaodStreamDiagnosticsSchema>
+export type TaodDaemonControlDiagnostics = Schema.Schema.Type<
+  typeof TaodDaemonControlDiagnosticsSchema
+>
+export type TaodLifecycleTimingDiagnostics = Schema.Schema.Type<
+  typeof TaodLifecycleTimingDiagnosticsSchema
+>
+export type TaodLifecycleDiagnostics = Schema.Schema.Type<typeof TaodLifecycleDiagnosticsSchema>

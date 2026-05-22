@@ -1,0 +1,1 @@
+{"id":"workspace-diff-fixture","ok":true,"diff_patch":"diff --git a/src/app.ts b/src/app.ts\n+console.log(\"tao\")\n"}

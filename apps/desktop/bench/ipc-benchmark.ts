@@ -29,6 +29,22 @@ interface BenchSummary {
   maxGapMs: number
 }
 
+function readNonNegativeNumberEnv(name: string, fallback: number, max: number): number {
+  const rawValue = process.env[name]
+  if (rawValue == null) return fallback
+  const raw = rawValue.trim()
+  if (!/^\d+(\.\d+)?$/.test(raw)) {
+    throw new Error(`${name} must be a non-negative number`)
+  }
+
+  const parsed = Number.parseFloat(raw)
+  if (!Number.isFinite(parsed) || parsed > max) {
+    throw new Error(`${name} must be <= ${max}`)
+  }
+
+  return parsed
+}
+
 process.once('uncaughtException', (err) => {
   console.error(err)
   app.exit(1)
@@ -52,6 +68,23 @@ const TOTAL_MB = readPositiveIntEnv('TAO_IPC_BENCH_MB', 64, 4096)
 const CHUNK_KB = readPositiveIntEnv('TAO_IPC_BENCH_CHUNK_KB', 64, 1024)
 const RUNS = readPositiveIntEnv('TAO_IPC_BENCH_RUNS', 3, 100)
 const PING_EVERY_CHUNKS = readPositiveIntEnv('TAO_IPC_BENCH_PING_EVERY_CHUNKS', 4, 1_000_000)
+const ENFORCE_BUDGET = process.env.TAO_IPC_BENCH_ENFORCE === '1'
+const MIN_MESSAGEPORT_MBPS = readNonNegativeNumberEnv('TAO_IPC_MIN_MESSAGEPORT_MBPS', 0, 100_000)
+const MAX_MESSAGEPORT_P99_CONTROL_MS = readNonNegativeNumberEnv(
+  'TAO_IPC_MAX_MESSAGEPORT_P99_CONTROL_MS',
+  Number.POSITIVE_INFINITY,
+  Number.POSITIVE_INFINITY,
+)
+const MAX_MESSAGEPORT_CONTROL_STALLS_16 = readNonNegativeNumberEnv(
+  'TAO_IPC_MAX_MESSAGEPORT_CONTROL_STALLS_16',
+  Number.POSITIVE_INFINITY,
+  Number.POSITIVE_INFINITY,
+)
+const MAX_MESSAGEPORT_DATA_STALLS_16 = readNonNegativeNumberEnv(
+  'TAO_IPC_MAX_MESSAGEPORT_DATA_STALLS_16',
+  Number.POSITIVE_INFINITY,
+  Number.POSITIVE_INFINITY,
+)
 
 const totalBytes = TOTAL_MB * 1024 * 1024
 const chunkBytes = CHUNK_KB * 1024
@@ -129,6 +162,43 @@ function printSummary({ legacy, port }: { legacy: BenchSummary; port: BenchSumma
   } else {
     console.log('WARN: MessagePort did not reduce median >16ms control IPC stalls in this run.')
   }
+}
+
+function enforceBudget(port: BenchSummary): void {
+  if (!ENFORCE_BUDGET) return
+
+  const failures: string[] = []
+  if (port.avgMBps < MIN_MESSAGEPORT_MBPS) {
+    failures.push(
+      `messageport avg throughput ${port.avgMBps.toFixed(1)} MB/s < ${MIN_MESSAGEPORT_MBPS} MB/s`,
+    )
+  }
+  if (port.p99ControlLatencyMs > MAX_MESSAGEPORT_P99_CONTROL_MS) {
+    failures.push(
+      `messageport p99 control latency ${port.p99ControlLatencyMs.toFixed(2)} ms > ${MAX_MESSAGEPORT_P99_CONTROL_MS} ms`,
+    )
+  }
+  if (port.medianControlStalls16 > MAX_MESSAGEPORT_CONTROL_STALLS_16) {
+    failures.push(
+      `messageport median control stalls >16ms ${port.medianControlStalls16} > ${MAX_MESSAGEPORT_CONTROL_STALLS_16}`,
+    )
+  }
+  if (port.medianStalls16 > MAX_MESSAGEPORT_DATA_STALLS_16) {
+    failures.push(
+      `messageport median data stalls >16ms ${port.medianStalls16} > ${MAX_MESSAGEPORT_DATA_STALLS_16}`,
+    )
+  }
+
+  if (failures.length > 0) {
+    console.error('')
+    console.error('IPC budget failed:')
+    for (const failure of failures) console.error(`  - ${failure}`)
+    app.exit(1)
+    return
+  }
+
+  console.log('')
+  console.log('IPC budget passed')
 }
 
 function rendererHtml(): string {
@@ -299,10 +369,10 @@ async function main(): Promise<void> {
     portSamples.push(await runPort(win))
   }
 
-  printSummary({
-    legacy: summarize('legacy', legacySamples),
-    port: summarize('messageport', portSamples),
-  })
+  const legacy = summarize('legacy', legacySamples)
+  const port = summarize('messageport', portSamples)
+  printSummary({ legacy, port })
+  enforceBudget(port)
 
   win.destroy()
   app.quit()

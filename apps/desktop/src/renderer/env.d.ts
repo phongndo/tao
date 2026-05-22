@@ -4,6 +4,7 @@
  */
 
 import type { AppCommand } from '@tao/shared/app-command'
+import type { TaodPtyBridgeDiagnostics } from '../main/pty-protocol'
 import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
 import type {
   AttachSessionInput,
@@ -14,10 +15,13 @@ import type {
   CurrentScreenSnapshotFrame,
   ExitInfo,
   OutputFrame,
+  TaodLifecycleDiagnostics,
+  TaodLifecycleRecoveryInput,
 } from '@tao/shared/taod-protocol'
 import type {
   WorkspaceDiffPatchResponse,
   WorkspaceDiffPatchInput,
+  WorkspaceAddInput,
   WorkspaceGitPathActionInput,
   WorkspaceGitPathActionResponse,
   WorkspaceGitBranchResponse,
@@ -31,8 +35,30 @@ import type {
   WorkspacePullRequestResponse,
   WorkspaceRecord,
   WorkspaceRecordResponse,
+  WorkspaceRefreshInput,
+  WorkspaceRemoveInput,
+  WorkspaceWatcherDiagnostics,
+  WorktreeCreateInput,
+  WorktreeRefreshInput,
+  WorktreeRemoveInput,
   WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
+
+type TerminalPreloadDiagnostics = {
+  pendingClientMessages: number
+  pendingDataSessions: number
+  pendingDataChars: number
+  pendingDataDroppedChunksTotal: number
+  pendingDataDroppedCharsTotal: number
+  pendingDataTruncatedCharsTotal: number
+  pendingOutputSessions: number
+  pendingOutputChars: number
+  pendingOutputDroppedFramesTotal: number
+  pendingOutputDroppedCharsTotal: number
+  pendingOutputTruncatedCharsTotal: number
+  pendingSnapshotSessions: number
+  readySessions: number
+}
 
 export interface ElectronAPI {
   openExternalUrl(url: string): Promise<void>
@@ -73,6 +99,11 @@ export interface ElectronAPI {
   signalReady(): Promise<void>
   onAppCommand(callback: (command: AppCommand) => void): () => void
   onWorkspaceChanged(callback: (workspace: WorkspaceRecord) => void): () => void
+  getTerminalPreloadDiagnostics(): TerminalPreloadDiagnostics
+  getTaodDiagnostics(): Promise<TaodLifecycleDiagnostics | null>
+  getTaodPtyBridgeDiagnostics(): Promise<TaodPtyBridgeDiagnostics | null>
+  recoverTaod(action: TaodLifecycleRecoveryInput): Promise<TaodLifecycleDiagnostics | null>
+  getWorkspaceWatcherDiagnostics(): Promise<WorkspaceWatcherDiagnostics | null>
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
   getGitBranches(workspacePath: string): Promise<WorkspaceGitBranchesResponse>
@@ -86,29 +117,12 @@ export interface ElectronAPI {
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>
   listWorkspaces(): Promise<WorkspaceListResponse>
-  addWorkspace(input: {
-    rootPath: string
-    workspaceId?: string
-    name?: string
-    orderIndex?: number
-  }): Promise<WorkspaceRecordResponse>
-  refreshWorkspace(workspaceId: string): Promise<WorkspaceRecordResponse>
-  removeWorkspace(workspaceId: string): Promise<WorkspaceIpcResponse<void>>
-  createWorktree(input: {
-    workspaceId: string
-    baseBranch?: string
-    targetBranch?: string
-    branch?: string
-    folderName?: string
-    startPoint?: string
-    title?: string
-  }): Promise<WorkspaceWorktreeResponse>
-  refreshWorktree(worktreeId: string): Promise<WorkspaceWorktreeResponse>
-  removeWorktree(input: {
-    worktreeId: string
-    force?: boolean
-    deleteBranch?: boolean
-  }): Promise<WorkspaceIpcResponse<void>>
+  addWorkspace(input: WorkspaceAddInput): Promise<WorkspaceRecordResponse>
+  refreshWorkspace(workspaceId: WorkspaceRefreshInput): Promise<WorkspaceRecordResponse>
+  removeWorkspace(workspaceId: WorkspaceRemoveInput): Promise<WorkspaceIpcResponse<void>>
+  createWorktree(input: WorktreeCreateInput): Promise<WorkspaceWorktreeResponse>
+  refreshWorktree(worktreeId: WorktreeRefreshInput): Promise<WorkspaceWorktreeResponse>
+  removeWorktree(input: WorktreeRemoveInput): Promise<WorkspaceIpcResponse<void>>
   readLayout(): Promise<PaneLayoutData | null>
   writeLayout(data: PaneLayoutData): Promise<void>
   readSettings(): Promise<SettingsData | null>

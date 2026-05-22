@@ -11,10 +11,39 @@ type BenchSample = {
   name: string
   mode: RendererMode
   durationMs: number
+  bytes?: number
+  throughputMBps?: number
   p95FrameMs?: number
   maxFrameMs?: number
   framesOver16?: number
   webglActive: boolean
+}
+
+type SustainedBudget = {
+  totalMiB: number
+  chunkKiB: number
+  minWebglMBps: number
+  maxP95FrameMs: number
+  maxFramesOver16: number
+  enforce: boolean
+}
+
+function readPositiveNumberEnv(name: string, fallback: number, max: number): number {
+  const raw = process.env[name] ?? String(fallback)
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > max) {
+    throw new Error(`${name} must be a positive number <= ${max}`)
+  }
+  return parsed
+}
+
+const sustainedBudget: SustainedBudget = {
+  totalMiB: readPositiveNumberEnv('TAO_TERMINAL_BENCH_MIB', 8, 1024),
+  chunkKiB: readPositiveNumberEnv('TAO_TERMINAL_BENCH_CHUNK_KIB', 64, 1024),
+  minWebglMBps: readPositiveNumberEnv('TAO_TERMINAL_MIN_WEBGL_MBPS', 8, 1024),
+  maxP95FrameMs: readPositiveNumberEnv('TAO_TERMINAL_MAX_P95_FRAME_MS', 33, 1000),
+  maxFramesOver16: readPositiveNumberEnv('TAO_TERMINAL_MAX_FRAMES_OVER_16', 120, 1_000_000),
+  enforce: process.env.TAO_TERMINAL_BENCH_ENFORCE === '1',
 }
 
 function packageFileUrl(packageName: string, relativePath: string): string {
@@ -22,8 +51,9 @@ function packageFileUrl(packageName: string, relativePath: string): string {
   return pathToFileURL(join(root, relativePath)).href
 }
 
-function rendererHtml(): string {
+function rendererHtml(budget: SustainedBudget): string {
   const xtermCss = packageFileUrl('@xterm/xterm', 'css/xterm.css')
+  const rendererBudget = JSON.stringify(budget)
 
   return `<!doctype html>
 <html>
@@ -42,6 +72,7 @@ function rendererHtml(): string {
       const { ipcRenderer } = require('electron')
       const { Terminal } = require('@xterm/xterm')
       const { WebglAddon } = require('@xterm/addon-webgl')
+      const sustainedBudget = ${rendererBudget}
 
       const theme = {
         background: '#151515',
@@ -108,6 +139,24 @@ function rendererHtml(): string {
         return new Promise((resolve) => requestAnimationFrame(() => resolve()))
       }
 
+      async function measureFrames(work) {
+        const frames = []
+        let running = true
+        let previous = performance.now()
+        function tick(now) {
+          frames.push(now - previous)
+          previous = now
+          if (running) requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+        try {
+          return await work(frames)
+        } finally {
+          running = false
+          await nextFrame()
+        }
+      }
+
       function writeAndPresent(term, data) {
         const start = performance.now()
         return new Promise((resolve) => {
@@ -116,6 +165,25 @@ function rendererHtml(): string {
             resolve(performance.now() - start)
           })
         })
+      }
+
+      async function writeChunksAndMeasure(term, data, chunkChars) {
+        const start = performance.now()
+        const frames = []
+        await measureFrames(async (measuredFrames) => {
+          for (let offset = 0; offset < data.length; offset += chunkChars) {
+            await new Promise((resolve) => term.write(data.slice(offset, offset + chunkChars), resolve))
+          }
+          await nextFrame()
+          frames.push(...measuredFrames)
+        })
+        const durationMs = performance.now() - start
+        return {
+          durationMs,
+          p95FrameMs: percentile(frames, 0.95),
+          maxFrameMs: frames.length === 0 ? 0 : Math.max(...frames),
+          framesOver16: frames.filter((value) => value > 16.7).length,
+        }
       }
 
       function createTerminal(mode) {
@@ -259,6 +327,25 @@ function rendererHtml(): string {
           framesOver16: repaintFrames.filter((value) => value > 16.7).length,
           webglActive,
         })
+        term.clear()
+
+        const sustained = generateData(sustainedBudget.totalMiB, 0.15, 3001)
+        const sustainedResult = await writeChunksAndMeasure(
+          term,
+          sustained,
+          sustainedBudget.chunkKiB * 1024,
+        )
+        results.push({
+          name: sustainedBudget.totalMiB + 'MiB sustained output',
+          mode,
+          bytes: sustained.length,
+          throughputMBps: sustainedBudget.totalMiB / (sustainedResult.durationMs / 1000),
+          durationMs: sustainedResult.durationMs,
+          p95FrameMs: sustainedResult.p95FrameMs,
+          maxFrameMs: sustainedResult.maxFrameMs,
+          framesOver16: sustainedResult.framesOver16,
+          webglActive,
+        })
 
         term.dispose()
         return results
@@ -315,11 +402,15 @@ function printResults(samples: readonly BenchSample[]): void {
   console.log('Tao xterm.js renderer benchmark')
   console.log('viewport: 120x40 cells, surface: 1080x720 CSS px')
   console.log('')
-  console.log('workload                      dom ms   webgl ms  speedup  webgl p95  >16ms')
+  console.log(
+    'workload                      dom ms   webgl ms  speedup  webgl MB/s  webgl p95  >16ms',
+  )
 
   for (const [name, pair] of byName) {
     if (!pair.dom || !pair.webgl) continue
     const speedup = pair.dom.durationMs / pair.webgl.durationMs
+    const throughput =
+      pair.webgl.throughputMBps == null ? '-' : pair.webgl.throughputMBps.toFixed(1)
     const p95 = pair.webgl.p95FrameMs == null ? '-' : pair.webgl.p95FrameMs.toFixed(2)
     const over16 = pair.webgl.framesOver16 == null ? '-' : String(pair.webgl.framesOver16)
     console.log(
@@ -328,6 +419,7 @@ function printResults(samples: readonly BenchSample[]): void {
         pair.dom.durationMs.toFixed(1).padStart(7),
         pair.webgl.durationMs.toFixed(1).padStart(9),
         `${speedup.toFixed(2)}x`.padStart(8),
+        throughput.padStart(10),
         p95.padStart(9),
         over16.padStart(6),
       ].join('  '),
@@ -339,6 +431,36 @@ function printResults(samples: readonly BenchSample[]): void {
     .every((sample) => sample.webglActive)
   console.log('')
   console.log(`WebGL addon active: ${webglLoaded ? 'yes' : 'no, fell back during benchmark'}`)
+  console.log(
+    `Sustained budget: ${sustainedBudget.totalMiB} MiB, ${sustainedBudget.chunkKiB} KiB chunks, ` +
+      `min ${sustainedBudget.minWebglMBps} MB/s, p95 <= ${sustainedBudget.maxP95FrameMs} ms, ` +
+      `>16ms frames <= ${sustainedBudget.maxFramesOver16}, enforce=${
+        sustainedBudget.enforce ? 'yes' : 'no'
+      }`,
+  )
+}
+
+function assertBudget(samples: readonly BenchSample[]): void {
+  if (!sustainedBudget.enforce) return
+
+  const sustained = samples.find(
+    (sample) => sample.mode === 'webgl' && sample.name.endsWith('MiB sustained output'),
+  )
+  if (!sustained) throw new Error('Missing WebGL sustained-output sample')
+  if (!sustained.webglActive) throw new Error('WebGL addon was not active during sustained output')
+  if ((sustained.throughputMBps ?? 0) < sustainedBudget.minWebglMBps) {
+    throw new Error(
+      `WebGL sustained throughput below budget: ${sustained.throughputMBps?.toFixed(1)} MB/s`,
+    )
+  }
+  if ((sustained.p95FrameMs ?? Number.POSITIVE_INFINITY) > sustainedBudget.maxP95FrameMs) {
+    throw new Error(
+      `WebGL sustained p95 frame above budget: ${sustained.p95FrameMs?.toFixed(2)} ms`,
+    )
+  }
+  if ((sustained.framesOver16 ?? Number.POSITIVE_INFINITY) > sustainedBudget.maxFramesOver16) {
+    throw new Error(`WebGL sustained >16ms frames above budget: ${String(sustained.framesOver16)}`)
+  }
 }
 
 async function main(): Promise<void> {
@@ -357,9 +479,12 @@ async function main(): Promise<void> {
   })
 
   const resultPromise = waitForResults()
-  await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(rendererHtml())}`)
+  await win.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(rendererHtml(sustainedBudget))}`,
+  )
   const results = await resultPromise
   printResults(results)
+  assertBudget(results)
 
   win.destroy()
   app.quit()

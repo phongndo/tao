@@ -1,6 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const adapter_output_max = 64 * 1024;
+const adapter_command_timeout_ms = 3000;
+const adapter_kill_grace_ms = 250;
 
 const known_providers = [_]Provider{ .pi, .codex, .claude };
 
@@ -78,6 +81,15 @@ pub fn detectSessionAlloc(
     adapters_dir: []const u8,
     context: Context,
 ) !?Detection {
+    switch (adapterDirTrustStatus(adapters_dir)) {
+        .trusted => {},
+        .missing => return detectSessionHeuristicAlloc(allocator, context.argv),
+        .untrusted => {
+            std.log.warn("agent adapter directory is not trusted; falling back to argv heuristics", .{});
+            return detectSessionHeuristicAlloc(allocator, context.argv);
+        },
+    }
+
     for (known_providers) |provider| {
         const script_path = try adapterScriptPathAlloc(allocator, adapters_dir, provider);
         defer allocator.free(script_path);
@@ -268,6 +280,18 @@ fn adapterScriptPathAlloc(allocator: std.mem.Allocator, adapters_dir: []const u8
     return try std.fs.path.join(allocator, &.{ adapters_dir, file_name });
 }
 
+fn isAllowedAdapterRunner(runner: []const u8) bool {
+    const basename = std.fs.path.basename(runner);
+    return std.mem.eql(u8, basename, "node") or std.mem.eql(u8, basename, "tsx");
+}
+
+fn adapterRunnerOrDefault(runner: ?[]const u8, default_runner: []const u8) ?[]const u8 {
+    const value = runner orelse return default_runner;
+    if (value.len == 0) return default_runner;
+    if (!isAllowedAdapterRunner(value)) return null;
+    return value;
+}
+
 fn runAdapterCommandAlloc(
     allocator: std.mem.Allocator,
     script_path: []const u8,
@@ -277,6 +301,10 @@ fn runAdapterCommandAlloc(
     native_session_id: ?[]const u8,
 ) !?CommandResponse {
     if (!fileExists(script_path)) return null;
+    if (!isTrustedAdapterScript(script_path)) {
+        std.log.warn("agent adapter script is not trusted for {s}; skipping", .{provider.text()});
+        return null;
+    }
 
     const request_json = try adapterRequestJsonAlloc(allocator, command, provider, context, native_session_id);
     defer allocator.free(request_json);
@@ -287,16 +315,46 @@ fn runAdapterCommandAlloc(
     };
     defer if (runner) |value| allocator.free(value);
     const default_runner = if (std.mem.endsWith(u8, script_path, ".ts")) "tsx" else "node";
-    const runner_exe = if (runner) |value| if (value.len > 0) value else default_runner else default_runner;
+    const runner_exe = adapterRunnerOrDefault(runner, default_runner) orelse {
+        std.log.warn("ignoring unsafe TAOD_ADAPTER_RUNNER value for {s}", .{provider.text()});
+        return null;
+    };
+
+    return try runAdapterCommandWithRunnerAlloc(
+        allocator,
+        runner_exe,
+        script_path,
+        provider,
+        context,
+        command,
+        native_session_id,
+        adapter_command_timeout_ms,
+    );
+}
+
+fn runAdapterCommandWithRunnerAlloc(
+    allocator: std.mem.Allocator,
+    runner_exe: []const u8,
+    script_path: []const u8,
+    provider: Provider,
+    context: Context,
+    command: []const u8,
+    native_session_id: ?[]const u8,
+    timeout_ms: i64,
+) !?CommandResponse {
+    if (!fileExists(script_path)) return null;
+
+    const request_json = try adapterRequestJsonAlloc(allocator, command, provider, context, native_session_id);
+    defer allocator.free(request_json);
 
     const child_argv = [_][]const u8{ runner_exe, script_path, request_json };
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &child_argv,
-        .max_output_bytes = adapter_output_max,
-    }) catch |err| switch (err) {
+    const result = runAdapterProcessWithTimeoutAlloc(allocator, &child_argv, timeout_ms) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.warn("agent adapter runner not found for {s}: {s}", .{ provider.text(), runner_exe });
+            return null;
+        },
+        error.AdapterTimedOut => {
+            std.log.warn("agent adapter {s} command {s} timed out after {d}ms", .{ provider.text(), command, timeout_ms });
             return null;
         },
         else => return err,
@@ -306,7 +364,7 @@ fn runAdapterCommandAlloc(
 
     switch (result.term) {
         .Exited => |code| if (code != 0) {
-            std.log.warn("agent adapter {s} command {s} exited with code {d}: {s}", .{ provider.text(), command, code, result.stderr });
+            std.log.warn("agent adapter {s} command {s} exited with code {d}; stderr redacted ({d} bytes)", .{ provider.text(), command, code, result.stderr.len });
             return null;
         },
         else => |term| {
@@ -317,6 +375,169 @@ fn runAdapterCommandAlloc(
 
     const line = firstJsonLine(result.stdout) orelse return null;
     return try parseCommandResponseAlloc(allocator, line);
+}
+
+const AdapterDirTrust = enum {
+    missing,
+    untrusted,
+    trusted,
+};
+
+fn adapterDirTrustStatus(path: []const u8) AdapterDirTrust {
+    var dir = std.fs.cwd().openDir(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        else => return .untrusted,
+    };
+    dir.close();
+    return if (pathModeIsNotGroupOrOtherWritable(path)) .trusted else .untrusted;
+}
+
+fn isTrustedAdapterScript(path: []const u8) bool {
+    const file = std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch return false;
+    file.close();
+    return pathModeIsNotGroupOrOtherWritable(path);
+}
+
+fn pathModeIsNotGroupOrOtherWritable(path: []const u8) bool {
+    const stat = std.fs.cwd().statFile(path) catch return false;
+    return (stat.mode & @as(std.fs.File.Mode, 0o022)) == 0;
+}
+
+const AdapterChildResult = struct {
+    done: std.atomic.Value(bool) = .init(false),
+    term: ?std.process.Child.Term = null,
+    stdout: ?[]u8 = null,
+    stderr: ?[]u8 = null,
+    err: ?anyerror = null,
+
+    fn deinit(self: *AdapterChildResult, allocator: std.mem.Allocator) void {
+        if (self.stdout) |value| allocator.free(value);
+        if (self.stderr) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
+fn collectAdapterChild(
+    child: *std.process.Child,
+    allocator: std.mem.Allocator,
+    result: *AdapterChildResult,
+) void {
+    collectAdapterChildFallible(child, allocator, result) catch |err| {
+        result.err = err;
+    };
+    result.done.store(true, .release);
+}
+
+fn collectAdapterChildFallible(
+    child: *std.process.Child,
+    allocator: std.mem.Allocator,
+    result: *AdapterChildResult,
+) !void {
+    var stdout: std.ArrayList(u8) = .empty;
+    defer stdout.deinit(allocator);
+    var stderr: std.ArrayList(u8) = .empty;
+    defer stderr.deinit(allocator);
+
+    child.collectOutput(allocator, &stdout, &stderr, adapter_output_max) catch |err| {
+        _ = child.kill() catch {};
+        return err;
+    };
+
+    result.stdout = try stdout.toOwnedSlice(allocator);
+    errdefer if (result.stdout) |value| {
+        allocator.free(value);
+        result.stdout = null;
+    };
+    result.stderr = try stderr.toOwnedSlice(allocator);
+    errdefer if (result.stderr) |value| {
+        allocator.free(value);
+        result.stderr = null;
+    };
+    result.term = try child.wait();
+}
+
+fn runAdapterProcessWithTimeoutAlloc(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    timeout_ms: i64,
+) !std.process.Child.RunResult {
+    std.debug.assert(timeout_ms > 0);
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+    errdefer {
+        _ = child.kill() catch {};
+    }
+
+    var result = AdapterChildResult{};
+
+    const thread = try std.Thread.spawn(.{}, collectAdapterChild, .{ &child, allocator, &result });
+    const deadline_ms = std.time.milliTimestamp() + timeout_ms;
+    var timed_out = false;
+    while (!result.done.load(.acquire)) {
+        if (std.time.milliTimestamp() >= deadline_ms) {
+            timed_out = true;
+            terminateTimedOutAdapterChild(&child, &result);
+            break;
+        }
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    thread.join();
+
+    if (timed_out) {
+        result.deinit(allocator);
+        return error.AdapterTimedOut;
+    }
+    if (result.err) |err| {
+        result.deinit(allocator);
+        return err;
+    }
+
+    const stdout = result.stdout orelse return error.ProcessTerminated;
+    errdefer allocator.free(stdout);
+    const stderr = result.stderr orelse {
+        allocator.free(stdout);
+        return error.ProcessTerminated;
+    };
+    errdefer allocator.free(stderr);
+    const term = result.term orelse {
+        allocator.free(stdout);
+        allocator.free(stderr);
+        return error.ProcessTerminated;
+    };
+    result.stdout = null;
+    result.stderr = null;
+    return .{
+        .term = term,
+        .stdout = stdout,
+        .stderr = stderr,
+    };
+}
+
+fn terminateTimedOutAdapterChild(child: *std.process.Child, result: *AdapterChildResult) void {
+    signalAdapterChild(child, .term);
+    const deadline_ms = std.time.milliTimestamp() + adapter_kill_grace_ms;
+    while (!result.done.load(.acquire) and std.time.milliTimestamp() < deadline_ms) {
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    if (!result.done.load(.acquire)) signalAdapterChild(child, .kill);
+}
+
+const AdapterSignal = enum { term, kill };
+
+fn signalAdapterChild(child: *std.process.Child, signal: AdapterSignal) void {
+    if (builtin.os.tag == .windows) {
+        _ = child.kill() catch {};
+        return;
+    }
+    switch (signal) {
+        .term => std.posix.kill(child.id, std.posix.SIG.TERM) catch {},
+        .kill => std.posix.kill(child.id, std.posix.SIG.KILL) catch {},
+    }
 }
 
 fn parseCommandResponseAlloc(allocator: std.mem.Allocator, line: []const u8) !CommandResponse {
@@ -437,6 +658,74 @@ test "agent adapter request and response JSON are stable" {
     try std.testing.expect(response.detected == true);
     try std.testing.expectEqualStrings("native-1", response.native_session_id.?);
     try std.testing.expectEqualStrings("[\"pi\",\"--session\",\"native-1\"]", response.argv_json.?);
+}
+
+test "agent adapter runner allowlist rejects shell-shaped env runners" {
+    try std.testing.expectEqualStrings("tsx", adapterRunnerOrDefault(null, "tsx").?);
+    try std.testing.expectEqualStrings("node", adapterRunnerOrDefault("", "node").?);
+    try std.testing.expectEqualStrings("/usr/local/bin/tsx", adapterRunnerOrDefault("/usr/local/bin/tsx", "node").?);
+    try std.testing.expect(adapterRunnerOrDefault("sh", "node") == null);
+    try std.testing.expect(adapterRunnerOrDefault("node --eval", "node") == null);
+}
+
+test "agent adapter ignores group-writable adapter directory" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const script =
+        \\const request = JSON.parse(process.argv[2])
+        \\if (request.command === 'detect') {
+        \\  console.log(JSON.stringify({ detected: true, nativeSessionId: 'untrusted-native' }))
+        \\}
+    ;
+    try tmp.dir.writeFile(.{ .sub_path = "pi.ts", .data = script });
+
+    const adapters_dir = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(adapters_dir);
+    try chmodPathForTest(std.testing.allocator, adapters_dir, 0o770);
+
+    const detection = try detectSessionAlloc(std.testing.allocator, adapters_dir, .{
+        .terminal_session_id = "s",
+        .argv = &[_][]const u8{"unknown-agent"},
+    });
+    try std.testing.expect(detection == null);
+}
+
+test "agent adapter command timeout returns no detection" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "hang.js", .data = 
+        \\setInterval(() => {}, 1000)
+    });
+
+    const script_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/hang.js", .{tmp.sub_path});
+    defer std.testing.allocator.free(script_path);
+
+    const started_at = std.time.milliTimestamp();
+    const response = try runAdapterCommandWithRunnerAlloc(
+        std.testing.allocator,
+        "node",
+        script_path,
+        .pi,
+        .{
+            .terminal_session_id = "session-timeout",
+            .argv = &.{"pi"},
+        },
+        "detect",
+        null,
+        100,
+    );
+    const elapsed_ms = std.time.milliTimestamp() - started_at;
+
+    try std.testing.expect(response == null);
+    try std.testing.expect(elapsed_ms < 3000);
+}
+
+fn chmodPathForTest(allocator: std.mem.Allocator, path: []const u8, mode: std.c.mode_t) !void {
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+    if (std.c.chmod(path_z.ptr, mode) != 0) return error.ChmodFailed;
 }
 
 test "agent adapter external detection falls back to argv heuristics" {

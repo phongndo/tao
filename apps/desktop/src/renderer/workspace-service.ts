@@ -184,7 +184,7 @@ function notifyResource(entry: WorkspaceResourceEntry<unknown>) {
   for (const listener of entry.listeners) listener()
 }
 
-function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
+export function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
   const entries = new Map<string, WorkspaceResourceEntry<unknown>>()
   const invalidSnapshots = new Map<string, WorkspaceResourceSnapshot<never>>()
 
@@ -258,7 +258,7 @@ function createWorkspaceMetadataCache(): typeof WorkspaceMetadataCache.Service {
     return Effect.gen(function* () {
       const decodedPath = yield* decodeWorkspacePathFromUnknown(workspacePath)
       const entry = entryFor<A>(kind, decodedPath)
-      if (entry.inFlight) return
+      if (entry.inFlight && !options?.force) return
 
       const now = Date.now()
       if (

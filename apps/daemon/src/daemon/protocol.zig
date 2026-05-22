@@ -66,3 +66,39 @@ pub fn notFound(allocator: std.mem.Allocator, request: rpc.ControlRequestJson) !
         .error_message = "session not found",
     });
 }
+
+fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    const path = try std.fmt.allocPrint(
+        allocator,
+        "../../packages/shared/fixtures/taod-protocol/{s}",
+        .{name},
+    );
+    defer allocator.free(path);
+    return std.fs.cwd().readFileAlloc(allocator, path, 4096);
+}
+
+test "session response matches shared golden fixture" {
+    const allocator = std.testing.allocator;
+    var manager = session.Manager.init(allocator);
+    defer manager.deinit();
+
+    const item = try manager.create(.{
+        .session_id = "session-fixture",
+        .terminal_id = "terminal-fixture",
+        .workspace_id = "workspace-fixture",
+        .cols = 80,
+        .rows = 24,
+        .cwd = "/tmp/tao",
+    });
+
+    const json = try sessionResponse(allocator, .{
+        .id = "session-response-fixture",
+        .type = "create",
+    }, item, .{});
+    defer allocator.free(json);
+
+    const golden = try readProtocolFixtureAlloc(allocator, "control-session-response.ndjson");
+    defer allocator.free(golden);
+
+    try std.testing.expectEqualStrings(golden, json);
+}

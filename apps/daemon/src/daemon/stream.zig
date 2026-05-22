@@ -168,6 +168,7 @@ pub fn Context(comptime Daemon: type) type {
 
             switch (frame.kind) {
                 .input => {
+                    daemon.recordStreamInputFrame(frame.payload.len);
                     if (daemon.persistence.enabled and daemon.persistence.persist_input) {
                         if (item.event_log_path) |path| {
                             _ = event_log.appendInput(daemon.allocator, path, &item.last_seq, frame.payload) catch |err| {
@@ -210,10 +211,15 @@ pub fn Context(comptime Daemon: type) type {
             item.assertInvariants();
 
             const daemon = self.daemon;
+            if (kind == .output) daemon.recordStreamOutputFrame(payload.len);
             if (item.subscribers.items.len == 0) {
-                if (kind == .output) item.bufferPendingOutput(daemon.allocator, seq, payload) catch |err| {
-                    std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, err });
-                };
+                if (kind == .output) {
+                    const buffer_result = item.bufferPendingOutput(daemon.allocator, seq, payload) catch |err| {
+                        std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, err });
+                        return;
+                    };
+                    daemon.recordPendingOutputBufferResult(buffer_result);
+                }
                 return;
             }
 
@@ -234,11 +240,16 @@ pub fn Context(comptime Daemon: type) type {
                 const fd = item.subscribers.items[index];
                 writeAllFdNonBlocking(fd, encoded) catch |err| {
                     std.log.warn("dropping slow taod subscriber for {s}: {t}", .{ item.id, err });
+                    daemon.recordSlowSubscriberDrop();
                     self.removeSubscriberAtLocked(item, index);
                     if (item.subscribers.items.len == 0) {
-                        if (kind == .output) item.bufferPendingOutput(daemon.allocator, seq, payload) catch |buffer_err| {
-                            std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, buffer_err });
-                        };
+                        if (kind == .output) {
+                            const buffer_result = item.bufferPendingOutput(daemon.allocator, seq, payload) catch |buffer_err| {
+                                std.log.warn("failed to buffer pending output for {s}: {t}", .{ item.id, buffer_err });
+                                return;
+                            };
+                            daemon.recordPendingOutputBufferResult(buffer_result);
+                        }
                         return;
                     }
                     continue;

@@ -12,6 +12,7 @@ import {
   type PtyClientMessage,
   PtyClientMessageSchema,
   type PtyServiceMessage,
+  type TaodPtyBridgeDiagnostics,
 } from './pty-protocol'
 import type { SettingsData } from '@tao/shared/session'
 import { TaodClient, type TaodControlResponse, type TaodSessionStream } from './taod-client'
@@ -168,6 +169,18 @@ export class TaodPtyBridge {
   private readonly sessions = new Map<string, BridgeSession>()
   private readonly supersededAttachStreams = new WeakSet<TaodSessionStream>()
   private readonly cleanupTimer: ReturnType<typeof setInterval>
+  private messagesPostedTotal = 0
+  private dataMessagesPostedTotal = 0
+  private dataCharsPostedTotal = 0
+  private snapshotMessagesPostedTotal = 0
+  private snapshotBytesPostedTotal = 0
+  private messagesDroppedNoPortTotal = 0
+  private postFailuresTotal = 0
+  private lastMessageType: string | undefined
+  private lastDataChars: number | undefined
+  private lastPostedAt: number | undefined
+  private lastFailureAt: number | undefined
+  private lastError: string | undefined
 
   constructor(options: TaodPtyBridgeOptions = {}) {
     this.client = options.client ?? new TaodClient()
@@ -219,7 +232,32 @@ export class TaodPtyBridge {
     this.sessions.clear()
     this.port?.close()
     this.port = null
-    if (this.ownsClient) this.client.dispose()
+    if (this.ownsClient) void this.client.dispose()
+  }
+
+  getDiagnostics(): TaodPtyBridgeDiagnostics {
+    let activeStreams = 0
+    for (const session of this.sessions.values()) {
+      if (session.stream) activeStreams += 1
+    }
+
+    return {
+      portConnected: this.port !== null,
+      activeSessions: this.sessions.size,
+      activeStreams,
+      messagesPostedTotal: this.messagesPostedTotal,
+      dataMessagesPostedTotal: this.dataMessagesPostedTotal,
+      dataCharsPostedTotal: this.dataCharsPostedTotal,
+      snapshotMessagesPostedTotal: this.snapshotMessagesPostedTotal,
+      snapshotBytesPostedTotal: this.snapshotBytesPostedTotal,
+      messagesDroppedNoPortTotal: this.messagesDroppedNoPortTotal,
+      postFailuresTotal: this.postFailuresTotal,
+      ...(this.lastMessageType ? { lastMessageType: this.lastMessageType } : {}),
+      ...(this.lastDataChars !== undefined ? { lastDataChars: this.lastDataChars } : {}),
+      ...(this.lastPostedAt !== undefined ? { lastPostedAt: this.lastPostedAt } : {}),
+      ...(this.lastFailureAt !== undefined ? { lastFailureAt: this.lastFailureAt } : {}),
+      ...(this.lastError ? { lastError: this.lastError } : {}),
+    }
   }
 
   private async handleClientMessage(message: PtyClientMessage): Promise<void> {
@@ -566,9 +604,31 @@ export class TaodPtyBridge {
   }
 
   private post(message: PtyServiceMessage): void {
+    const port = this.port
+    if (!port) {
+      this.messagesDroppedNoPortTotal += 1
+      this.lastMessageType = message.type
+      return
+    }
+
     try {
-      this.port?.postMessage(message)
-    } catch {
+      port.postMessage(message)
+      this.messagesPostedTotal += 1
+      this.lastMessageType = message.type
+      this.lastPostedAt = Date.now()
+      if (message.type === 'data') {
+        this.dataMessagesPostedTotal += 1
+        this.dataCharsPostedTotal += message.data.length
+        this.lastDataChars = message.data.length
+      } else if (message.type === 'snapshot') {
+        this.snapshotMessagesPostedTotal += 1
+        this.snapshotBytesPostedTotal += message.dataBase64.length
+      }
+    } catch (error) {
+      this.postFailuresTotal += 1
+      this.lastFailureAt = Date.now()
+      this.lastMessageType = message.type
+      this.lastError = normalizeError(error).message
       this.port = null
     }
   }

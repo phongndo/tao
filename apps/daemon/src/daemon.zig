@@ -60,6 +60,22 @@ pub const Daemon = struct {
     mutex: std.Thread.Mutex = .{},
     active_control_connections: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     active_session_readers: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    stream_input_frames_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_input_bytes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_output_frames_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_output_bytes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_slow_subscriber_drops_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_pending_output_dropped_frames_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_pending_output_dropped_bytes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    stream_pending_output_truncated_bytes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    control_request_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    control_request_failure_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    last_control_request_type: rpc.RequestType = .unknown,
+    last_control_trace_id: [160]u8 = [_]u8{0} ** 160,
+    last_control_trace_id_len: usize = 0,
+    last_control_duration_ms: u64 = 0,
+    last_control_ok: bool = false,
+    last_control_recorded_at_ms: u64 = 0,
 
     const ProcessContext = process.Context(*Daemon);
     const StreamContext = stream_mod.Context(*Daemon);
@@ -140,6 +156,35 @@ pub const Daemon = struct {
         return server.handleStream(self, stream);
     }
 
+    pub fn recordControlDiagnosticsLocked(self: *Daemon, request_type: rpc.RequestType, trace_id: ?[]const u8, duration_ms: u64, ok: bool) void {
+        _ = self.control_request_count.fetchAdd(1, .monotonic);
+        if (!ok) _ = self.control_request_failure_count.fetchAdd(1, .monotonic);
+        self.last_control_request_type = request_type;
+        if (trace_id) |trace| {
+            const trace_len = @min(trace.len, self.last_control_trace_id.len);
+            @memcpy(self.last_control_trace_id[0..trace_len], trace[0..trace_len]);
+            self.last_control_trace_id_len = trace_len;
+        } else {
+            self.last_control_trace_id_len = 0;
+        }
+        self.last_control_duration_ms = duration_ms;
+        self.last_control_ok = ok;
+        const recorded_at = std.time.milliTimestamp();
+        self.last_control_recorded_at_ms = if (recorded_at > 0) @intCast(recorded_at) else 0;
+    }
+
+    pub fn controlDiagnosticsLocked(self: *Daemon) rpc.ControlDiagnostics {
+        return .{
+            .request_count = self.control_request_count.load(.monotonic),
+            .failure_count = self.control_request_failure_count.load(.monotonic),
+            .last_request_type = if (self.last_control_recorded_at_ms == 0) null else @tagName(self.last_control_request_type),
+            .last_trace_id = if (self.last_control_trace_id_len == 0) null else self.last_control_trace_id[0..self.last_control_trace_id_len],
+            .last_duration_ms = if (self.last_control_recorded_at_ms == 0) null else self.last_control_duration_ms,
+            .last_ok = if (self.last_control_recorded_at_ms == 0) null else self.last_control_ok,
+            .last_recorded_at_ms = if (self.last_control_recorded_at_ms == 0) null else self.last_control_recorded_at_ms,
+        };
+    }
+
     pub fn handleCreateLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         return control.handleCreateLocked(self, allocator, request);
     }
@@ -192,8 +237,48 @@ pub const Daemon = struct {
         return workspace_mod.handleReorderLocked(self, allocator, request);
     }
 
+    pub fn handleWorkspaceBranchLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleBranchLocked(self, allocator, request);
+    }
+
     pub fn handleWorkspaceBranchesLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         return workspace_mod.handleBranchesLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceGitWorktreesLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleGitWorktreesLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceStatusLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleStatusLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceFileTreeLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleFileTreeLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceDiffLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleDiffLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceStagePathLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleStagePathLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceUnstagePathLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleUnstagePathLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspaceRevertPathLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleRevertPathLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspacePortsLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handlePortsLocked(self, allocator, request);
+    }
+
+    pub fn handleWorkspacePullRequestLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handlePullRequestLocked(self, allocator, request);
     }
 
     pub fn handleWorktreeListLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -466,6 +551,62 @@ pub const Daemon = struct {
         std.debug.assert(previous <= limits.control_connections_max);
     }
 
+    pub fn recordStreamInputFrame(self: *Daemon, payload_len: usize) void {
+        _ = self.stream_input_frames_total.fetchAdd(1, .monotonic);
+        _ = self.stream_input_bytes_total.fetchAdd(@intCast(payload_len), .monotonic);
+    }
+
+    pub fn recordStreamOutputFrame(self: *Daemon, payload_len: usize) void {
+        _ = self.stream_output_frames_total.fetchAdd(1, .monotonic);
+        _ = self.stream_output_bytes_total.fetchAdd(@intCast(payload_len), .monotonic);
+    }
+
+    pub fn recordSlowSubscriberDrop(self: *Daemon) void {
+        _ = self.stream_slow_subscriber_drops_total.fetchAdd(1, .monotonic);
+    }
+
+    pub fn recordPendingOutputBufferResult(self: *Daemon, result: session.PendingOutputBufferResult) void {
+        if (result.dropped_frames > 0) {
+            _ = self.stream_pending_output_dropped_frames_total.fetchAdd(result.dropped_frames, .monotonic);
+        }
+        if (result.dropped_bytes > 0) {
+            _ = self.stream_pending_output_dropped_bytes_total.fetchAdd(result.dropped_bytes, .monotonic);
+        }
+        if (result.truncated_bytes > 0) {
+            _ = self.stream_pending_output_truncated_bytes_total.fetchAdd(result.truncated_bytes, .monotonic);
+        }
+    }
+
+    pub fn streamDiagnosticsLocked(self: *Daemon) rpc.StreamDiagnostics {
+        var active_subscribers: usize = 0;
+        var pending_output_sessions: usize = 0;
+        var pending_output_frames: usize = 0;
+        var pending_output_bytes: usize = 0;
+
+        for (self.sessions.sessions.items) |*item| {
+            active_subscribers += item.subscribers.items.len;
+            if (item.pending_output.items.len == 0) continue;
+            pending_output_sessions += 1;
+            pending_output_frames += item.pending_output.items.len;
+            pending_output_bytes += item.pending_output_bytes;
+        }
+
+        return .{
+            .active_subscribers = active_subscribers,
+            .pending_output_sessions = pending_output_sessions,
+            .pending_output_frames = pending_output_frames,
+            .pending_output_bytes = pending_output_bytes,
+            .input_frames_total = self.stream_input_frames_total.load(.monotonic),
+            .input_bytes_total = self.stream_input_bytes_total.load(.monotonic),
+            .output_frames_total = self.stream_output_frames_total.load(.monotonic),
+            .output_bytes_total = self.stream_output_bytes_total.load(.monotonic),
+            .slow_subscriber_drops_total = self.stream_slow_subscriber_drops_total.load(.monotonic),
+            .pending_output_dropped_frames_total = self.stream_pending_output_dropped_frames_total.load(.monotonic),
+            .pending_output_dropped_bytes_total = self.stream_pending_output_dropped_bytes_total.load(.monotonic),
+            .pending_output_truncated_bytes_total = self.stream_pending_output_truncated_bytes_total.load(.monotonic),
+        };
+    }
+
     pub fn writePidFile(self: *Daemon) !void {
         return server.writePidFile(self);
     }
@@ -534,6 +675,122 @@ test "daemon control RPC creates and updates sessions" {
     defer std.testing.allocator.free(protocol_created);
 
     try std.testing.expect(daemon.sessions.find("s2") != null);
+}
+
+test "daemon control RPC ping reports protocol identity" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"ping-1","type":"ping"}
+    );
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"protocol_version\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"daemon_version\":\"1.0.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"capabilities\":[\"sessions-v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"stream_diagnostics\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_bytes\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"control_diagnostics\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"request_count\":0") != null);
+}
+
+test "daemon control diagnostics report last traced request" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const configured = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"cfg-1","traceId":"trace-cfg-1","type":"configurePersistence","enabled":true,"persistInput":false}
+    );
+    defer std.testing.allocator.free(configured);
+
+    const response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"ping-1","type":"ping"}
+    );
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"control_diagnostics\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"request_count\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"failure_count\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"last_request_type\":\"configure_persistence\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"last_trace_id\":\"trace-cfg-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"last_ok\":true") != null);
+}
+
+test "daemon stream diagnostics report output backlog and totals" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const item = try daemon.sessions.create(.{
+        .session_id = "diag-session",
+        .terminal_id = "diag-terminal",
+        .workspace_id = "workspace-1",
+        .cols = 80,
+        .rows = 24,
+        .cwd = null,
+        .argv = &.{},
+    });
+
+    try daemon.broadcastStreamFrameLocked(item, .output, 1, "hello");
+
+    const response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"ping-1","type":"ping"}
+    );
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_sessions\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_frames\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_bytes\":5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"output_frames_total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"output_bytes_total\":5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_dropped_frames_total\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_dropped_bytes_total\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_truncated_bytes_total\":0") != null);
+}
+
+test "daemon stream diagnostics report pending output truncation" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const item = try daemon.sessions.create(.{
+        .session_id = "truncated-session",
+        .terminal_id = "truncated-terminal",
+        .workspace_id = "workspace-1",
+        .cols = 80,
+        .rows = 24,
+        .cwd = null,
+        .argv = &.{},
+    });
+
+    const payload = try std.testing.allocator.alloc(u8, session.max_pending_output_bytes + 7);
+    defer std.testing.allocator.free(payload);
+    @memset(payload, 'x');
+
+    try daemon.broadcastStreamFrameLocked(item, .output, 1, payload);
+
+    const response = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"ping-1","type":"ping"}
+    );
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_frames\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_bytes\":1048576") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"output_frames_total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"output_bytes_total\":1048583") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"pending_output_truncated_bytes_total\":7") != null);
 }
 
 test "daemon control RPC rejects session creation without workspace" {
@@ -650,6 +907,42 @@ test "daemon drops failed stream subscribers without blocking pending output" {
     }
     try std.testing.expectEqual(@as(usize, 2), item.pending_output.items.len);
     try std.testing.expectEqualStrings("detached output", item.pending_output.items[1].payload);
+}
+
+test "daemon synthetic exit clears PTY ownership before exited transition" {
+    var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
+    defer config.deinit(std.testing.allocator);
+
+    var daemon = Daemon.init(std.testing.allocator, config);
+    defer daemon.deinit();
+
+    const created = try daemon.handleControlPayload(std.testing.allocator,
+        \\{"id":"1","method":"create","session_id":"exit-session","terminal_id":"exit-terminal","workspace_id":"workspace-1","cols":80,"rows":24}
+    );
+    defer std.testing.allocator.free(created);
+
+    const pipe_fds = try std.posix.pipe();
+    defer std.posix.close(pipe_fds[1]);
+
+    const item = daemon.sessions.find("exit-session").?;
+    {
+        daemon.lock();
+        defer daemon.unlock();
+        item.pty_child = .{
+            .pid = 0,
+            .master_fd = pipe_fds[0],
+            .cols = 80,
+            .rows = 24,
+        };
+        item.reader_started = true;
+        item.assertInvariants();
+    }
+
+    try std.testing.expect(try daemon.markExitedAndBroadcast("exit-session", -1, 0));
+    try std.testing.expectEqual(session.Status.exited, item.status);
+    try std.testing.expect(item.pty_child == null);
+    try std.testing.expect(!item.reader_started);
+    item.assertInvariants();
 }
 
 test "daemon falls back to saved command when agent resume metadata is corrupt" {

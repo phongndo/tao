@@ -1,4 +1,5 @@
 import {
+  FiAlertTriangle,
   FiChevronsDown,
   FiChevronLeft,
   FiChevronRight,
@@ -31,18 +32,19 @@ import {
   memo,
   type ReactNode,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react'
 import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
-import { parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs'
 import { FileDiff } from '@pierre/diffs/react'
 import {
   createFileTreeIconResolver,
   FileTree as PierreFileTree,
   getBuiltInSpriteSheet,
+  prepareFileTreeInput,
 } from '@pierre/trees'
 import type { FileTreeDirectoryHandle, GitStatusEntry } from '@pierre/trees'
 import type { AppCommand } from '@tao/shared/app-command'
@@ -61,7 +63,14 @@ import { runRendererEffect } from '../runtime'
 import { WorkspaceMetadataCache } from '../workspace-service'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
+import { getDiffFileName, type ParsedDiffFile, type ParsedDiffResult } from '../diff-parser'
+import { parseDiffFilesOffThread } from '../diff-parser-client'
+import { markRendererEvent } from '../trace'
 import type { WorkspaceFileTree, WorkspaceRecord } from '@tao/shared/workspace'
+import type {
+  TaodLifecycleDiagnostics,
+  TaodLifecycleRecoveryAction,
+} from '@tao/shared/taod-protocol'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
 const SIDEBAR_EXPANDED_MIN_WIDTH = 220
@@ -75,6 +84,10 @@ const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
 const EMPTY_FILE_TREE: WorkspaceFileTree = { paths: [], gitStatus: [] }
 const DEFAULT_DIFF_COMPARE_BRANCH = 'main'
 const DIFF_FOCUS_FILE_EVENT = 'tao:focus-diff-file'
+const DIFF_AUTO_COLLAPSE_FILE_COUNT = 20
+const DIFF_AUTO_COLLAPSE_PATCH_CHARS = 1024 * 1024
+const DIFF_MAX_EXPANDED_FILE_BODIES = 12
+const TAOD_DIAGNOSTICS_POLL_MS = 5000
 const FILE_TREE_ICONS = { set: 'complete', colored: true } as const
 const FILE_TREE_ICON_SPRITE = getBuiltInSpriteSheet(FILE_TREE_ICONS.set)
 const FILE_TREE_ICON_RESOLVER = createFileTreeIconResolver(FILE_TREE_ICONS)
@@ -187,13 +200,6 @@ type PaneRect = PaneBounds & {
 type RightSidebarView = 'files' | 'changes'
 type DiffViewMode = 'unified' | 'split'
 type ChangedFilesViewMode = 'tree' | 'folders'
-type ParsedDiffFile = {
-  id: string
-  path: string
-  fileDiff: FileDiffMetadata
-  additions: number
-  deletions: number
-}
 
 type DiffFileTreeNode = {
   name: string
@@ -220,6 +226,18 @@ type ChangedFilesSection = {
   label: string
   files: ParsedDiffFile[]
   error: string | null
+}
+
+type DaemonRecoveryNotice = {
+  tone: 'info' | 'warning' | 'error'
+  label: string
+  title: string
+}
+
+type DaemonRecoveryPanelRow = {
+  label: string
+  value: string
+  tone?: 'error'
 }
 
 type DiffPanelErrorBoundaryProps = {
@@ -519,6 +537,133 @@ function activeContextBranchName(
   return worktree?.branch ?? workspace.branch ?? workspace.name
 }
 
+function daemonRecoveryNotice(
+  diagnostics: TaodLifecycleDiagnostics | null,
+  error: string | null,
+): DaemonRecoveryNotice | null {
+  if (error) {
+    return {
+      tone: 'error',
+      label: 'Daemon diagnostics unavailable',
+      title: `Daemon diagnostics unavailable: ${error}`,
+    }
+  }
+  if (!diagnostics || diagnostics.recoveryAction === 'none') return null
+
+  const base = `state=${diagnostics.state}, owner=${diagnostics.daemonOwnership}, action=${diagnostics.recoveryAction}`
+  switch (diagnostics.recoveryAction) {
+    case 'reuse-external-daemon':
+      return {
+        tone: 'info',
+        label: 'Using existing daemon',
+        title: `Using existing daemon; ${base}`,
+      }
+    case 'keep-detached-daemon':
+      return {
+        tone: 'info',
+        label: 'Detached daemon preserved',
+        title: `Detached daemon preserved; ${base}`,
+      }
+    case 'wait-for-start':
+    case 'start-daemon':
+      return {
+        tone: 'warning',
+        label: 'Daemon starting',
+        title: `Daemon starting; ${base}`,
+      }
+    case 'clear-stale-socket-and-start':
+      return {
+        tone: 'warning',
+        label: 'Recovering stale daemon socket',
+        title: `Recovering stale daemon socket; ${base}`,
+      }
+    case 'restart-owned-daemon':
+      return {
+        tone: 'warning',
+        label: 'Restarting daemon',
+        title: `Restarting daemon; ${base}`,
+      }
+    case 'replace-incompatible-daemon':
+      return {
+        tone: 'error',
+        label: 'Daemon version mismatch',
+        title: `Daemon version mismatch; ${base}`,
+      }
+  }
+}
+
+function formatDiagnosticsMs(value: number | undefined): string {
+  return typeof value === 'number' ? `${Math.round(value)} ms` : 'none'
+}
+
+function formatDiagnosticsPid(diagnostics: TaodLifecycleDiagnostics | null): string {
+  if (!diagnostics) return 'none'
+  if (typeof diagnostics.spawnedPid === 'number') return String(diagnostics.spawnedPid)
+  if (typeof diagnostics.releasedDetachedPid === 'number') {
+    return `${diagnostics.releasedDetachedPid} released`
+  }
+  return diagnostics.daemonOwnership === 'external' ? 'external' : 'none'
+}
+
+function daemonRecoveryRows(
+  diagnostics: TaodLifecycleDiagnostics | null,
+  error: string | null,
+  recoveryError: string | null,
+): DaemonRecoveryPanelRow[] {
+  if (!diagnostics) {
+    return [
+      {
+        label: 'Diagnostics',
+        value: recoveryError ?? error ?? 'unavailable',
+        tone: recoveryError || error ? 'error' : undefined,
+      },
+    ]
+  }
+
+  const rows: DaemonRecoveryPanelRow[] = [
+    { label: 'State', value: diagnostics.state },
+    { label: 'Owner', value: diagnostics.daemonOwnership },
+    { label: 'Action', value: diagnostics.recoveryAction },
+    { label: 'Version', value: diagnostics.daemonVersion ?? 'unknown' },
+    { label: 'Protocol', value: String(diagnostics.protocolVersion ?? 'unknown') },
+    { label: 'PID', value: formatDiagnosticsPid(diagnostics) },
+    { label: 'Last ping', value: formatDiagnosticsMs(diagnostics.timing.lastPingDurationMs) },
+    { label: 'Last start', value: formatDiagnosticsMs(diagnostics.timing.lastStartDurationMs) },
+    { label: 'Last control', value: diagnostics.lastControlRequest?.type ?? 'none' },
+  ]
+
+  if (diagnostics.lastError) {
+    rows.push({ label: 'Last error', value: diagnostics.lastError, tone: 'error' })
+  }
+  if (error) {
+    rows.push({ label: 'Poll error', value: error, tone: 'error' })
+  }
+  if (recoveryError) {
+    rows.push({ label: 'Recovery', value: recoveryError, tone: 'error' })
+  }
+
+  return rows
+}
+
+function daemonRecoveryActionLabel(action: TaodLifecycleRecoveryAction): string | null {
+  switch (action) {
+    case 'start-daemon':
+      return 'Start daemon'
+    case 'wait-for-start':
+      return 'Retry start'
+    case 'clear-stale-socket-and-start':
+      return 'Clear stale socket'
+    case 'restart-owned-daemon':
+      return 'Restart daemon'
+    case 'replace-incompatible-daemon':
+      return 'Replace daemon'
+    case 'none':
+    case 'reuse-external-daemon':
+    case 'keep-detached-daemon':
+      return null
+  }
+}
+
 function collectDirectoryPaths(paths: readonly string[]): string[] {
   const directories = new Set<string>()
 
@@ -532,52 +677,6 @@ function collectDirectoryPaths(paths: readonly string[]): string[] {
   return [...directories].sort((left, right) => right.length - left.length)
 }
 
-function getDiffFileDelta(
-  fileDiff: FileDiffMetadata,
-): Pick<ParsedDiffFile, 'additions' | 'deletions'> {
-  return fileDiff.hunks.reduce(
-    (delta, hunk) => ({
-      additions: delta.additions + hunk.additionLines,
-      deletions: delta.deletions + hunk.deletionLines,
-    }),
-    { additions: 0, deletions: 0 },
-  )
-}
-
-function getDiffFileName(fileDiff: FileDiffMetadata): string {
-  return fileDiff.prevName && fileDiff.prevName !== fileDiff.name
-    ? `${fileDiff.prevName} -> ${fileDiff.name}`
-    : fileDiff.name
-}
-
-function getDiffFilePath(fileDiff: FileDiffMetadata): string {
-  return fileDiff.name || fileDiff.prevName || getDiffFileName(fileDiff)
-}
-
-function parseDiffFiles(
-  patch: string,
-  idPrefix: string,
-): { files: ParsedDiffFile[]; error: string | null } {
-  if (patch.trim().length === 0) return { files: [], error: null }
-
-  try {
-    const files = parsePatchFiles(patch).flatMap((parsedPatch, patchIndex) =>
-      parsedPatch.files.map((fileDiff, fileIndex): ParsedDiffFile => {
-        const path = getDiffFilePath(fileDiff)
-        const id = [idPrefix, patchIndex, fileIndex, fileDiff.prevName ?? '', path].join(':')
-        const delta = getDiffFileDelta(fileDiff)
-        return { id, path, fileDiff, ...delta }
-      }),
-    )
-    return { files, error: null }
-  } catch (parseError) {
-    return {
-      files: [],
-      error: parseError instanceof Error ? parseError.message : String(parseError),
-    }
-  }
-}
-
 function summarizeParsedDiffFiles(files: readonly ParsedDiffFile[]): DiffSummary {
   return files.reduce(
     (summary, file) => ({
@@ -587,6 +686,36 @@ function summarizeParsedDiffFiles(files: readonly ParsedDiffFile[]): DiffSummary
     }),
     { files: 0, additions: 0, deletions: 0 },
   )
+}
+
+function useParsedDiffFiles(patch: string, idPrefix: string): ParsedDiffResult {
+  const [result, setResult] = useState<ParsedDiffResult>({ files: [], error: null })
+
+  useEffect(() => {
+    let cancelled = false
+    if (patch.trim().length === 0) {
+      setResult({ files: [], error: null })
+      return
+    }
+
+    setResult({ files: [], error: null })
+    parseDiffFilesOffThread(patch, idPrefix).then(
+      (nextResult) => {
+        if (!cancelled) setResult(nextResult)
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setResult({ files: [], error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [idPrefix, patch])
+
+  return result
 }
 
 function buildDiffFileTree(files: readonly ParsedDiffFile[]): DiffFileTreeNode[] {
@@ -1254,6 +1383,79 @@ const HeaderNavigation = memo(function HeaderNavigation({
   )
 })
 
+const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
+  notice,
+  diagnostics,
+  diagnosticsError,
+  recoveryError,
+  isRecovering,
+  isOpen,
+  onToggle,
+  onRecover,
+}: {
+  notice: DaemonRecoveryNotice | null
+  diagnostics: TaodLifecycleDiagnostics | null
+  diagnosticsError: string | null
+  recoveryError: string | null
+  isRecovering: boolean
+  isOpen: boolean
+  onToggle(): void
+  onRecover(action: TaodLifecycleRecoveryAction): void
+}) {
+  if (!notice) return null
+  const rows = daemonRecoveryRows(diagnostics, diagnosticsError, recoveryError)
+  const action = diagnostics?.recoveryAction ?? null
+  const actionLabel = action ? daemonRecoveryActionLabel(action) : null
+
+  return (
+    <div className="daemon-recovery-host">
+      <button
+        type="button"
+        className={`icon-button daemon-recovery-indicator daemon-recovery-indicator-${notice.tone}`}
+        aria-label={notice.label}
+        aria-expanded={isOpen}
+        title={notice.title}
+        onClick={onToggle}
+      >
+        <FiAlertTriangle size={13} />
+      </button>
+      {isOpen ? (
+        <div className={`daemon-recovery-panel daemon-recovery-panel-${notice.tone}`}>
+          <div className="daemon-recovery-panel-header">{notice.label}</div>
+          <div className="daemon-recovery-panel-rows">
+            {rows.map((row) => (
+              <div className="daemon-recovery-panel-row" key={row.label}>
+                <span className="daemon-recovery-panel-label">{row.label}</span>
+                <span
+                  className={[
+                    'daemon-recovery-panel-value',
+                    row.tone ? `daemon-recovery-panel-value-${row.tone}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  title={row.value}
+                >
+                  {row.value}
+                </span>
+              </div>
+            ))}
+          </div>
+          {action && actionLabel ? (
+            <button
+              type="button"
+              className="daemon-recovery-action-button"
+              disabled={isRecovering}
+              onClick={() => onRecover(action)}
+            >
+              {isRecovering ? 'Working...' : actionLabel}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
 const RightSidebar = memo(function RightSidebar({
   rootPath,
   branchName,
@@ -1410,7 +1612,10 @@ function WorkspaceFileTreePanel({ rootPath }: { rootPath: string | null }) {
     if (!tree) return
 
     try {
-      tree.resetPaths(fileTree.paths)
+      const preparedInput = prepareFileTreeInput(fileTree.paths, {
+        flattenEmptyDirectories: true,
+      })
+      tree.resetPaths(fileTree.paths, { preparedInput })
       tree.setGitStatus(fileTree.gitStatus as readonly GitStatusEntry[])
       setAreAllFoldersCollapsed(true)
       setRenderError(null)
@@ -1809,16 +2014,20 @@ function ChangedFilesTreePanel({
 
   useEffect(() => refreshDiffPatch(), [refreshDiffPatch])
 
+  const deferredBasePatch = useDeferredValue(basePatch)
+  const deferredUnstagedPatch = useDeferredValue(unstagedPatch)
+  const deferredStagedPatch = useDeferredValue(stagedPatch)
+  const base = useParsedDiffFiles(deferredBasePatch, 'base')
+  const unstaged = useParsedDiffFiles(deferredUnstagedPatch, 'unstaged')
+  const staged = useParsedDiffFiles(deferredStagedPatch, 'staged')
+
   const sections = useMemo((): ChangedFilesSection[] => {
-    const base = parseDiffFiles(basePatch, 'base')
-    const unstaged = parseDiffFiles(unstagedPatch, 'unstaged')
-    const staged = parseDiffFiles(stagedPatch, 'staged')
     return [
       { kind: 'unstaged', label: 'Unstaged', files: unstaged.files, error: unstaged.error },
       { kind: 'staged', label: 'Staged', files: staged.files, error: staged.error },
       { kind: 'base', label: 'Against base', files: base.files, error: base.error },
     ]
-  }, [basePatch, stagedPatch, unstagedPatch])
+  }, [base, staged, unstaged])
 
   const totalChangedFiles = sections.reduce((total, section) => total + section.files.length, 0)
   const baseSummary = summarizeParsedDiffFiles(
@@ -2351,51 +2560,72 @@ function WorkspaceDiffPanel({
 
   useEffect(() => refreshDiffPatch(), [refreshDiffPatch])
 
+  const deferredPatch = useDeferredValue(patch)
+  const parsedDiffResult = useParsedDiffFiles(deferredPatch, '')
+
   const parsedDiff = useMemo((): {
     files: ParsedDiffFile[]
     summary: DiffSummary
     error: string | null
   } => {
-    const emptySummary = { files: 0, additions: 0, deletions: 0 }
-    if (patch.trim().length === 0) return { files: [], summary: emptySummary, error: null }
-
-    try {
-      const files = parsePatchFiles(patch).flatMap((parsedPatch, patchIndex) =>
-        parsedPatch.files.map((fileDiff, fileIndex): ParsedDiffFile => {
-          const path = getDiffFilePath(fileDiff)
-          const id = [patchIndex, fileIndex, fileDiff.prevName ?? '', path].join(':')
-          const delta = getDiffFileDelta(fileDiff)
-          return { id, path, fileDiff, ...delta }
-        }),
-      )
-      const summary = files.reduce(
-        (delta, file) => ({
-          files: delta.files + 1,
-          additions: delta.additions + file.additions,
-          deletions: delta.deletions + file.deletions,
-        }),
-        emptySummary,
-      )
-      return { files, summary, error: null }
-    } catch (parseError) {
-      return {
-        files: [],
-        summary: emptySummary,
-        error: parseError instanceof Error ? parseError.message : String(parseError),
-      }
+    return {
+      files: parsedDiffResult.files,
+      summary: summarizeParsedDiffFiles(parsedDiffResult.files),
+      error: parsedDiffResult.error,
     }
-  }, [patch])
+  }, [parsedDiffResult])
+
+  const shouldCapExpandedDiffBodies =
+    parsedDiff.files.length >= DIFF_AUTO_COLLAPSE_FILE_COUNT ||
+    deferredPatch.length >= DIFF_AUTO_COLLAPSE_PATCH_CHARS
+
+  const limitExpandedDiffBodies = useCallback(
+    (nextCollapsedFileIds: Set<string>, preferredFileId?: string): Set<string> => {
+      if (!shouldCapExpandedDiffBodies) return nextCollapsedFileIds
+
+      const expandedFileIds = parsedDiff.files
+        .map((file) => file.id)
+        .filter((id) => !nextCollapsedFileIds.has(id))
+      if (expandedFileIds.length <= DIFF_MAX_EXPANDED_FILE_BODIES) return nextCollapsedFileIds
+
+      const keptExpandedFileIds = new Set<string>()
+      if (preferredFileId && expandedFileIds.includes(preferredFileId)) {
+        keptExpandedFileIds.add(preferredFileId)
+      }
+      for (const id of expandedFileIds) {
+        if (keptExpandedFileIds.size >= DIFF_MAX_EXPANDED_FILE_BODIES) break
+        keptExpandedFileIds.add(id)
+      }
+      for (const id of expandedFileIds) {
+        if (!keptExpandedFileIds.has(id)) nextCollapsedFileIds.add(id)
+      }
+      return nextCollapsedFileIds
+    },
+    [parsedDiff.files, shouldCapExpandedDiffBodies],
+  )
 
   const collapseAll = useCallback(() => {
     setCollapsedFileIds(new Set(parsedDiff.files.map((file) => file.id)))
   }, [parsedDiff.files])
 
   const expandAll = useCallback(() => {
-    setCollapsedFileIds(new Set())
-  }, [])
+    setCollapsedFileIds(limitExpandedDiffBodies(new Set()))
+  }, [limitExpandedDiffBodies])
 
   const areAllFilesCollapsed =
     parsedDiff.files.length > 0 && collapsedFileIds.size >= parsedDiff.files.length
+
+  useEffect(() => {
+    if (
+      parsedDiff.files.length >= DIFF_AUTO_COLLAPSE_FILE_COUNT ||
+      deferredPatch.length >= DIFF_AUTO_COLLAPSE_PATCH_CHARS
+    ) {
+      setCollapsedFileIds(new Set(parsedDiff.files.map((file) => file.id)))
+    } else {
+      setCollapsedFileIds(new Set())
+    }
+  }, [deferredPatch.length, parsedDiff.files])
+
   const toggleAllFilesCollapsed = useCallback(() => {
     if (areAllFilesCollapsed) {
       expandAll()
@@ -2404,30 +2634,36 @@ function WorkspaceDiffPanel({
     }
   }, [areAllFilesCollapsed, collapseAll, expandAll])
 
-  const toggleFileCollapsed = useCallback((fileId: string) => {
-    setCollapsedFileIds((current) => {
-      const next = new Set(current)
-      if (next.has(fileId)) {
-        next.delete(fileId)
-      } else {
-        next.add(fileId)
-      }
-      return next
-    })
-  }, [])
+  const toggleFileCollapsed = useCallback(
+    (fileId: string) => {
+      setCollapsedFileIds((current) => {
+        const next = new Set(current)
+        if (next.has(fileId)) {
+          next.delete(fileId)
+        } else {
+          next.add(fileId)
+        }
+        return limitExpandedDiffBodies(next, fileId)
+      })
+    },
+    [limitExpandedDiffBodies],
+  )
 
-  const focusDiffFile = useCallback((fileId: string) => {
-    setFocusedFileId(fileId)
-    setCollapsedFileIds((current) => {
-      if (!current.has(fileId)) return current
-      const next = new Set(current)
-      next.delete(fileId)
-      return next
-    })
-    window.requestAnimationFrame(() => {
-      fileSectionRefs.current.get(fileId)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-    })
-  }, [])
+  const focusDiffFile = useCallback(
+    (fileId: string) => {
+      setFocusedFileId(fileId)
+      setCollapsedFileIds((current) => {
+        if (!current.has(fileId)) return current
+        const next = new Set(current)
+        next.delete(fileId)
+        return limitExpandedDiffBodies(next, fileId)
+      })
+      window.requestAnimationFrame(() => {
+        fileSectionRefs.current.get(fileId)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      })
+    },
+    [limitExpandedDiffBodies],
+  )
 
   useEffect(() => {
     function handleFocusFile(event: Event) {
@@ -2513,7 +2749,7 @@ function WorkspaceDiffPanel({
         <div className="right-sidebar-file-tree-message">No tracked changes</div>
       ) : null}
       {parsedDiff.files.length > 0 ? (
-        <DiffPanelErrorBoundary key={`${compareBranchInput}:${patch.length}`}>
+        <DiffPanelErrorBoundary key={`${compareBranchInput}:${deferredPatch.length}`}>
           <div className="right-sidebar-diff-body">
             <div className="right-sidebar-diff-view">
               {parsedDiff.files.map(({ id, fileDiff, additions, deletions }) => {
@@ -2832,8 +3068,23 @@ export function App() {
   >(null)
   const [rightSidebarView, setRightSidebarView] = useState<RightSidebarView>('files')
   const [layoutLoaded, setLayoutLoaded] = useState(false)
+  const [taodDiagnostics, setTaodDiagnostics] = useState<TaodLifecycleDiagnostics | null>(null)
+  const [taodDiagnosticsError, setTaodDiagnosticsError] = useState<string | null>(null)
+  const [daemonDiagnosticsOpen, setDaemonDiagnosticsOpen] = useState(false)
+  const [daemonRecoveryInFlight, setDaemonRecoveryInFlight] = useState(false)
+  const [daemonRecoveryError, setDaemonRecoveryError] = useState<string | null>(null)
   const activeWorkspaceKey = activeWorkspaceId
   const canCreateTerminal = activeWorkspaceKey !== null
+
+  useEffect(() => {
+    markRendererEvent('ui:app-mounted')
+  }, [])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+    markRendererEvent('ui:layout-loaded')
+  }, [layoutLoaded])
+
   const sidebarSize = useMemo(
     () =>
       normalizeSidebarWidth(
@@ -2985,6 +3236,36 @@ export function App() {
       cancelled = true
     }
   }, [hydrateLayout])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const refreshTaodDiagnostics = async () => {
+      try {
+        const diagnostics = await window.electronAPI.getTaodDiagnostics()
+        if (cancelled) return
+        setTaodDiagnostics(diagnostics)
+        setTaodDiagnosticsError(null)
+        if (diagnostics?.recoveryAction === 'none') setDaemonRecoveryError(null)
+      } catch (error) {
+        if (cancelled) return
+        setTaodDiagnostics(null)
+        setTaodDiagnosticsError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (!cancelled) timer = setTimeout(refreshTaodDiagnostics, TAOD_DIAGNOSTICS_POLL_MS)
+      }
+    }
+
+    void refreshTaodDiagnostics()
+
+    return () => {
+      cancelled = true
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [layoutLoaded])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -3246,6 +3527,32 @@ export function App() {
   const shellClassName = ['tao-shell', sidebarExpanded ? null : 'tao-shell-sidebar-hidden']
     .filter(Boolean)
     .join(' ')
+  const daemonNotice = useMemo(
+    () => daemonRecoveryNotice(taodDiagnostics, taodDiagnosticsError),
+    [taodDiagnostics, taodDiagnosticsError],
+  )
+
+  useEffect(() => {
+    if (!daemonNotice) setDaemonDiagnosticsOpen(false)
+  }, [daemonNotice])
+
+  const handleToggleDaemonDiagnostics = useCallback(() => {
+    setDaemonDiagnosticsOpen((open) => !open)
+  }, [])
+
+  const handleApplyDaemonRecovery = useCallback(async (action: TaodLifecycleRecoveryAction) => {
+    setDaemonRecoveryInFlight(true)
+    setDaemonRecoveryError(null)
+    try {
+      const diagnostics = await window.electronAPI.recoverTaod(action)
+      setTaodDiagnostics(diagnostics)
+      setTaodDiagnosticsError(null)
+    } catch (error) {
+      setDaemonRecoveryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDaemonRecoveryInFlight(false)
+    }
+  }, [])
 
   if (!layoutLoaded) {
     return <div className="tao-shell" />
@@ -3268,6 +3575,16 @@ export function App() {
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
           />
           <div className="sidebar-top-actions">
+            <DaemonRecoveryIndicator
+              notice={daemonNotice}
+              diagnostics={taodDiagnostics}
+              diagnosticsError={taodDiagnosticsError}
+              recoveryError={daemonRecoveryError}
+              isRecovering={daemonRecoveryInFlight}
+              isOpen={daemonDiagnosticsOpen}
+              onToggle={handleToggleDaemonDiagnostics}
+              onRecover={handleApplyDaemonRecovery}
+            />
             <button
               type="button"
               className="icon-button add-workspace-button"
@@ -3311,6 +3628,20 @@ export function App() {
             onReorderTab={reorderTab}
             archivedTabIds={archivedTabIds}
           />
+          {!sidebarExpanded && daemonNotice ? (
+            <div className="titlebar-status-actions">
+              <DaemonRecoveryIndicator
+                notice={daemonNotice}
+                diagnostics={taodDiagnostics}
+                diagnosticsError={taodDiagnosticsError}
+                recoveryError={daemonRecoveryError}
+                isRecovering={daemonRecoveryInFlight}
+                isOpen={daemonDiagnosticsOpen}
+                onToggle={handleToggleDaemonDiagnostics}
+                onRecover={handleApplyDaemonRecovery}
+              />
+            </div>
+          ) : null}
           <div className="pane-grid">
             {mountedTabs.map((tab) => {
               const isTabActive = tab.id === activeTab?.id

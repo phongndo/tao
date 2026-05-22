@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   currentScreenCrc32,
   decodeCurrentScreenSnapshot,
@@ -14,7 +17,16 @@ import {
   isFallbackCurrentScreenSnapshot,
   isGhosttyNativeCurrentScreenSnapshot,
 } from '@tao/shared/current-screen-snapshot'
-import { TAOD_STREAM_MAX_PAYLOAD_BYTES, TaodStreamFrameKind } from '@tao/shared/taod-protocol'
+import {
+  TAOD_CONTROL_CAPABILITIES,
+  TAOD_CONTROL_PROTOCOL_VERSION,
+  TAOD_STREAM_HEADER_SIZE,
+  TAOD_STREAM_MAGIC,
+  TAOD_STREAM_MAX_PAYLOAD_BYTES,
+  TAOD_STREAM_SESSION_ID_SIZE,
+  TAOD_STREAM_VERSION,
+  TaodStreamFrameKind,
+} from '@tao/shared/taod-protocol'
 import {
   TAOD_STREAM_PAYLOAD_LENGTH_OFFSET,
   decodeTaodExitPayload,
@@ -23,6 +35,145 @@ import {
   encodeTaodStreamFrame,
   TaodStreamFrameParser,
 } from './taod-stream'
+
+const fixtureRoot = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../..',
+  'packages/shared/fixtures/taod-protocol',
+)
+
+function readFixture(name: string): string {
+  return readFileSync(resolve(fixtureRoot, name), 'utf8').trim()
+}
+
+function readHexFixture(name: string): Buffer {
+  return Buffer.from(readFixture(name), 'hex')
+}
+
+type ProtocolSpec = {
+  readonly control: {
+    readonly protocolVersion: number
+    readonly daemonVersion: string
+    readonly capabilities: readonly string[]
+    readonly requestFixtures: readonly string[]
+    readonly responseFixtures: readonly string[]
+  }
+  readonly stream: {
+    readonly magic: number
+    readonly version: number
+    readonly sessionIdSize: number
+    readonly headerSize: number
+    readonly maxPayloadBytes: number
+    readonly frameKinds: readonly { readonly name: string; readonly value: number }[]
+    readonly fixtures: readonly string[]
+    readonly corruptFixtures: readonly string[]
+  }
+}
+
+function readProtocolSpec(): ProtocolSpec {
+  return JSON.parse(readFixture('spec.json')) as ProtocolSpec
+}
+
+test('taod protocol spec matches TS constants and fixture files', () => {
+  const spec = readProtocolSpec()
+  assert.equal(spec.control.protocolVersion, TAOD_CONTROL_PROTOCOL_VERSION)
+  assert.deepEqual(spec.control.capabilities, [...TAOD_CONTROL_CAPABILITIES])
+  assert.equal(spec.stream.magic, TAOD_STREAM_MAGIC)
+  assert.equal(spec.stream.version, TAOD_STREAM_VERSION)
+  assert.equal(spec.stream.sessionIdSize, TAOD_STREAM_SESSION_ID_SIZE)
+  assert.equal(spec.stream.headerSize, TAOD_STREAM_HEADER_SIZE)
+  assert.equal(spec.stream.maxPayloadBytes, TAOD_STREAM_MAX_PAYLOAD_BYTES)
+  assert.deepEqual(spec.stream.frameKinds, [
+    { name: 'output', value: TaodStreamFrameKind.Output },
+    { name: 'input', value: TaodStreamFrameKind.Input },
+    { name: 'resize', value: TaodStreamFrameKind.Resize },
+    { name: 'snapshot', value: TaodStreamFrameKind.Snapshot },
+    { name: 'exit', value: TaodStreamFrameKind.Exit },
+    { name: 'agent', value: TaodStreamFrameKind.Agent },
+  ])
+
+  for (const fixture of [
+    ...spec.control.requestFixtures,
+    ...spec.control.responseFixtures,
+    ...spec.stream.fixtures,
+    ...spec.stream.corruptFixtures,
+  ]) {
+    assert.ok(readFixture(fixture).length > 0, `missing or empty fixture ${fixture}`)
+  }
+})
+
+test('taod stream encoder matches the shared golden output fixture', () => {
+  const encoded = encodeTaodStreamFrame({
+    kind: TaodStreamFrameKind.Output,
+    sessionId: 'session-1',
+    seq: 7,
+    payload: Buffer.from('hello'),
+  })
+
+  assert.equal(encoded.toString('hex'), readFixture('stream-output-frame.hex'))
+
+  const frames = new TaodStreamFrameParser().push(encoded)
+  assert.equal(frames.length, 1)
+  assert.equal(frames[0]?.kind, TaodStreamFrameKind.Output)
+  assert.equal(frames[0]?.sessionId, 'session-1')
+  assert.equal(frames[0]?.seq, 7)
+  assert.equal(frames[0]?.payload.toString('utf8'), 'hello')
+})
+
+test('taod stream codec matches shared golden resize, exit, and snapshot fixtures', () => {
+  const resize = readHexFixture('stream-resize-frame.hex')
+  const exit = readHexFixture('stream-exit-frame.hex')
+  const snapshot = readHexFixture('stream-snapshot-frame.hex')
+
+  assert.equal(
+    encodeTaodStreamFrame({
+      kind: TaodStreamFrameKind.Resize,
+      sessionId: 'session-1',
+      seq: 11,
+      payload: encodeTaodResizePayload(120, 40),
+    }).toString('hex'),
+    resize.toString('hex'),
+  )
+  assert.equal(
+    decodeTaodResizePayload(new TaodStreamFrameParser().push(resize)[0]!.payload)?.cols,
+    120,
+  )
+
+  const exitPayload = Buffer.from([0, 0, 0, 2, 0, 0, 0, 15])
+  assert.equal(
+    encodeTaodStreamFrame({
+      kind: TaodStreamFrameKind.Exit,
+      sessionId: 'session-1',
+      seq: 12,
+      payload: exitPayload,
+    }).toString('hex'),
+    exit.toString('hex'),
+  )
+  assert.deepEqual(decodeTaodExitPayload(new TaodStreamFrameParser().push(exit)[0]!.payload), {
+    exitCode: 2,
+    signal: 15,
+  })
+
+  assert.equal(
+    encodeTaodStreamFrame({
+      kind: TaodStreamFrameKind.Snapshot,
+      sessionId: 'session-1',
+      seq: 13,
+      payload: 'state',
+    }).toString('hex'),
+    snapshot.toString('hex'),
+  )
+  const frames = new TaodStreamFrameParser().push(snapshot)
+  assert.equal(frames[0]?.kind, TaodStreamFrameKind.Snapshot)
+  assert.equal(frames[0]?.payload.toString('utf8'), 'state')
+})
+
+test('taod stream parser rejects shared golden corrupt CRC fixture', () => {
+  assert.throws(
+    () => new TaodStreamFrameParser().push(readHexFixture('stream-corrupt-crc-frame.hex')),
+    /CRC/u,
+  )
+})
 
 test('taod stream frames encode and parse binary payloads', () => {
   const encoded = encodeTaodStreamFrame({

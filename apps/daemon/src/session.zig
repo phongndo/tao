@@ -30,6 +30,12 @@ pub const PendingOutputFrame = struct {
     }
 };
 
+pub const PendingOutputBufferResult = struct {
+    dropped_frames: u64 = 0,
+    dropped_bytes: u64 = 0,
+    truncated_bytes: u64 = 0,
+};
+
 pub const Status = enum {
     live,
     detached,
@@ -235,14 +241,16 @@ pub const TerminalSession = struct {
         self.assertInvariants();
     }
 
-    pub fn bufferPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator, seq: u64, payload: []const u8) !void {
+    pub fn bufferPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator, seq: u64, payload: []const u8) !PendingOutputBufferResult {
         self.assertInvariants();
-        if (payload.len == 0) return;
+        if (payload.len == 0) return .{};
 
-        const bounded_payload = if (payload.len > max_pending_output_bytes)
-            payload[payload.len - max_pending_output_bytes ..]
-        else
-            payload;
+        var result: PendingOutputBufferResult = .{};
+
+        const bounded_payload = if (payload.len > max_pending_output_bytes) blk: {
+            result.truncated_bytes = @intCast(payload.len - max_pending_output_bytes);
+            break :blk payload[payload.len - max_pending_output_bytes ..];
+        } else payload;
         const owned = try allocator.dupe(u8, bounded_payload);
         errdefer allocator.free(owned);
         try self.pending_output.append(allocator, .{ .seq = seq, .payload = owned });
@@ -255,9 +263,12 @@ pub const TerminalSession = struct {
             var frame = self.pending_output.orderedRemove(0);
             assert(self.pending_output_bytes >= frame.payload.len);
             self.pending_output_bytes -= frame.payload.len;
+            result.dropped_frames += 1;
+            result.dropped_bytes += @intCast(frame.payload.len);
             frame.deinit(allocator);
         }
         self.assertInvariants();
+        return result;
     }
 
     pub fn clearPendingOutput(self: *TerminalSession, allocator: std.mem.Allocator) void {
@@ -565,8 +576,8 @@ test "terminal session keeps bounded pending output for first live attach" {
         .argv = &.{},
     });
 
-    try created.bufferPendingOutput(std.testing.allocator, 1, "hello");
-    try created.bufferPendingOutput(std.testing.allocator, 2, " world");
+    _ = try created.bufferPendingOutput(std.testing.allocator, 1, "hello");
+    _ = try created.bufferPendingOutput(std.testing.allocator, 2, " world");
 
     try std.testing.expectEqual(@as(usize, 2), created.pending_output.items.len);
     try std.testing.expectEqual(@as(usize, 11), created.pending_output_bytes);
@@ -596,12 +607,15 @@ test "terminal session bounds a single oversized pending-output frame" {
     @memset(oversized[0 .. oversized.len - 1], 'a');
     oversized[oversized.len - 1] = 'z';
 
-    try created.bufferPendingOutput(std.testing.allocator, 42, oversized);
+    const result = try created.bufferPendingOutput(std.testing.allocator, 42, oversized);
 
     try std.testing.expectEqual(@as(usize, 1), created.pending_output.items.len);
     try std.testing.expectEqual(@as(usize, max_pending_output_bytes), created.pending_output_bytes);
     try std.testing.expectEqual(@as(u64, 42), created.pending_output.items[0].seq);
     try std.testing.expectEqual(@as(u8, 'z'), created.pending_output.items[0].payload[created.pending_output.items[0].payload.len - 1]);
+    try std.testing.expectEqual(@as(u64, 257), result.truncated_bytes);
+    try std.testing.expectEqual(@as(u64, 0), result.dropped_frames);
+    try std.testing.expectEqual(@as(u64, 0), result.dropped_bytes);
 }
 
 test "terminal session bounds pending output frame count" {
@@ -619,7 +633,7 @@ test "terminal session bounds pending output frame count" {
 
     var seq: u64 = 1;
     while (seq <= pending_output_frames_max + 10) : (seq += 1) {
-        try created.bufferPendingOutput(std.testing.allocator, seq, "x");
+        _ = try created.bufferPendingOutput(std.testing.allocator, seq, "x");
     }
 
     try std.testing.expectEqual(@as(usize, pending_output_frames_max), created.pending_output.items.len);
@@ -664,7 +678,7 @@ fn sessionCreateForAllocationFailure(allocator: std.mem.Allocator) !void {
         .cwd = "/tmp/tao-session-oom",
         .argv = &.{},
     });
-    try created.bufferPendingOutput(allocator, 1, "owned pending output");
+    _ = try created.bufferPendingOutput(allocator, 1, "owned pending output");
     try created.updateCreateMetadata(allocator, "term-oom-2", null, null, "/tmp/next", 24, 6);
     try std.testing.expect(manager.remove("session-oom"));
 }

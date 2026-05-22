@@ -184,6 +184,11 @@ pub fn freeBranches(allocator: std.mem.Allocator, branches: [][]u8) void {
     allocator.free(branches);
 }
 
+pub fn freeWorktreeList(allocator: std.mem.Allocator, entries: []WorktreeListEntry) void {
+    for (entries) |*entry| entry.deinit(allocator);
+    allocator.free(entries);
+}
+
 pub fn worktreeAddNewBranch(
     allocator: std.mem.Allocator,
     repository_path: []const u8,
@@ -336,10 +341,7 @@ test "parses git status porcelain" {
 test "parses worktree porcelain z output" {
     const sample = "worktree /repo\x00HEAD abc123\x00branch refs/heads/main\x00\x00worktree /tmp/wt\x00HEAD def456\x00branch refs/heads/luminous-galileo-a13f\x00\x00";
     const entries = try parseWorktreeListPorcelainZ(std.testing.allocator, sample);
-    defer {
-        for (entries) |*entry| entry.deinit(std.testing.allocator);
-        std.testing.allocator.free(entries);
-    }
+    defer freeWorktreeList(std.testing.allocator, entries);
     try std.testing.expectEqual(@as(usize, 2), entries.len);
     try std.testing.expectEqualStrings("/repo", entries[0].path);
     try std.testing.expectEqualStrings("main", entries[0].branch.?);

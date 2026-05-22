@@ -2,13 +2,37 @@ type TerminalWriteTarget = {
   write(data: string, callback?: () => void): void
 }
 
+export type TerminalOutputWriterDiagnostics = {
+  queuedChars: number
+  queuedChunks: number
+  writeQueueChars: number
+  writeQueueChunks: number
+  writing: boolean
+  drainWaiters: number
+  writeCount: number
+  totalWrittenChars: number
+  lastWriteChars: number
+  lastWriteDurationMs: number
+  maxWriteDurationMs: number
+  maxWriteQueueChars: number
+  maxWriteQueueChunks: number
+  droppedWriteQueueCharsTotal: number
+  droppedWriteQueueChunksTotal: number
+  dropNoticeCount: number
+}
+
 const OUTPUT_BATCH_MAX_CHARS = 32 * 1024
 const OUTPUT_WRITE_CHUNK_MAX_CHARS = 16 * 1024
+const OUTPUT_WRITE_QUEUE_MAX_CHARS = 4 * 1024 * 1024
+const OUTPUT_WRITE_QUEUE_RESUME_CHARS = 2 * 1024 * 1024
+const OUTPUT_WRITE_QUEUE_DROP_NOTICE =
+  '\r\n\x1b[33m[Tao dropped terminal output because the renderer write queue exceeded 4 MiB]\x1b[0m\r\n'
 
 export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
   write(data: string): void
   flush(): void
   drain(): Promise<void>
+  diagnostics(): TerminalOutputWriterDiagnostics
   dispose(): void
 } {
   let chunks: string[] = []
@@ -19,6 +43,70 @@ export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
   let writing = false
   let disposed = false
   let drainWaiters: Array<() => void> = []
+  let writeStartedAt = 0
+  let activeWriteChars = 0
+  let writeCount = 0
+  let totalWrittenChars = 0
+  let lastWriteChars = 0
+  let lastWriteDurationMs = 0
+  let maxWriteDurationMs = 0
+  let maxWriteQueueChars = 0
+  let maxWriteQueueChunks = 0
+  let currentWriteQueueChars = 0
+  let droppedWriteQueueCharsTotal = 0
+  let droppedWriteQueueChunksTotal = 0
+  let dropNoticePending = false
+  let dropNoticeCount = 0
+
+  function nowMs(): number {
+    return typeof performance === 'undefined' ? Date.now() : performance.now()
+  }
+
+  function writeQueueChars(): number {
+    return currentWriteQueueChars
+  }
+
+  function recordWriteQueueHighWater(): void {
+    maxWriteQueueChars = Math.max(maxWriteQueueChars, currentWriteQueueChars)
+    maxWriteQueueChunks = Math.max(maxWriteQueueChunks, writeQueue.length)
+  }
+
+  function enqueueWriteQueueChunk(data: string): void {
+    writeQueue.push(data)
+    currentWriteQueueChars += data.length
+  }
+
+  function dequeueWriteQueueChunk(): string | undefined {
+    const data = writeQueue.shift()
+    if (data) currentWriteQueueChars -= data.length
+    return data
+  }
+
+  function dropOldestWriteQueueChunk(): boolean {
+    const dropped = dequeueWriteQueueChunk()
+    if (!dropped) return false
+    if (dropped === OUTPUT_WRITE_QUEUE_DROP_NOTICE) dropNoticePending = false
+    droppedWriteQueueChunksTotal += 1
+    droppedWriteQueueCharsTotal += dropped.length
+    return true
+  }
+
+  function enforceWriteQueueBudget(): void {
+    if (currentWriteQueueChars <= OUTPUT_WRITE_QUEUE_MAX_CHARS) return
+
+    while (
+      currentWriteQueueChars > OUTPUT_WRITE_QUEUE_RESUME_CHARS &&
+      dropOldestWriteQueueChunk()
+    ) {}
+
+    if (!dropNoticePending) {
+      enqueueWriteQueueChunk(OUTPUT_WRITE_QUEUE_DROP_NOTICE)
+      dropNoticePending = true
+      dropNoticeCount += 1
+    }
+
+    recordWriteQueueHighWater()
+  }
 
   function clearFlushTimer() {
     if (flushTimer === null) return
@@ -42,8 +130,10 @@ export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
 
   function enqueueWriteData(data: string) {
     for (let offset = 0; offset < data.length; offset += OUTPUT_WRITE_CHUNK_MAX_CHARS) {
-      writeQueue.push(data.slice(offset, offset + OUTPUT_WRITE_CHUNK_MAX_CHARS))
+      enqueueWriteQueueChunk(data.slice(offset, offset + OUTPUT_WRITE_CHUNK_MAX_CHARS))
     }
+    recordWriteQueueHighWater()
+    enforceWriteQueueBudget()
   }
 
   function scheduleWrite() {
@@ -58,17 +148,28 @@ export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
     clearWriteTimer()
     if (disposed || writing) return
 
-    const data = writeQueue.shift()
+    const data = dequeueWriteQueueChunk()
     if (!data) {
       resolveDrainWaiters()
       return
     }
 
     writing = true
+    activeWriteChars = data.length
+    writeStartedAt = nowMs()
     term.write(data, () => {
+      const durationMs = nowMs() - writeStartedAt
+      writeCount += 1
+      totalWrittenChars += activeWriteChars
+      lastWriteChars = activeWriteChars
+      lastWriteDurationMs = durationMs
+      maxWriteDurationMs = Math.max(maxWriteDurationMs, durationMs)
+      if (data === OUTPUT_WRITE_QUEUE_DROP_NOTICE) dropNoticePending = false
+      activeWriteChars = 0
       writing = false
       if (disposed) {
         writeQueue = []
+        currentWriteQueueChars = 0
         resolveDrainWaiters()
         return
       }
@@ -114,6 +215,26 @@ export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
         drainWaiters.push(resolve)
       })
     },
+    diagnostics() {
+      return {
+        queuedChars,
+        queuedChunks: chunks.length,
+        writeQueueChars: writeQueueChars(),
+        writeQueueChunks: writeQueue.length,
+        writing,
+        drainWaiters: drainWaiters.length,
+        writeCount,
+        totalWrittenChars,
+        lastWriteChars,
+        lastWriteDurationMs,
+        maxWriteDurationMs,
+        maxWriteQueueChars,
+        maxWriteQueueChunks,
+        droppedWriteQueueCharsTotal,
+        droppedWriteQueueChunksTotal,
+        dropNoticeCount,
+      }
+    },
     dispose() {
       disposed = true
       clearFlushTimer()
@@ -121,6 +242,7 @@ export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
       chunks = []
       queuedChars = 0
       writeQueue = []
+      currentWriteQueueChars = 0
       const waiters = drainWaiters
       drainWaiters = []
       for (const resolve of waiters) resolve()

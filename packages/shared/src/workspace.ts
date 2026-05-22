@@ -2,6 +2,8 @@ import { Effect, Schema } from 'effect'
 
 export const WORKSPACE_IPC_TIMEOUT_MS = 15_000
 
+const NonEmptyString = Schema.Trim.check(Schema.isNonEmpty())
+
 export const WorkspacePathSchema = Schema.Trim.check(Schema.isNonEmpty())
 
 export const WorktreeInfoSchema = Schema.Struct({
@@ -50,6 +52,37 @@ export const WorkspaceDiffPatchInputSchema = Schema.Struct({
 export const WorkspaceGitPathActionInputSchema = Schema.Struct({
   workspacePath: WorkspacePathSchema,
   path: Schema.Union([Schema.Trim.check(Schema.isNonEmpty()), Schema.Array(Schema.String)]),
+})
+
+export const WorkspaceIdInputSchema = NonEmptyString
+export const WorktreeIdInputSchema = NonEmptyString
+
+export const WorkspaceAddInputSchema = Schema.Struct({
+  rootPath: WorkspacePathSchema,
+  workspaceId: Schema.optional(WorkspaceIdInputSchema),
+  name: Schema.optional(NonEmptyString),
+  orderIndex: Schema.optional(Schema.Number),
+})
+
+export const WorkspaceRefreshInputSchema = WorkspaceIdInputSchema
+export const WorkspaceRemoveInputSchema = WorkspaceIdInputSchema
+
+export const WorktreeCreateInputSchema = Schema.Struct({
+  workspaceId: WorkspaceIdInputSchema,
+  baseBranch: Schema.optional(NonEmptyString),
+  targetBranch: Schema.optional(NonEmptyString),
+  branch: Schema.optional(NonEmptyString),
+  folderName: Schema.optional(NonEmptyString),
+  startPoint: Schema.optional(NonEmptyString),
+  title: Schema.optional(NonEmptyString),
+})
+
+export const WorktreeRefreshInputSchema = WorktreeIdInputSchema
+
+export const WorktreeRemoveInputSchema = Schema.Struct({
+  worktreeId: WorktreeIdInputSchema,
+  force: Schema.optional(Schema.Boolean),
+  deleteBranch: Schema.optional(Schema.Boolean),
 })
 
 export const WorkspaceWorktreeStateSchema = Schema.Union([
@@ -192,6 +225,39 @@ export const WorkspaceWorktreeResponseSchema = Schema.Union([
 
 export const WorkspacePickDirectoryResponseSchema = Schema.NullOr(WorkspacePathSchema)
 
+export const WorkspaceWatcherEntryDiagnosticsSchema = Schema.Struct({
+  workspaceId: Schema.String,
+  rootPath: Schema.String,
+  gitCommonDir: Schema.String,
+  watcherCount: Schema.Number,
+  inFlight: Schema.Boolean,
+  pending: Schema.Boolean,
+  queued: Schema.Boolean,
+  queuedRefreshCount: Schema.Number,
+  refreshCount: Schema.Number,
+  refreshFailureCount: Schema.Number,
+  notifyCount: Schema.Number,
+  watcherInstallCount: Schema.Number,
+  lastQueuedAt: Schema.optional(Schema.Number),
+  lastQueuedReason: Schema.optional(Schema.String),
+  lastRefreshStartedAt: Schema.optional(Schema.Number),
+  lastRefreshFinishedAt: Schema.optional(Schema.Number),
+  lastRefreshDurationMs: Schema.optional(Schema.Number),
+  lastRefreshOk: Schema.optional(Schema.Boolean),
+  lastRefreshReason: Schema.optional(Schema.String),
+  lastNotifiedAt: Schema.optional(Schema.Number),
+  lastError: Schema.optional(Schema.String),
+})
+
+export const WorkspaceWatcherDiagnosticsSchema = Schema.Struct({
+  trackedWorkspaces: Schema.Number,
+  totalWatchers: Schema.Number,
+  totalInFlight: Schema.Number,
+  totalPending: Schema.Number,
+  totalQueued: Schema.Number,
+  entries: Schema.Array(WorkspaceWatcherEntryDiagnosticsSchema),
+})
+
 export type WorktreeInfo = Schema.Schema.Type<typeof WorktreeInfoSchema>
 export type GitStatus = Schema.Schema.Type<typeof GitStatusSchema>
 export type WorkspaceFileGitStatus = Schema.Schema.Type<typeof WorkspaceFileGitStatusSchema>
@@ -202,7 +268,17 @@ export type WorkspaceFileTree = Schema.Schema.Type<typeof WorkspaceFileTreeSchem
 export type WorkspaceDiffPatch = Schema.Schema.Type<typeof WorkspaceDiffPatchSchema>
 export type WorkspaceDiffPatchScope = Schema.Schema.Type<typeof WorkspaceDiffPatchScopeSchema>
 export type WorkspaceDiffPatchInput = Schema.Schema.Type<typeof WorkspaceDiffPatchInputSchema>
-export type WorkspaceGitPathActionInput = Schema.Schema.Type<typeof WorkspaceGitPathActionInputSchema>
+export type WorkspaceGitPathActionInput = Schema.Schema.Type<
+  typeof WorkspaceGitPathActionInputSchema
+>
+export type WorkspaceIdInput = Schema.Schema.Type<typeof WorkspaceIdInputSchema>
+export type WorktreeIdInput = Schema.Schema.Type<typeof WorktreeIdInputSchema>
+export type WorkspaceAddInput = Schema.Schema.Type<typeof WorkspaceAddInputSchema>
+export type WorkspaceRefreshInput = Schema.Schema.Type<typeof WorkspaceRefreshInputSchema>
+export type WorkspaceRemoveInput = Schema.Schema.Type<typeof WorkspaceRemoveInputSchema>
+export type WorktreeCreateInput = Schema.Schema.Type<typeof WorktreeCreateInputSchema>
+export type WorktreeRefreshInput = Schema.Schema.Type<typeof WorktreeRefreshInputSchema>
+export type WorktreeRemoveInput = Schema.Schema.Type<typeof WorktreeRemoveInputSchema>
 export type WorkspaceWorktreeState = Schema.Schema.Type<typeof WorkspaceWorktreeStateSchema>
 export type WorkspaceWorktree = Schema.Schema.Type<typeof WorkspaceWorktreeSchema>
 export type WorkspaceRecord = Schema.Schema.Type<typeof WorkspaceRecordSchema>
@@ -233,6 +309,12 @@ export type WorkspaceRecordResponse = Schema.Schema.Type<typeof WorkspaceRecordR
 export type WorkspaceWorktreeResponse = Schema.Schema.Type<typeof WorkspaceWorktreeResponseSchema>
 export type WorkspacePickDirectoryResponse = Schema.Schema.Type<
   typeof WorkspacePickDirectoryResponseSchema
+>
+export type WorkspaceWatcherEntryDiagnostics = Schema.Schema.Type<
+  typeof WorkspaceWatcherEntryDiagnosticsSchema
+>
+export type WorkspaceWatcherDiagnostics = Schema.Schema.Type<
+  typeof WorkspaceWatcherDiagnosticsSchema
 >
 
 export type WorkspaceIpcResponse<T> =

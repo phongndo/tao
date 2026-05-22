@@ -144,30 +144,35 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: pnpm smoke:package
+      - run: pnpm --filter @tao/desktop test:taod-lifecycle
+      - run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/out/bench
+          pnpm bench:startup:budget | tee apps/desktop/out/bench/startup-budget.txt
+          pnpm bench:latency:budget | tee apps/desktop/out/bench/latency-budget.txt
+          pnpm bench:input-priority:budget | tee apps/desktop/out/bench/input-priority-budget.txt
+          pnpm bench:attach:budget | tee apps/desktop/out/bench/attach-budget.txt
+          pnpm bench:workspace:budget | tee apps/desktop/out/bench/workspace-budget.txt
+          pnpm bench:soak:budget | tee apps/desktop/out/bench/soak-budget.txt
+          pnpm bench:reload:budget | tee apps/desktop/out/bench/reload-budget.txt
+          pnpm bench:app-soak:budget | tee apps/desktop/out/bench/app-soak-budget.txt
+          pnpm bench:taod:budget | tee apps/desktop/out/bench/taod-budget.txt
       - uses: actions/upload-artifact@v4
         with:
           name: tao-dist-macos
           path: apps/desktop/out/
 
   build-windows:
+    name: build-windows (unsupported)
     runs-on: windows-latest
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tao-dist-windows
-          path: apps/desktop/out/
+      - run: |
+          echo "Windows production artifacts are not published yet."
+          echo "taod is currently POSIX-only, and Electron packaging skips the daemon binary on Windows."
 
   # ── Parser benchmark (Linux only) ──
   bench:
@@ -179,3 +184,28 @@ jobs:
         with: { node-version: '22' }
       - run: pnpm install --frozen-lockfile
       - run: pnpm bench
+
+  performance-smoke:
+    runs-on: macos-15
+    env:
+      TAO_TERMINAL_BENCH_MIB: '4'
+      TAO_TERMINAL_MIN_WEBGL_MBPS: '2'
+      TAO_TERMINAL_MAX_P95_FRAME_MS: '80'
+      TAO_TERMINAL_MAX_FRAMES_OVER_16: '1000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: pnpm install --frozen-lockfile
+      - run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/out/bench
+          pnpm bench:terminal:budget | tee apps/desktop/out/bench/terminal-budget.txt
+          pnpm bench:ipc:budget | tee apps/desktop/out/bench/ipc-budget.txt
+          pnpm bench:file-tree:budget | tee apps/desktop/out/bench/file-tree-budget.txt
+          pnpm bench:renderer-combined:budget | tee apps/desktop/out/bench/renderer-combined-budget.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tao-performance-budget-macos
+          path: apps/desktop/out/bench/*.txt
