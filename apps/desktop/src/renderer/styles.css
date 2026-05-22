@@ -156,12 +156,6 @@ body {
   justify-content: flex-start;
 }
 
-.sidebar-settings-button-active {
-  color: #cac9dd;
-  border-color: #38383d;
-  background: #242428;
-}
-
 .workspace-group {
   border-bottom: 1px solid #242428;
 }
@@ -879,11 +873,22 @@ body {
 }
 
 .settings-page {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
   background: #151515;
   color: #c9c7cd;
+}
+
+.settings-titlebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  height: var(--tao-titlebar-height);
+  -webkit-app-region: drag;
 }
 
 .settings-nav {
@@ -896,7 +901,9 @@ body {
 }
 
 .settings-back-link,
-.settings-nav-item {
+.settings-nav-item,
+.settings-mobile-back-link,
+.settings-mobile-nav-item {
   width: 100%;
   border: 0;
   background: transparent;
@@ -921,7 +928,11 @@ body {
 .settings-back-link:hover,
 .settings-back-link:focus-visible,
 .settings-nav-item:hover,
-.settings-nav-item:focus-visible {
+.settings-nav-item:focus-visible,
+.settings-mobile-back-link:hover,
+.settings-mobile-back-link:focus-visible,
+.settings-mobile-nav-item:hover,
+.settings-mobile-nav-item:focus-visible {
   color: #cac9dd;
   background: #1f1f22;
   outline: none;
@@ -962,6 +973,7 @@ body {
 .settings-main {
   min-width: 0;
   flex: 1 1 auto;
+  padding-top: var(--tao-titlebar-height);
   overflow: auto;
 }
 
@@ -978,6 +990,11 @@ body {
   padding-bottom: 14px;
 }
 
+.settings-mobile-back-link,
+.settings-mobile-nav-list {
+  display: none;
+}
+
 .settings-main-header h1 {
   color: #c9c7cd;
   font-size: 16px;
@@ -988,6 +1005,46 @@ body {
 @media (width <= 640px) {
   .settings-nav {
     display: none;
+  }
+
+  .settings-main-header {
+    gap: 12px;
+  }
+
+  .settings-mobile-back-link {
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 6px;
+    padding: 0 10px;
+    color: #9699a8;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .settings-mobile-nav-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .settings-mobile-nav-item {
+    width: auto;
+    min-height: 32px;
+    flex: 0 0 auto;
+    padding: 0 10px;
+    border: 1px solid #303035;
+    border-radius: 6px;
+    color: #9699a8;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .settings-mobile-nav-item-active {
+    border-color: #424246;
+    background: #242428;
+    color: #c9c7cd;
   }
 
   .settings-main-inner {

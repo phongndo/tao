@@ -300,7 +300,7 @@ function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean 
 function WorkspaceItem({
   workspace,
   onReorderWorkspace,
-  onOpenTerminalView,
+  onExitSettings,
 }: {
   workspace: Workspace
   onReorderWorkspace(
@@ -308,7 +308,7 @@ function WorkspaceItem({
     targetWorkspaceId: string,
     placement: ReorderPlacement,
   ): void
-  onOpenTerminalView(): void
+  onExitSettings(): void
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
@@ -360,7 +360,7 @@ function WorkspaceItem({
       }
       setIsExpanded(true)
       upsertWorktree(workspaceResponse.value.id, response.value)
-      onOpenTerminalView()
+      onExitSettings()
       selectWorktree(response.value.id)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -482,7 +482,7 @@ function WorkspaceItem({
             aria-pressed={isActive}
             title={`Local checkout — ${branchLabel}`}
             onClick={() => {
-              onOpenTerminalView()
+              onExitSettings()
               selectWorkspace(workspace.id)
             }}
           >
@@ -504,7 +504,7 @@ function WorkspaceItem({
                   aria-pressed={isWorktreeActive}
                   title={`${title} — ${worktree.branch}`}
                   onClick={() => {
-                    onOpenTerminalView()
+                    onExitSettings()
                     selectWorktree(worktree.id)
                   }}
                 >
@@ -860,6 +860,7 @@ const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) 
 
   return (
     <section className="settings-page" aria-label="Settings">
+      <div className="settings-titlebar" aria-hidden="true" />
       <aside className="settings-nav" aria-label="Settings sections">
         <button type="button" className="settings-back-link" onClick={onBack}>
           <FiChevronLeft size={14} />
@@ -876,6 +877,7 @@ const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) 
                   ? 'settings-nav-item settings-nav-item-active'
                   : 'settings-nav-item'
               }
+              aria-current={item === activeSection ? 'page' : undefined}
             >
               {item}
             </button>
@@ -885,7 +887,28 @@ const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) 
       <main className="settings-main">
         <div className="settings-main-inner">
           <header className="settings-main-header">
+            <button type="button" className="settings-mobile-back-link" onClick={onBack}>
+              <FiChevronLeft size={14} />
+              <span>Back to app</span>
+            </button>
             <h1>{activeSection}</h1>
+            <nav className="settings-mobile-nav-list" aria-label="Settings sections">
+              {settingsNavItems.map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  onClick={() => setActiveSection(item)}
+                  className={
+                    item === activeSection
+                      ? 'settings-mobile-nav-item settings-mobile-nav-item-active'
+                      : 'settings-mobile-nav-item'
+                  }
+                  aria-current={item === activeSection ? 'page' : undefined}
+                >
+                  {item}
+                </button>
+              ))}
+            </nav>
           </header>
         </div>
       </main>
@@ -1534,7 +1557,7 @@ export function App() {
                     key={workspace.id}
                     workspace={workspace}
                     onReorderWorkspace={reorderWorkspace}
-                    onOpenTerminalView={() => setIsSettingsOpen(false)}
+                    onExitSettings={() => setIsSettingsOpen(false)}
                   />
                 ))}
               </div>
@@ -1542,13 +1565,8 @@ export function App() {
             <div className="sidebar-footer">
               <button
                 type="button"
-                className={
-                  isSettingsOpen
-                    ? 'icon-button sidebar-settings-button sidebar-settings-button-active'
-                    : 'icon-button sidebar-settings-button'
-                }
+                className="icon-button sidebar-settings-button"
                 aria-label="Open settings"
-                aria-pressed={isSettingsOpen}
                 title="Settings"
                 onClick={() => setIsSettingsOpen(true)}
               >
