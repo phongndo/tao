@@ -595,12 +595,20 @@ export class TaodPtyBridge {
   }
 
   private updateProcessTitle(sessionId: string, session: BridgeSession): void {
+    if (this.sessions.get(sessionId) !== session || !session.stream) {
+      this.stopProcessTitlePolling(session)
+      return
+    }
     if (session.processTitleInFlight) return
     session.processTitleInFlight = true
 
     void readProcessTitle(session.rootPid, session.fallbackTitle)
       .then((title) => {
-        if (this.sessions.get(sessionId) !== session || !session.stream || title.length === 0) {
+        if (this.sessions.get(sessionId) !== session || !session.stream) {
+          this.stopProcessTitlePolling(session)
+          return
+        }
+        if (title.length === 0) {
           return
         }
         if (session.processTitle === title) return

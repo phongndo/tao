@@ -93,6 +93,7 @@ export function resolveProcessTitle(
 
 export async function readProcessTitle(rootPid: number, fallbackTitle: string): Promise<string> {
   if (process.platform === 'win32') return fallbackTitle
+  if (!Number.isInteger(rootPid) || rootPid <= 0) return fallbackTitle
 
   const rows = await readProcessRows()
   return resolveProcessTitle(rows, rootPid, fallbackTitle)
@@ -108,7 +109,7 @@ function readProcessRows(): Promise<ProcessRow[]> {
   const nextRows = new Promise<ProcessRow[]>((resolve) => {
     execFile(
       'ps',
-      ['-axo', 'pid=,ppid=,stat=,comm='],
+      ['-axo', 'pid=,ppid=,stat=,args='],
       { timeout: 1000, maxBuffer: 1024 * 1024 },
       (error, stdout) => {
         if (error) {
@@ -135,6 +136,7 @@ function normalizeProcessName(command: string): string | null {
   const trimmed = command.trim()
   if (trimmed.length === 0) return null
 
-  const name = basename(trimmed).replace(/^-+/, '').trim()
+  const executable = trimmed.match(/^\S+/)?.[0] ?? ''
+  const name = basename(executable).replace(/^-+/, '').trim()
   return name.length > 0 ? name : null
 }

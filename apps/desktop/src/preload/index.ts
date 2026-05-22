@@ -279,6 +279,7 @@ function clearSessionState(sessionId: string) {
   sessionOutputCallbacks.delete(sessionId)
   sessionSnapshotCallbacks.delete(sessionId)
   sessionResizeCallbacks.delete(sessionId)
+  sessionTitleCallbacks.delete(sessionId)
   sessionExitCallbacks.delete(sessionId)
   sessionErrorCallbacks.delete(sessionId)
   agentStatusCallbacks.delete(sessionId)

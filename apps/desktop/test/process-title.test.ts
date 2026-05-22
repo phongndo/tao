@@ -21,6 +21,15 @@ test('process title prefers the command running under the shell', () => {
   assert.equal(resolveProcessTitle(rows, 100, 'zsh'), 'codex')
 })
 
+test('process title strips command arguments before naming the process', () => {
+  const rows = parsePsOutput(`
+    100 1 Ss /bin/zsh
+    200 100 S+ /usr/bin/google-chrome-stable --type=renderer
+  `)
+
+  assert.equal(resolveProcessTitle(rows, 100, 'zsh'), 'google-chrome-stable')
+})
+
 test('process title skips nested shells when a command is running inside them', () => {
   const rows = parsePsOutput(`
     100 1 Ss /bin/zsh
@@ -29,4 +38,14 @@ test('process title skips nested shells when a command is running inside them', 
   `)
 
   assert.equal(resolveProcessTitle(rows, 100, 'zsh'), 'python3')
+})
+
+test('process title ignores zombie child processes', () => {
+  const rows = parsePsOutput(`
+    100 1 Ss /bin/zsh
+    300 100 Z+ /usr/bin/vim
+    200 100 S+ /usr/bin/top
+  `)
+
+  assert.equal(resolveProcessTitle(rows, 100, 'zsh'), 'top')
 })
