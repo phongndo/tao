@@ -5,6 +5,7 @@ import {
   FiFolderPlus,
   FiMenu,
   FiPlus,
+  FiSettings,
   FiTerminal,
   FiTrash2,
   FiX,
@@ -299,6 +300,7 @@ function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean 
 function WorkspaceItem({
   workspace,
   onReorderWorkspace,
+  onExitSettings,
 }: {
   workspace: Workspace
   onReorderWorkspace(
@@ -306,6 +308,7 @@ function WorkspaceItem({
     targetWorkspaceId: string,
     placement: ReorderPlacement,
   ): void
+  onExitSettings(): void
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
@@ -357,6 +360,7 @@ function WorkspaceItem({
       }
       setIsExpanded(true)
       upsertWorktree(workspaceResponse.value.id, response.value)
+      onExitSettings()
       selectWorktree(response.value.id)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -477,7 +481,10 @@ function WorkspaceItem({
             className={isActive ? 'local-branch-row local-branch-row-active' : 'local-branch-row'}
             aria-pressed={isActive}
             title={`Local checkout — ${branchLabel}`}
-            onClick={() => selectWorkspace(workspace.id)}
+            onClick={() => {
+              onExitSettings()
+              selectWorkspace(workspace.id)
+            }}
           >
             <span className="worktree-details">
               <span className="worktree-title">{branchLabel}</span>
@@ -496,7 +503,10 @@ function WorkspaceItem({
                   className="worktree-item"
                   aria-pressed={isWorktreeActive}
                   title={`${title} — ${worktree.branch}`}
-                  onClick={() => selectWorktree(worktree.id)}
+                  onClick={() => {
+                    onExitSettings()
+                    selectWorktree(worktree.id)
+                  }}
                 >
                   <span className="worktree-details">
                     <span className="worktree-title">{title}</span>
@@ -842,6 +852,70 @@ const HeaderNavigation = memo(function HeaderNavigation({
   )
 })
 
+const settingsNavItems = ['General', 'Appearance', 'Agent'] as const
+type SettingsSection = (typeof settingsNavItems)[number]
+
+const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) {
+  const [activeSection, setActiveSection] = useState<SettingsSection>('General')
+
+  return (
+    <section className="settings-page" aria-label="Settings">
+      <div className="settings-titlebar" aria-hidden="true" />
+      <aside className="settings-nav" aria-label="Settings sections">
+        <button type="button" className="settings-back-link" onClick={onBack}>
+          <FiChevronLeft size={14} />
+          <span>Back to app</span>
+        </button>
+        <nav className="settings-nav-list">
+          {settingsNavItems.map((item) => (
+            <button
+              type="button"
+              key={item}
+              onClick={() => setActiveSection(item)}
+              className={
+                item === activeSection
+                  ? 'settings-nav-item settings-nav-item-active'
+                  : 'settings-nav-item'
+              }
+              aria-current={item === activeSection ? 'page' : undefined}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
+      </aside>
+      <main className="settings-main">
+        <div className="settings-main-inner">
+          <header className="settings-main-header">
+            <button type="button" className="settings-mobile-back-link" onClick={onBack}>
+              <FiChevronLeft size={14} />
+              <span>Back to app</span>
+            </button>
+            <h1>{activeSection}</h1>
+            <nav className="settings-mobile-nav-list" aria-label="Settings sections">
+              {settingsNavItems.map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  onClick={() => setActiveSection(item)}
+                  className={
+                    item === activeSection
+                      ? 'settings-mobile-nav-item settings-mobile-nav-item-active'
+                      : 'settings-mobile-nav-item'
+                  }
+                  aria-current={item === activeSection ? 'page' : undefined}
+                >
+                  {item}
+                </button>
+              ))}
+            </nav>
+          </header>
+        </div>
+      </main>
+    </section>
+  )
+})
+
 const PaneTile = memo(function PaneTile({
   pane,
   terminalCwd,
@@ -1063,6 +1137,7 @@ export function App() {
   const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId
   const canCreateTerminal = activeWorkspaceKey !== null
   const sidebarSize = useMemo(
@@ -1318,6 +1393,7 @@ export function App() {
           toggleSidebar()
           break
         case 'new-tab':
+          setIsSettingsOpen(false)
           newTab(activeWorkspaceKey ?? undefined)
           break
         case 'close-tab':
@@ -1333,9 +1409,11 @@ export function App() {
           splitActivePane('column')
           break
         case 'switch-workspace':
+          setIsSettingsOpen(false)
           selectWorkspaceByIndex(command.index)
           break
         case 'switch-tab':
+          setIsSettingsOpen(false)
           selectTabByIndex(command.index)
           break
         case 'focus-pane':
@@ -1364,6 +1442,7 @@ export function App() {
   ])
 
   async function handleAddWorkspace() {
+    setIsSettingsOpen(false)
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
     if (!projectPath) return
     if (
@@ -1396,6 +1475,7 @@ export function App() {
   function selectWorkspaceAtIndex(index: number) {
     const workspace = sortedWorkspaces[index]
     if (!workspace) return
+    setIsSettingsOpen(false)
     useTaoStore.getState().selectWorkspace(workspace.id)
   }
 
@@ -1434,6 +1514,14 @@ export function App() {
     return <div className="tao-shell" />
   }
 
+  if (isSettingsOpen) {
+    return (
+      <div className="tao-shell tao-settings-shell">
+        <SettingsPage onBack={() => setIsSettingsOpen(false)} />
+      </div>
+    )
+  }
+
   return (
     <div className={shellClassName} style={shellStyle}>
       {sidebarExpanded ? (
@@ -1469,10 +1557,22 @@ export function App() {
                     key={workspace.id}
                     workspace={workspace}
                     onReorderWorkspace={reorderWorkspace}
+                    onExitSettings={() => setIsSettingsOpen(false)}
                   />
                 ))}
               </div>
             ) : null}
+            <div className="sidebar-footer">
+              <button
+                type="button"
+                className="icon-button sidebar-settings-button"
+                aria-label="Open settings"
+                title="Settings"
+                onClick={() => setIsSettingsOpen(true)}
+              >
+                <FiSettings size={15} />
+              </button>
+            </div>
           </div>
         </ResizeShell>
       ) : null}
@@ -1488,9 +1588,15 @@ export function App() {
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onNewTab={() => newTab(activeWorkspaceKey ?? undefined)}
+            onNewTab={() => {
+              setIsSettingsOpen(false)
+              newTab(activeWorkspaceKey ?? undefined)
+            }}
             canCreateTabs={canCreateTerminal}
-            onSelectTab={selectTab}
+            onSelectTab={(tabId) => {
+              setIsSettingsOpen(false)
+              selectTab(tabId)
+            }}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
             archivedTabIds={archivedTabIds}
