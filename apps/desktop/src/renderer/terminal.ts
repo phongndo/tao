@@ -520,6 +520,9 @@ export async function createTerminal(
 
   const outputWriter = createBatchedTerminalWriter(openedTerm)
   const titleSubscription = options.onTitle ? openedTerm.onTitleChange(options.onTitle) : null
+  const unsubSessionTitle = options.onTitle
+    ? window.electronAPI.onSessionTitle(sessionId, options.onTitle)
+    : null
   let stopResizeObserver: (() => void) | null = null
   let archived = false
   let bufferingStartupOutput = true
@@ -703,6 +706,7 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
+    unsubSessionTitle?.()
     titleSubscription?.dispose()
     outputWriter.dispose()
     if (didAttachSession) {
@@ -729,6 +733,7 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
+    unsubSessionTitle?.()
     titleSubscription?.dispose()
     outputWriter.dispose()
     void window.electronAPI.detachSession(sessionId)

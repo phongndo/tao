@@ -46,6 +46,7 @@ export interface ElectronAPI {
     callback: (frame: CurrentScreenSnapshotFrame) => void,
   ): () => void
   onSessionResize(sessionId: string, callback: (cols: number, rows: number) => void): () => void
+  onSessionTitle(sessionId: string, callback: (title: string) => void): () => void
   onSessionExit(sessionId: string, callback: (info: ExitInfo) => void): () => void
   onSessionError(sessionId: string, callback: (error: string) => void): () => void
   onAgentStatus(sessionId: string, callback: (status: AgentStatus) => void): () => void
