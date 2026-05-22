@@ -104,6 +104,8 @@ export const PaneLayoutDataSchema = Schema.Struct({
   activePaneId: Schema.NullOr(Schema.String),
   sidebarExpanded: Schema.Boolean,
   sidebarWidth: Schema.Number,
+  rightSidebarExpanded: Schema.optional(Schema.Boolean),
+  rightSidebarWidth: Schema.optional(Schema.Number),
 })
 
 export const SettingsDataSchema = Schema.Struct({

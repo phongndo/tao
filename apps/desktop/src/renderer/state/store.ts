@@ -29,6 +29,8 @@ export interface TaoState {
   activePaneId: string | null
   sidebarExpanded: boolean
   sidebarWidth: number
+  rightSidebarExpanded: boolean
+  rightSidebarWidth: number
   hydrateLayout(data: PaneLayoutData): void
   addWorkspace(workspace: Workspace): void
   upsertWorkspace(workspace: Workspace): void
@@ -57,6 +59,9 @@ export interface TaoState {
   toggleSidebar(): void
   setSidebarExpanded(expanded: boolean): void
   setSidebarWidth(width: number): void
+  toggleRightSidebar(): void
+  setRightSidebarExpanded(expanded: boolean): void
+  setRightSidebarWidth(width: number): void
   reorderWorkspace(
     workspaceId: string,
     targetWorkspaceId: string,
@@ -149,6 +154,8 @@ const PersistedTaoStateSchema = Schema.Struct({
   activePaneId: Schema.optional(Schema.NullOr(Schema.String)),
   sidebarExpanded: Schema.optional(Schema.Boolean),
   sidebarWidth: Schema.optional(Schema.Number),
+  rightSidebarExpanded: Schema.optional(Schema.Boolean),
+  rightSidebarWidth: Schema.optional(Schema.Number),
 })
 
 const MIN_SPLIT_PERCENTAGE = 5
@@ -714,6 +721,8 @@ function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
     activePaneId: persisted.activePaneId ?? null,
     sidebarExpanded: persisted.sidebarExpanded ?? true,
     sidebarWidth: finiteNumber(persisted.sidebarWidth ?? 240, 240),
+    rightSidebarExpanded: persisted.rightSidebarExpanded ?? false,
+    rightSidebarWidth: finiteNumber(persisted.rightSidebarWidth ?? 240, 240),
   }
 }
 
@@ -773,6 +782,8 @@ export const useTaoStore = create<TaoState>()((set) => ({
   activePaneId: null,
   sidebarExpanded: true,
   sidebarWidth: 240,
+  rightSidebarExpanded: false,
+  rightSidebarWidth: 240,
   hydrateLayout: (data) =>
     set((state) => {
       const persisted = normalizePersistedState(data)
@@ -1182,6 +1193,9 @@ export const useTaoStore = create<TaoState>()((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarExpanded: !state.sidebarExpanded })),
   setSidebarExpanded: (expanded) => set({ sidebarExpanded: expanded }),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
+  toggleRightSidebar: () => set((state) => ({ rightSidebarExpanded: !state.rightSidebarExpanded })),
+  setRightSidebarExpanded: (expanded) => set({ rightSidebarExpanded: expanded }),
+  setRightSidebarWidth: (width) => set({ rightSidebarWidth: width }),
   reorderWorkspace: (workspaceId, targetWorkspaceId, placement) =>
     set((state) => {
       const workspaces = moveRelativeTo(state.workspaces, workspaceId, targetWorkspaceId, placement)
@@ -1225,5 +1239,7 @@ export function selectPaneLayoutData(state: TaoState): PaneLayoutData {
     activePaneId: state.activePaneId,
     sidebarExpanded: state.sidebarExpanded,
     sidebarWidth: state.sidebarWidth,
+    rightSidebarExpanded: state.rightSidebarExpanded,
+    rightSidebarWidth: state.rightSidebarWidth,
   }
 }

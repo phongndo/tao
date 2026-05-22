@@ -2,6 +2,7 @@ import { Context, Effect, Layer, ManagedRuntime, Schema } from 'effect'
 import { ipcRenderer } from 'electron'
 import {
   WorkspaceError,
+  WorkspaceFileTreeResponseSchema,
   WorkspaceGitBranchResponseSchema,
   WorkspaceGitStatusResponseSchema,
   WorkspaceGitWorktreesResponseSchema,
@@ -9,6 +10,7 @@ import {
   WorkspacePullRequestResponseSchema,
   WORKSPACE_IPC_TIMEOUT_MS,
   type WorkspaceGitBranchResponse,
+  type WorkspaceFileTreeResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
   type WorkspacePortsResponse,
@@ -29,6 +31,9 @@ export class PreloadWorkspaceIpc extends Context.Service<
     readonly getGitStatus: (
       workspacePath: string,
     ) => Effect.Effect<WorkspaceGitStatusResponse, WorkspaceError>
+    readonly getWorkspaceFileTree: (
+      workspacePath: string,
+    ) => Effect.Effect<WorkspaceFileTreeResponse, WorkspaceError>
     readonly getWorkspacePorts: (
       workspacePath: string,
     ) => Effect.Effect<WorkspacePortsResponse, WorkspaceError>
@@ -72,6 +77,12 @@ const PreloadWorkspaceIpcLive = Layer.succeed(PreloadWorkspaceIpc)({
     ),
   getGitStatus: (workspacePath) =>
     invokeWorkspace('workspace:getGitStatus', workspacePath, WorkspaceGitStatusResponseSchema),
+  getWorkspaceFileTree: (workspacePath) =>
+    invokeWorkspace(
+      'workspace:getWorkspaceFileTree',
+      workspacePath,
+      WorkspaceFileTreeResponseSchema,
+    ),
   getWorkspacePorts: (workspacePath) =>
     invokeWorkspace('workspace:getWorkspacePorts', workspacePath, WorkspacePortsResponseSchema),
   getPullRequestInfo: (workspacePath) =>

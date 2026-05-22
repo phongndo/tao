@@ -17,6 +17,7 @@ import type {
 } from '@tao/shared/taod-protocol'
 import type {
   WorkspaceGitBranchResponse,
+  WorkspaceFileTreeResponse,
   WorkspaceGitStatusResponse,
   WorkspaceGitWorktreesResponse,
   WorkspaceIpcResponse,
@@ -71,6 +72,7 @@ export interface ElectronAPI {
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse>
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse>
+  getWorkspaceFileTree(workspacePath: string): Promise<WorkspaceFileTreeResponse>
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>
   listWorkspaces(): Promise<WorkspaceListResponse>

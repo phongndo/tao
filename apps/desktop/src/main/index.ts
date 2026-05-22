@@ -548,6 +548,12 @@ ipcMain.handle('workspace:getGitStatus', async (event, workspacePath: unknown) =
   )
 })
 
+ipcMain.handle('workspace:getWorkspaceFileTree', async (event, workspacePath: unknown) => {
+  return workspaceServiceRequest(event, workspacePath, (service, path) =>
+    service.getWorkspaceFileTree(path),
+  )
+})
+
 ipcMain.handle('workspace:getWorkspacePorts', async (event, workspacePath: unknown) => {
   return workspaceServiceRequest(event, workspacePath, (service, path) =>
     service.getWorkspacePorts(path),

@@ -2,13 +2,15 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiArchive,
+  FiChevronsUp,
+  FiRefreshCw,
   FiFolderPlus,
-  FiMenu,
   FiPlus,
   FiTerminal,
   FiTrash2,
   FiX,
 } from 'react-icons/fi'
+import { TbLayoutSidebar, TbLayoutSidebarRight } from 'react-icons/tb'
 import {
   type ComponentType,
   type CSSProperties,
@@ -22,6 +24,8 @@ import {
   useState,
 } from 'react'
 import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
+import { FileTree as PierreFileTree } from '@pierre/trees'
+import type { FileTreeDirectoryHandle, GitStatusEntry } from '@pierre/trees'
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData } from '@tao/shared/session'
 import {
@@ -38,15 +42,82 @@ import { WorkspaceMetadataCache } from '../workspace-service'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 import type { WorkspaceRecord } from '@tao/shared/workspace'
+import type { WorkspaceFileTree } from '@tao/shared/workspace'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
 const SIDEBAR_EXPANDED_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
+const RIGHT_SIDEBAR_MAX_WIDTH = SIDEBAR_MAX_WIDTH * 2
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tao-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
 const LAYOUT_WRITE_DEBOUNCE_MS = 150
 const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
+const EMPTY_FILE_TREE: WorkspaceFileTree = { paths: [], gitStatus: [] }
+const FILE_TREE_UNSAFE_CSS = `
+  :host {
+    --trees-bg-override: #191919;
+    --trees-fg-override: #c9c7cd;
+    --trees-fg-muted-override: #747783;
+    --trees-bg-muted-override: #1f1f22;
+    --trees-accent-override: #c9c7cd;
+    --trees-border-color-override: #242428;
+    --trees-focus-ring-color-override: #424246;
+    --trees-focus-ring-offset-override: 0;
+    --trees-font-family-override: Menlo, Monaco, 'Courier New', monospace;
+    --trees-font-size-override: 12px;
+    --trees-font-weight-regular-override: 700;
+    --trees-font-weight-semibold-override: 700;
+    --trees-border-radius-override: 0;
+    --trees-level-gap-override: 9px;
+    --trees-item-padding-x-override: 8px;
+    --trees-item-margin-x-override: 0;
+    --trees-item-row-gap-override: 7px;
+    --trees-icon-width-override: 14px;
+    --trees-padding-inline-override: 0;
+    --trees-scrollbar-thumb-override: #424246;
+    --trees-selected-bg-override: #242428;
+    --trees-selected-focused-border-color-override: #424246;
+    --trees-status-added-override: #90b99f;
+    --trees-status-modified-override: #e6b99d;
+    --trees-status-renamed-override: #aca1cf;
+    --trees-status-untracked-override: #90b99f;
+    --trees-status-deleted-override: #f5a191;
+    --trees-git-added-color-override: #90b99f;
+    --trees-git-modified-color-override: #e6b99d;
+    --trees-git-renamed-color-override: #aca1cf;
+    --trees-git-untracked-color-override: #90b99f;
+    --trees-git-deleted-color-override: #f5a191;
+    --trees-file-icon-color: #9699a8;
+    --trees-file-icon-color-git: #e06c4f;
+    --trees-file-icon-color-json: #e6b99d;
+    --trees-file-icon-color-markdown: #90b99f;
+    --trees-file-icon-color-npm: #e06c4f;
+    --trees-file-icon-color-typescript: #6f8dbd;
+    --trees-file-icon-color-yml: #f5a191;
+  }
+
+  [data-file-tree-virtualized-scroll='true'] {
+    padding-block: 4px 10px;
+  }
+
+  [data-file-tree-search-container] {
+    display: none;
+  }
+
+  [data-type='item'] {
+    min-height: 26px;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  [data-type='item']:hover {
+    background: #1f1f22;
+  }
+
+  [data-item-section='content'] {
+    letter-spacing: 0;
+  }
+`
 
 function readLegacyLocalStorageLayout(): unknown | null {
   try {
@@ -277,8 +348,34 @@ function workspaceFromRecord(record: WorkspaceRecord): Workspace {
   }
 }
 
-function normalizeSidebarWidth(nextWidth: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
+function activeContextPath(workspace: Workspace, activeContextId: string | null): string {
+  const worktree = (workspace.worktrees ?? []).find(
+    (candidate) => worktreeContextId(candidate.id) === activeContextId,
+  )
+  return worktree?.path ?? workspace.projectPath
+}
+
+function collectDirectoryPaths(paths: readonly string[]): string[] {
+  const directories = new Set<string>()
+
+  for (const path of paths) {
+    const segments = path.split('/').filter(Boolean)
+    for (let index = 1; index < segments.length; index++) {
+      directories.add(segments.slice(0, index).join('/'))
+    }
+  }
+
+  return [...directories].sort((left, right) => right.length - left.length)
+}
+
+function isFileTreeDirectoryHandle(
+  item: ReturnType<PierreFileTree['getItem']>,
+): item is FileTreeDirectoryHandle {
+  return item?.isDirectory() === true
+}
+
+function normalizeSidebarWidth(nextWidth: number, maxWidth = SIDEBAR_MAX_WIDTH): number {
+  return Math.min(maxWidth, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
 }
 
 function getDropPlacement(
@@ -524,11 +621,17 @@ function WorkspaceItem({
 function ResizeShell({
   children,
   width,
+  side = 'left',
+  className = 'tao-sidebar',
+  ariaLabel = 'Workspaces',
   onResize,
   onResizePreview,
 }: {
   children: ReactNode
   width: number
+  side?: 'left' | 'right'
+  className?: string
+  ariaLabel?: string
   onResize(width: number): void
   onResizePreview?(width: number | null): void
 }) {
@@ -540,6 +643,7 @@ function ResizeShell({
   const pendingWidthRef = useRef<number | null>(null)
   const frameRef = useRef<number | null>(null)
   const displayWidth = draftWidth ?? width
+  const maxWidth = side === 'right' ? RIGHT_SIDEBAR_MAX_WIDTH : SIDEBAR_MAX_WIDTH
 
   useEffect(() => {
     if (!isResizing) currentWidthRef.current = width
@@ -549,17 +653,18 @@ function ResizeShell({
     const nextWidth = pendingWidthRef.current
     pendingWidthRef.current = null
     if (nextWidth === null) return
-    const clampedWidth = normalizeSidebarWidth(nextWidth)
+    const clampedWidth = normalizeSidebarWidth(nextWidth, maxWidth)
     currentWidthRef.current = clampedWidth
     setDraftWidth(clampedWidth)
     onResizePreview?.(clampedWidth)
-  }, [onResizePreview])
+  }, [maxWidth, onResizePreview])
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
       if (!isResizing) return
 
-      pendingWidthRef.current = startWidthRef.current + event.clientX - startXRef.current
+      const deltaX = event.clientX - startXRef.current
+      pendingWidthRef.current = startWidthRef.current + (side === 'left' ? deltaX : -deltaX)
       if (frameRef.current !== null) return
 
       frameRef.current = window.requestAnimationFrame(() => {
@@ -567,7 +672,7 @@ function ResizeShell({
         flushPendingWidth()
       })
     },
-    [flushPendingWidth, isResizing],
+    [flushPendingWidth, isResizing, side],
   )
 
   const handlePointerUp = useCallback(() => {
@@ -611,16 +716,22 @@ function ResizeShell({
       role="separator"
       aria-orientation="vertical"
       aria-valuemin={SIDEBAR_EXPANDED_MIN_WIDTH}
-      aria-valuemax={SIDEBAR_MAX_WIDTH}
+      aria-valuemax={maxWidth}
       aria-valuenow={displayWidth}
       aria-label="Resize sidebar"
       tabIndex={0}
-      className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
+      className={[
+        'resize-handle',
+        side === 'right' ? 'resize-handle-right' : null,
+        isResizing ? 'resize-handle-active' : null,
+      ]
+        .filter(Boolean)
+        .join(' ')}
       onPointerDown={(event) => {
         if (!event.isPrimary || event.button !== 0) return
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
-        const normalizedWidth = normalizeSidebarWidth(width)
+        const normalizedWidth = normalizeSidebarWidth(width, maxWidth)
         startXRef.current = event.clientX
         startWidthRef.current = normalizedWidth
         currentWidthRef.current = normalizedWidth
@@ -631,12 +742,24 @@ function ResizeShell({
       onKeyDown={(event) => {
         if (event.key === 'ArrowLeft') {
           event.preventDefault()
-          onResize(normalizeSidebarWidth(displayWidth - SIDEBAR_KEYBOARD_RESIZE_STEP))
+          onResize(
+            normalizeSidebarWidth(
+              displayWidth +
+                (side === 'left' ? -SIDEBAR_KEYBOARD_RESIZE_STEP : SIDEBAR_KEYBOARD_RESIZE_STEP),
+              maxWidth,
+            ),
+          )
           return
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
-          onResize(normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP))
+          onResize(
+            normalizeSidebarWidth(
+              displayWidth +
+                (side === 'left' ? SIDEBAR_KEYBOARD_RESIZE_STEP : -SIDEBAR_KEYBOARD_RESIZE_STEP),
+              maxWidth,
+            ),
+          )
           return
         }
         if (event.key === 'Home') {
@@ -646,7 +769,7 @@ function ResizeShell({
         }
         if (event.key === 'End') {
           event.preventDefault()
-          onResize(SIDEBAR_MAX_WIDTH)
+          onResize(maxWidth)
           return
         }
         if (event.key === 'Enter' || event.key === ' ') {
@@ -657,11 +780,8 @@ function ResizeShell({
       onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
     />
   )
-
-  const className = ['tao-sidebar'].filter(Boolean).join(' ')
-
   return (
-    <aside className={className} style={{ width: displayWidth }} aria-label="Workspaces">
+    <aside className={className} style={{ width: displayWidth }} aria-label={ariaLabel}>
       {children}
       {resizeHandle}
     </aside>
@@ -673,13 +793,13 @@ const TabBar = memo(function TabBar({
   activeTabId,
   showHeaderNavigation,
   isSidebarVisible,
+  isRightSidebarVisible,
   canGoPreviousWorkspace,
   canGoNextWorkspace,
   onToggleSidebar,
+  onToggleRightSidebar,
   onPreviousWorkspace,
   onNextWorkspace,
-  onNewTab,
-  canCreateTabs,
   onSelectTab,
   onCloseTab,
   onReorderTab,
@@ -689,13 +809,13 @@ const TabBar = memo(function TabBar({
   activeTabId: string | null
   showHeaderNavigation: boolean
   isSidebarVisible: boolean
+  isRightSidebarVisible: boolean
   canGoPreviousWorkspace: boolean
   canGoNextWorkspace: boolean
   onToggleSidebar(): void
+  onToggleRightSidebar(): void
   onPreviousWorkspace(): void
   onNextWorkspace(): void
-  onNewTab(): void
-  canCreateTabs: boolean
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
@@ -778,16 +898,17 @@ const TabBar = memo(function TabBar({
           )
         })}
       </div>
-      <button
-        type="button"
-        className="icon-button"
-        aria-label="New tab"
-        title={canCreateTabs ? 'New tab' : 'Add a workspace first'}
-        disabled={!canCreateTabs}
-        onClick={onNewTab}
-      >
-        <FiPlus size={15} />
-      </button>
+      {!isRightSidebarVisible ? (
+        <button
+          type="button"
+          className="icon-button titlebar-button right-sidebar-toggle-button"
+          aria-label="Show right sidebar"
+          title="Show right sidebar"
+          onClick={onToggleRightSidebar}
+        >
+          <TbLayoutSidebarRight size={16} />
+        </button>
+      ) : null}
     </div>
   )
 })
@@ -812,11 +933,11 @@ const HeaderNavigation = memo(function HeaderNavigation({
       <button
         type="button"
         className="icon-button titlebar-button"
-        aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-        title={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+        aria-label={isSidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+        title={isSidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
         onClick={onToggleSidebar}
       >
-        <FiMenu size={15} />
+        <TbLayoutSidebar size={16} />
       </button>
       <button
         type="button"
@@ -841,6 +962,193 @@ const HeaderNavigation = memo(function HeaderNavigation({
     </div>
   )
 })
+
+const RightSidebar = memo(function RightSidebar({
+  rootPath,
+  onToggleRightSidebar,
+}: {
+  rootPath: string | null
+  onToggleRightSidebar(): void
+}) {
+  return (
+    <>
+      <div className="right-sidebar-header">
+        <button
+          type="button"
+          className="icon-button titlebar-button right-sidebar-toggle-button"
+          aria-label="Hide right sidebar"
+          title="Hide right sidebar"
+          onClick={onToggleRightSidebar}
+        >
+          <TbLayoutSidebarRight size={16} />
+        </button>
+      </div>
+      <div className="right-sidebar-content">
+        <WorkspaceFileTreePanel rootPath={rootPath} />
+      </div>
+    </>
+  )
+})
+
+function WorkspaceFileTreePanel({ rootPath }: { rootPath: string | null }) {
+  const mountRef = useRef<HTMLDivElement | null>(null)
+  const treeRef = useRef<PierreFileTree | null>(null)
+  const [fileTree, setFileTree] = useState<WorkspaceFileTree>(EMPTY_FILE_TREE)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [renderError, setRenderError] = useState<string | null>(null)
+
+  const refreshFileTree = useCallback(() => {
+    if (!rootPath) {
+      setFileTree(EMPTY_FILE_TREE)
+      setError(null)
+      setIsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
+
+    window.electronAPI
+      .getWorkspaceFileTree(rootPath)
+      .then((response) => {
+        if (cancelled) return
+        if (response.ok) {
+          setFileTree(response.value)
+          return
+        }
+        setFileTree(EMPTY_FILE_TREE)
+        setError(response.error.message)
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return
+        setFileTree(EMPTY_FILE_TREE)
+        setError(loadError instanceof Error ? loadError.message : String(loadError))
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [rootPath])
+
+  useEffect(() => {
+    const mount = mountRef.current
+    if (!mount) return
+
+    const tree = new PierreFileTree({
+      density: 'compact',
+      flattenEmptyDirectories: true,
+      initialExpansion: 0,
+      itemHeight: 26,
+      paths: [],
+      search: false,
+      gitStatus: [],
+      unsafeCSS: FILE_TREE_UNSAFE_CSS,
+    })
+
+    try {
+      tree.render({ containerWrapper: mount })
+      treeRef.current = tree
+      setRenderError(null)
+    } catch (renderErrorValue) {
+      tree.cleanUp()
+      setRenderError(
+        renderErrorValue instanceof Error ? renderErrorValue.message : String(renderErrorValue),
+      )
+      console.warn('[file-tree] Mount failed:', renderErrorValue)
+      return
+    }
+
+    return () => {
+      treeRef.current = null
+      tree.cleanUp()
+      mount.replaceChildren()
+    }
+  }, [])
+
+  useEffect(() => refreshFileTree(), [refreshFileTree])
+
+  useEffect(() => {
+    const tree = treeRef.current
+    if (!tree) return
+
+    try {
+      tree.resetPaths(fileTree.paths)
+      tree.setGitStatus(fileTree.gitStatus as readonly GitStatusEntry[])
+      setRenderError(null)
+    } catch (updateErrorValue) {
+      setRenderError(
+        updateErrorValue instanceof Error ? updateErrorValue.message : String(updateErrorValue),
+      )
+      console.warn('[file-tree] Update failed:', updateErrorValue)
+    }
+  }, [fileTree])
+
+  const collapseAll = useCallback(() => {
+    const tree = treeRef.current
+    if (!tree) return
+
+    try {
+      for (const path of collectDirectoryPaths(fileTree.paths)) {
+        const item = tree.getItem(path)
+        if (isFileTreeDirectoryHandle(item)) item.collapse()
+      }
+      setRenderError(null)
+    } catch (collapseErrorValue) {
+      setRenderError(
+        collapseErrorValue instanceof Error
+          ? collapseErrorValue.message
+          : String(collapseErrorValue),
+      )
+      console.warn('[file-tree] Collapse failed:', collapseErrorValue)
+    }
+  }, [fileTree.paths])
+
+  return (
+    <div className="right-sidebar-file-tree">
+      <div className="right-sidebar-file-tree-toolbar">
+        <div className="right-sidebar-file-tree-title">Explorer</div>
+        <div className="right-sidebar-file-tree-actions">
+          <button
+            type="button"
+            className="icon-button right-sidebar-tree-action-button"
+            aria-label="Collapse all"
+            title="Collapse all"
+            disabled={!rootPath || fileTree.paths.length === 0}
+            onClick={collapseAll}
+          >
+            <FiChevronsUp size={12} />
+          </button>
+          <button
+            type="button"
+            className="icon-button right-sidebar-tree-action-button"
+            aria-label="Refresh file tree"
+            title="Refresh file tree"
+            disabled={!rootPath || isLoading}
+            onClick={() => refreshFileTree()}
+          >
+            <FiRefreshCw size={12} />
+          </button>
+        </div>
+      </div>
+      {renderError ? <div className="right-sidebar-file-tree-error">{renderError}</div> : null}
+      {error ? <div className="right-sidebar-file-tree-error">{error}</div> : null}
+      {!rootPath ? <div className="right-sidebar-file-tree-message">Select a workspace</div> : null}
+      {rootPath && !isLoading && !error && !renderError && fileTree.paths.length === 0 ? (
+        <div className="right-sidebar-file-tree-message">No files</div>
+      ) : null}
+      <div
+        ref={mountRef}
+        className="right-sidebar-file-tree-mount"
+        aria-label="Workspace file tree"
+      />
+    </div>
+  )
+}
 
 const PaneTile = memo(function PaneTile({
   pane,
@@ -1036,6 +1344,8 @@ export function App() {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const sidebarExpanded = useTaoStore((state) => state.sidebarExpanded)
   const sidebarWidth = useTaoStore((state) => state.sidebarWidth)
+  const rightSidebarExpanded = useTaoStore((state) => state.rightSidebarExpanded)
+  const rightSidebarWidth = useTaoStore((state) => state.rightSidebarWidth)
   const addWorkspace = useTaoStore((state) => state.addWorkspace)
   const selectWorkspaceByIndex = useTaoStore((state) => state.selectWorkspaceByIndex)
   const newTab = useTaoStore((state) => state.newTab)
@@ -1055,6 +1365,8 @@ export function App() {
   const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
+  const setRightSidebarExpanded = useTaoStore((state) => state.setRightSidebarExpanded)
+  const setRightSidebarWidth = useTaoStore((state) => state.setRightSidebarWidth)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
   const removeWorktree = useTaoStore((state) => state.removeWorktree)
@@ -1062,6 +1374,9 @@ export function App() {
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
+  const [rightSidebarResizePreviewWidth, setRightSidebarResizePreviewWidth] = useState<
+    number | null
+  >(null)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const activeWorkspaceKey = activeWorkspaceId
   const canCreateTerminal = activeWorkspaceKey !== null
@@ -1071,6 +1386,14 @@ export function App() {
         sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_DEFAULT_WIDTH,
       ),
     [sidebarWidth],
+  )
+  const rightSidebarSize = useMemo(
+    () =>
+      normalizeSidebarWidth(
+        rightSidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? rightSidebarWidth : SIDEBAR_DEFAULT_WIDTH,
+        RIGHT_SIDEBAR_MAX_WIDTH,
+      ),
+    [rightSidebarWidth],
   )
   const sortedWorkspaces = useMemo(
     () => [...workspaces].sort((a, b) => a.order - b.order),
@@ -1423,6 +1746,17 @@ export function App() {
   const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
     setSidebarResizePreviewWidth(nextWidth)
   }, [])
+  const handleResizeRightSidebar = useCallback(
+    (nextWidth: number) => {
+      setRightSidebarWidth(normalizeSidebarWidth(nextWidth, RIGHT_SIDEBAR_MAX_WIDTH))
+      setRightSidebarExpanded(true)
+      setRightSidebarResizePreviewWidth(null)
+    },
+    [setRightSidebarExpanded, setRightSidebarWidth],
+  )
+  const handleRightSidebarResizePreview = useCallback((nextWidth: number | null) => {
+    setRightSidebarResizePreviewWidth(nextWidth)
+  }, [])
   const shellStyle = {
     '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
   } as CSSProperties & Record<'--tao-sidebar-width', string>
@@ -1483,13 +1817,13 @@ export function App() {
             activeTabId={activeTab?.id ?? null}
             showHeaderNavigation={!sidebarExpanded}
             isSidebarVisible={sidebarExpanded}
+            isRightSidebarVisible={rightSidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
             canGoNextWorkspace={canGoNextWorkspace}
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+            onToggleRightSidebar={() => setRightSidebarExpanded(!rightSidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onNewTab={() => newTab(activeWorkspaceKey ?? undefined)}
-            canCreateTabs={canCreateTerminal}
             onSelectTab={selectTab}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
@@ -1544,6 +1878,23 @@ export function App() {
           </div>
         </main>
       </section>
+      {rightSidebarExpanded ? (
+        <ResizeShell
+          width={rightSidebarResizePreviewWidth ?? rightSidebarSize}
+          side="right"
+          className="tao-right-sidebar"
+          ariaLabel="Workspace files"
+          onResize={handleResizeRightSidebar}
+          onResizePreview={handleRightSidebarResizePreview}
+        >
+          <RightSidebar
+            rootPath={
+              activeWorkspace ? activeContextPath(activeWorkspace, activeWorkspaceKey) : null
+            }
+            onToggleRightSidebar={() => setRightSidebarExpanded(false)}
+          />
+        </ResizeShell>
+      ) : null}
     </div>
   )
 }

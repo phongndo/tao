@@ -16,6 +16,25 @@ export const GitStatusSchema = Schema.Struct({
   staged: Schema.Number,
 })
 
+export const WorkspaceFileGitStatusSchema = Schema.Union([
+  Schema.Literal('added'),
+  Schema.Literal('deleted'),
+  Schema.Literal('ignored'),
+  Schema.Literal('modified'),
+  Schema.Literal('renamed'),
+  Schema.Literal('untracked'),
+])
+
+export const WorkspaceFileGitStatusEntrySchema = Schema.Struct({
+  path: Schema.String,
+  status: WorkspaceFileGitStatusSchema,
+})
+
+export const WorkspaceFileTreeSchema = Schema.Struct({
+  paths: Schema.Array(Schema.String),
+  gitStatus: Schema.Array(WorkspaceFileGitStatusEntrySchema),
+})
+
 export const WorkspaceWorktreeStateSchema = Schema.Union([
   Schema.Literal('creating'),
   Schema.Literal('active'),
@@ -110,6 +129,11 @@ export const WorkspaceGitStatusResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
 ])
 
+export const WorkspaceFileTreeResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: WorkspaceFileTreeSchema }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+
 export const WorkspacePortsResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), value: Schema.Array(PortInfoSchema) }),
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
@@ -139,6 +163,11 @@ export const WorkspacePickDirectoryResponseSchema = Schema.NullOr(WorkspacePathS
 
 export type WorktreeInfo = Schema.Schema.Type<typeof WorktreeInfoSchema>
 export type GitStatus = Schema.Schema.Type<typeof GitStatusSchema>
+export type WorkspaceFileGitStatus = Schema.Schema.Type<typeof WorkspaceFileGitStatusSchema>
+export type WorkspaceFileGitStatusEntry = Schema.Schema.Type<
+  typeof WorkspaceFileGitStatusEntrySchema
+>
+export type WorkspaceFileTree = Schema.Schema.Type<typeof WorkspaceFileTreeSchema>
 export type WorkspaceWorktreeState = Schema.Schema.Type<typeof WorkspaceWorktreeStateSchema>
 export type WorkspaceWorktree = Schema.Schema.Type<typeof WorkspaceWorktreeSchema>
 export type WorkspaceRecord = Schema.Schema.Type<typeof WorkspaceRecordSchema>
@@ -152,6 +181,7 @@ export type WorkspaceGitWorktreesResponse = Schema.Schema.Type<
   typeof WorkspaceGitWorktreesResponseSchema
 >
 export type WorkspaceGitStatusResponse = Schema.Schema.Type<typeof WorkspaceGitStatusResponseSchema>
+export type WorkspaceFileTreeResponse = Schema.Schema.Type<typeof WorkspaceFileTreeResponseSchema>
 export type WorkspacePortsResponse = Schema.Schema.Type<typeof WorkspacePortsResponseSchema>
 export type WorkspacePullRequestResponse = Schema.Schema.Type<
   typeof WorkspacePullRequestResponseSchema

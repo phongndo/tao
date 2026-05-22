@@ -5,12 +5,16 @@ import {
   GitStatusSchema,
   PortInfoSchema,
   PullRequestInfoSchema,
+  WorkspaceFileTreeSchema,
   WorkspaceError,
   decodeWorkspacePathFromUnknown,
   errorMessageFromUnknown,
   type GitStatus,
   type PortInfo,
   type PullRequestInfo,
+  type WorkspaceFileGitStatus,
+  type WorkspaceFileGitStatusEntry,
+  type WorkspaceFileTree,
   type WorktreeInfo,
   WorktreeInfoSchema,
 } from '@tao/shared/workspace'
@@ -19,6 +23,7 @@ const execFileAsync = promisify(execFile)
 
 const COMMAND_TIMEOUT_MS = 5000
 const COMMAND_MAX_BUFFER = 1024 * 1024
+const FILE_TREE_MAX_BUFFER = 4 * 1024 * 1024
 
 type MutableWorktreeInfo = {
   path?: string
@@ -39,6 +44,9 @@ export class WorkspaceService extends Context.Service<
       workspacePath: string,
     ) => Effect.Effect<WorktreeInfo[], WorkspaceError>
     readonly getGitStatus: (workspacePath: string) => Effect.Effect<GitStatus, WorkspaceError>
+    readonly getWorkspaceFileTree: (
+      workspacePath: string,
+    ) => Effect.Effect<WorkspaceFileTree, WorkspaceError>
     readonly getWorkspacePorts: (workspacePath: string) => Effect.Effect<PortInfo[], WorkspaceError>
     readonly getPullRequestInfo: (
       workspacePath: string,
@@ -49,14 +57,14 @@ export class WorkspaceService extends Context.Service<
 function runCommand(
   command: string,
   args: string[],
-  options: { readonly cwd?: string } = {},
+  options: { readonly cwd?: string; readonly maxBuffer?: number } = {},
 ): Effect.Effect<string, WorkspaceError> {
   return Effect.tryPromise({
     try: async (signal): Promise<string> => {
       const { stdout } = (await execFileAsync(command, args, {
         cwd: options.cwd,
         timeout: COMMAND_TIMEOUT_MS,
-        maxBuffer: COMMAND_MAX_BUFFER,
+        maxBuffer: options.maxBuffer ?? COMMAND_MAX_BUFFER,
         signal,
       })) as ExecResult
 
@@ -70,6 +78,17 @@ function runGit(workspacePath: string, args: string[]): Effect.Effect<string, Wo
   return Effect.gen(function* () {
     const path = yield* decodeWorkspacePathFromUnknown(workspacePath)
     return yield* runCommand('git', ['-C', path, ...args])
+  })
+}
+
+function runGitBuffered(
+  workspacePath: string,
+  args: string[],
+  maxBuffer: number,
+): Effect.Effect<string, WorkspaceError> {
+  return Effect.gen(function* () {
+    const path = yield* decodeWorkspacePathFromUnknown(workspacePath)
+    return yield* runCommand('git', ['-C', path, ...args], { maxBuffer })
   })
 }
 
@@ -133,6 +152,57 @@ function parseGitStatus(output: string): Effect.Effect<GitStatus, WorkspaceError
 
       return Schema.decodeUnknownSync(GitStatusSchema)({ changed, staged })
     },
+    catch: (error) => new WorkspaceError('parse-failed', errorMessageFromUnknown(error)),
+  })
+}
+
+function parseNulSeparatedPaths(output: string): string[] {
+  return output
+    .split('\0')
+    .map((path) => path.trim())
+    .filter((path) => path.length > 0)
+    .sort((left, right) => left.localeCompare(right))
+}
+
+function statusKind(indexStatus: string, workingTreeStatus: string): WorkspaceFileGitStatus {
+  if (indexStatus === '?' && workingTreeStatus === '?') return 'untracked'
+  if (indexStatus === '!' && workingTreeStatus === '!') return 'ignored'
+  if (indexStatus === 'D' || workingTreeStatus === 'D') return 'deleted'
+  if (indexStatus === 'R' || workingTreeStatus === 'R') return 'renamed'
+  if (indexStatus === 'A') return 'added'
+  return 'modified'
+}
+
+function parseWorkspaceFileStatus(output: string): WorkspaceFileGitStatusEntry[] {
+  const fields = output.split('\0')
+  const entries: WorkspaceFileGitStatusEntry[] = []
+
+  for (let index = 0; index < fields.length; index++) {
+    const field = fields[index]
+    if (!field || field.length < 4) continue
+
+    const indexStatus = field[0] ?? ' '
+    const workingTreeStatus = field[1] ?? ' '
+    const path = field.slice(3)
+    if (!path) continue
+
+    if (indexStatus === 'R' || indexStatus === 'C') index++
+    entries.push({ path, status: statusKind(indexStatus, workingTreeStatus) })
+  }
+
+  return entries
+}
+
+function parseWorkspaceFileTree(
+  pathsOutput: string,
+  statusOutput: string,
+): Effect.Effect<WorkspaceFileTree, WorkspaceError> {
+  return Effect.try({
+    try: () =>
+      Schema.decodeUnknownSync(WorkspaceFileTreeSchema)({
+        paths: parseNulSeparatedPaths(pathsOutput),
+        gitStatus: parseWorkspaceFileStatus(statusOutput),
+      }),
     catch: (error) => new WorkspaceError('parse-failed', errorMessageFromUnknown(error)),
   })
 }
@@ -205,6 +275,26 @@ const WorkspaceServiceLiveValue: typeof WorkspaceService.Service = {
 
   getGitStatus: (workspacePath) =>
     runGit(workspacePath, ['status', '--porcelain=v1']).pipe(Effect.flatMap(parseGitStatus)),
+
+  getWorkspaceFileTree: (workspacePath) => {
+    const paths = runGitBuffered(
+      workspacePath,
+      ['ls-files', '-co', '--exclude-standard', '-z'],
+      FILE_TREE_MAX_BUFFER,
+    )
+    const status = runGitBuffered(
+      workspacePath,
+      ['status', '--porcelain=v1', '-z'],
+      FILE_TREE_MAX_BUFFER,
+    ).pipe(Effect.orElseSucceed(() => ''))
+
+    return Effect.all([paths, status]).pipe(
+      Effect.flatMap(([pathsOutput, statusOutput]) =>
+        parseWorkspaceFileTree(pathsOutput, statusOutput),
+      ),
+      Effect.orElseSucceed(() => ({ paths: [], gitStatus: [] })),
+    )
+  },
 
   getWorkspacePorts: (workspacePath) =>
     decodeWorkspacePathFromUnknown(workspacePath).pipe(

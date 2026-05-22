@@ -22,6 +22,7 @@ import {
   decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
   workspaceErrorFromUnknown,
+  type WorkspaceFileTreeResponse,
   type WorkspaceGitBranchResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
@@ -849,6 +850,10 @@ const electronAPI = {
 
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitStatus(workspacePath))
+  },
+
+  getWorkspaceFileTree(workspacePath: string): Promise<WorkspaceFileTreeResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getWorkspaceFileTree(workspacePath))
   },
 
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse> {
