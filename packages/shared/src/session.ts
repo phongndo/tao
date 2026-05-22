@@ -78,7 +78,11 @@ export const PaneLayoutSchema = Schema.Struct({
   id: Schema.String,
   terminalId: Schema.String,
   tabId: Schema.String,
-  type: Schema.Union([Schema.Literal('terminal'), Schema.Literal('webview')]),
+  type: Schema.Union([
+    Schema.Literal('terminal'),
+    Schema.Literal('webview'),
+    Schema.Literal('changes'),
+  ]),
   name: Schema.String,
   cwd: Schema.optional(Schema.String),
   status: Schema.optional(

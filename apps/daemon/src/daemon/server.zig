@@ -133,6 +133,7 @@ pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request
         .workspace_remove => self.handleWorkspaceRemoveLocked(allocator, request),
         .workspace_refresh => self.handleWorkspaceRefreshLocked(allocator, request),
         .workspace_reorder => self.handleWorkspaceReorderLocked(allocator, request),
+        .workspace_branches => self.handleWorkspaceBranchesLocked(allocator, request),
         .worktree_list => self.handleWorktreeListLocked(allocator, request),
         .worktree_create => self.handleWorktreeCreateLocked(allocator, request),
         .worktree_remove => self.handleWorktreeRemoveLocked(allocator, request),

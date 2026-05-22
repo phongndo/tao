@@ -5,6 +5,7 @@ import {
   GitStatusSchema,
   PortInfoSchema,
   PullRequestInfoSchema,
+  WorkspaceDiffPatchSchema,
   WorkspaceFileTreeSchema,
   WorkspaceError,
   decodeWorkspacePathFromUnknown,
@@ -12,6 +13,8 @@ import {
   type GitStatus,
   type PortInfo,
   type PullRequestInfo,
+  type WorkspaceDiffPatch,
+  type WorkspaceDiffPatchScope,
   type WorkspaceFileGitStatus,
   type WorkspaceFileGitStatusEntry,
   type WorkspaceFileTree,
@@ -24,6 +27,7 @@ const execFileAsync = promisify(execFile)
 const COMMAND_TIMEOUT_MS = 5000
 const COMMAND_MAX_BUFFER = 1024 * 1024
 const FILE_TREE_MAX_BUFFER = 4 * 1024 * 1024
+const DIFF_PATCH_MAX_BUFFER = 8 * 1024 * 1024
 
 type MutableWorktreeInfo = {
   path?: string
@@ -47,6 +51,19 @@ export class WorkspaceService extends Context.Service<
     readonly getWorkspaceFileTree: (
       workspacePath: string,
     ) => Effect.Effect<WorkspaceFileTree, WorkspaceError>
+    readonly getWorkspaceDiffPatch: (
+      workspacePath: string,
+      scope?: WorkspaceDiffPatchScope,
+      compareBranch?: string,
+    ) => Effect.Effect<WorkspaceDiffPatch, WorkspaceError>
+    readonly stageWorkspacePath: (
+      workspacePath: string,
+      path: string,
+    ) => Effect.Effect<void, WorkspaceError>
+    readonly revertWorkspacePath: (
+      workspacePath: string,
+      path: string,
+    ) => Effect.Effect<void, WorkspaceError>
     readonly getWorkspacePorts: (workspacePath: string) => Effect.Effect<PortInfo[], WorkspaceError>
     readonly getPullRequestInfo: (
       workspacePath: string,
@@ -90,6 +107,65 @@ function runGitBuffered(
     const path = yield* decodeWorkspacePathFromUnknown(workspacePath)
     return yield* runCommand('git', ['-C', path, ...args], { maxBuffer })
   })
+}
+
+function validateDiffCompareBranch(compareBranch: string): Effect.Effect<string, WorkspaceError> {
+  const trimmed = compareBranch.trim()
+  if (trimmed.length === 0 || trimmed.startsWith('-') || !/^[A-Za-z0-9._/-]+$/.test(trimmed)) {
+    return Effect.fail(
+      new WorkspaceError('invalid-name', `Invalid compare branch: ${compareBranch}`),
+    )
+  }
+
+  return Effect.succeed(trimmed)
+}
+
+function resolveDefaultDiffCompareBranch(
+  workspacePath: string,
+): Effect.Effect<string, WorkspaceError> {
+  return runGit(workspacePath, ['rev-parse', '--verify', '--quiet', 'main^{commit}']).pipe(
+    Effect.matchEffect({
+      onSuccess: () => Effect.succeed('main'),
+      onFailure: () =>
+        runGit(workspacePath, ['rev-parse', '--verify', '--quiet', 'master^{commit}']).pipe(
+          Effect.match({
+            onSuccess: () => 'master',
+            onFailure: () => 'main',
+          }),
+        ),
+    }),
+  )
+}
+
+function diffArgsForScope(
+  workspacePath: string,
+  scope: WorkspaceDiffPatchScope = 'all',
+  compareBranch?: string,
+): Effect.Effect<string[], WorkspaceError> {
+  const baseArgs = ['diff', '--no-ext-diff', '--no-color', '--patch']
+
+  switch (scope) {
+    case 'all':
+      return (
+        compareBranch?.trim()
+          ? validateDiffCompareBranch(compareBranch)
+          : resolveDefaultDiffCompareBranch(workspacePath)
+      ).pipe(Effect.map((validatedCompareBranch) => [...baseArgs, validatedCompareBranch, '--']))
+    case 'uncommitted':
+      return Effect.succeed([...baseArgs, 'HEAD', '--'])
+    case 'unstaged':
+      return Effect.succeed([...baseArgs, '--'])
+    case 'staged':
+      return Effect.succeed([...baseArgs, '--cached', '--'])
+  }
+}
+
+function validateGitPath(path: string): Effect.Effect<string, WorkspaceError> {
+  const trimmed = path.trim()
+  if (trimmed.length === 0 || trimmed.startsWith('-') || trimmed.includes('\0')) {
+    return Effect.fail(new WorkspaceError('invalid-path', `Invalid path: ${path}`))
+  }
+  return Effect.succeed(trimmed)
 }
 
 function decodeWorktree(info: MutableWorktreeInfo): WorktreeInfo | null {
@@ -295,6 +371,24 @@ const WorkspaceServiceLiveValue: typeof WorkspaceService.Service = {
       Effect.orElseSucceed(() => ({ paths: [], gitStatus: [] })),
     )
   },
+
+  getWorkspaceDiffPatch: (workspacePath, scope, compareBranch) =>
+    diffArgsForScope(workspacePath, scope, compareBranch).pipe(
+      Effect.flatMap((args) => runGitBuffered(workspacePath, args, DIFF_PATCH_MAX_BUFFER)),
+      Effect.map((patch) => Schema.decodeUnknownSync(WorkspaceDiffPatchSchema)(patch)),
+    ),
+
+  stageWorkspacePath: (workspacePath, path) =>
+    validateGitPath(path).pipe(
+      Effect.flatMap((validatedPath) => runGit(workspacePath, ['add', '--', validatedPath])),
+      Effect.asVoid,
+    ),
+
+  revertWorkspacePath: (workspacePath, path) =>
+    validateGitPath(path).pipe(
+      Effect.flatMap((validatedPath) => runGit(workspacePath, ['restore', '--', validatedPath])),
+      Effect.asVoid,
+    ),
 
   getWorkspacePorts: (workspacePath) =>
     decodeWorkspacePathFromUnknown(workspacePath).pipe(

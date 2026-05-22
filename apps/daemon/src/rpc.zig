@@ -17,6 +17,7 @@ pub const RequestType = enum {
     workspace_remove,
     workspace_refresh,
     workspace_reorder,
+    workspace_branches,
     worktree_list,
     worktree_create,
     worktree_remove,
@@ -54,6 +55,9 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "workspace.reorder")) return .workspace_reorder;
         if (std.mem.eql(u8, text, "workspace:reorder")) return .workspace_reorder;
         if (std.mem.eql(u8, text, "workspace-reorder")) return .workspace_reorder;
+        if (std.mem.eql(u8, text, "workspace.branches")) return .workspace_branches;
+        if (std.mem.eql(u8, text, "workspace:branches")) return .workspace_branches;
+        if (std.mem.eql(u8, text, "workspace-branches")) return .workspace_branches;
         if (std.mem.eql(u8, text, "worktree.list")) return .worktree_list;
         if (std.mem.eql(u8, text, "worktree:list")) return .worktree_list;
         if (std.mem.eql(u8, text, "worktree-list")) return .worktree_list;

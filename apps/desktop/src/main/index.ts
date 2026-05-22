@@ -41,6 +41,8 @@ import {
 } from '@tao/shared/session'
 import {
   WorkspaceError,
+  WorkspaceDiffPatchInputSchema,
+  WorkspaceGitPathActionInputSchema,
   decodeWorkspacePathFromUnknown,
   errorMessageFromUnknown,
   workspaceIpcFailure,
@@ -229,7 +231,7 @@ function createWindow() {
 
     if (key === 'l' && !input.shift) {
       event.preventDefault()
-      sendAppCommand({ type: 'focus-terminal' })
+      sendAppCommand({ type: 'close-right-sidebar' })
       return
     }
 
@@ -536,6 +538,20 @@ ipcMain.handle('workspace:getGitBranch', (event, workspacePath: unknown) =>
   workspaceServiceRequest(event, workspacePath, (service, path) => service.getGitBranch(path)),
 )
 
+ipcMain.handle('workspace:getGitBranches', async (event, workspacePath: unknown) =>
+  runWorkspaceRequest(
+    event,
+    decodeWorkspacePathFromUnknown(workspacePath).pipe(
+      Effect.flatMap((path) =>
+        Effect.tryPromise({
+          try: () => ensureTaodClient().listBranches(path),
+          catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
+        }),
+      ),
+    ),
+  ),
+)
+
 ipcMain.handle('workspace:getGitWorktrees', async (event, workspacePath: unknown) => {
   return workspaceServiceRequest(event, workspacePath, (service, path) =>
     service.getGitWorktrees(path),
@@ -553,6 +569,67 @@ ipcMain.handle('workspace:getWorkspaceFileTree', async (event, workspacePath: un
     service.getWorkspaceFileTree(path),
   )
 })
+
+ipcMain.handle('workspace:getWorkspaceDiffPatch', async (event, workspacePath: unknown) => {
+  return runWorkspaceRequest(
+    event,
+    Effect.try({
+      try: () =>
+        Schema.decodeUnknownSync(WorkspaceDiffPatchInputSchema)(
+          typeof workspacePath === 'string' ? { workspacePath } : workspacePath,
+        ),
+      catch: (error) => new WorkspaceError('invalid-path', errorMessageFromUnknown(error)),
+    }).pipe(
+      Effect.flatMap((input) =>
+        WorkspaceService.use((service) =>
+          decodeWorkspacePathFromUnknown(input.workspacePath).pipe(
+            Effect.flatMap((path) =>
+              service.getWorkspaceDiffPatch(path, input.scope ?? 'all', input.compareBranch),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+})
+
+function workspaceGitPathActionRequest(
+  event: IpcMainInvokeEvent,
+  inputValue: unknown,
+  action: (
+    service: typeof WorkspaceService.Service,
+    workspacePath: string,
+    path: string,
+  ) => Effect.Effect<void, WorkspaceError>,
+) {
+  return runWorkspaceRequest(
+    event,
+    Effect.try({
+      try: () => Schema.decodeUnknownSync(WorkspaceGitPathActionInputSchema)(inputValue),
+      catch: (error) => new WorkspaceError('invalid-path', errorMessageFromUnknown(error)),
+    }).pipe(
+      Effect.flatMap((input) =>
+        WorkspaceService.use((service) =>
+          decodeWorkspacePathFromUnknown(input.workspacePath).pipe(
+            Effect.flatMap((workspacePath) => action(service, workspacePath, input.path)),
+          ),
+        ),
+      ),
+    ),
+  )
+}
+
+ipcMain.handle('workspace:stagePath', async (event, input: unknown) =>
+  workspaceGitPathActionRequest(event, input, (service, workspacePath, path) =>
+    service.stageWorkspacePath(workspacePath, path),
+  ),
+)
+
+ipcMain.handle('workspace:revertPath', async (event, input: unknown) =>
+  workspaceGitPathActionRequest(event, input, (service, workspacePath, path) =>
+    service.revertWorkspacePath(workspacePath, path),
+  ),
+)
 
 ipcMain.handle('workspace:getWorkspacePorts', async (event, workspacePath: unknown) => {
   return workspaceServiceRequest(event, workspacePath, (service, path) =>

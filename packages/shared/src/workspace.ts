@@ -35,6 +35,23 @@ export const WorkspaceFileTreeSchema = Schema.Struct({
   gitStatus: Schema.Array(WorkspaceFileGitStatusEntrySchema),
 })
 
+export const WorkspaceDiffPatchSchema = Schema.String
+export const WorkspaceDiffPatchScopeSchema = Schema.Union([
+  Schema.Literal('all'),
+  Schema.Literal('uncommitted'),
+  Schema.Literal('unstaged'),
+  Schema.Literal('staged'),
+])
+export const WorkspaceDiffPatchInputSchema = Schema.Struct({
+  workspacePath: WorkspacePathSchema,
+  scope: Schema.optional(WorkspaceDiffPatchScopeSchema),
+  compareBranch: Schema.optional(Schema.String),
+})
+export const WorkspaceGitPathActionInputSchema = Schema.Struct({
+  workspacePath: WorkspacePathSchema,
+  path: Schema.Trim.check(Schema.isNonEmpty()),
+})
+
 export const WorkspaceWorktreeStateSchema = Schema.Union([
   Schema.Literal('creating'),
   Schema.Literal('active'),
@@ -119,6 +136,11 @@ export const WorkspaceGitBranchResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
 ])
 
+export const WorkspaceGitBranchesResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: Schema.Array(Schema.String) }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+
 export const WorkspaceGitWorktreesResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), value: Schema.Array(WorktreeInfoSchema) }),
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
@@ -131,6 +153,15 @@ export const WorkspaceGitStatusResponseSchema = Schema.Union([
 
 export const WorkspaceFileTreeResponseSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), value: WorkspaceFileTreeSchema }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+
+export const WorkspaceDiffPatchResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: WorkspaceDiffPatchSchema }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
+])
+export const WorkspaceGitPathActionResponseSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: Schema.Void }),
   Schema.Struct({ ok: Schema.Literal(false), error: WorkspaceErrorPayloadSchema }),
 ])
 
@@ -168,6 +199,10 @@ export type WorkspaceFileGitStatusEntry = Schema.Schema.Type<
   typeof WorkspaceFileGitStatusEntrySchema
 >
 export type WorkspaceFileTree = Schema.Schema.Type<typeof WorkspaceFileTreeSchema>
+export type WorkspaceDiffPatch = Schema.Schema.Type<typeof WorkspaceDiffPatchSchema>
+export type WorkspaceDiffPatchScope = Schema.Schema.Type<typeof WorkspaceDiffPatchScopeSchema>
+export type WorkspaceDiffPatchInput = Schema.Schema.Type<typeof WorkspaceDiffPatchInputSchema>
+export type WorkspaceGitPathActionInput = Schema.Schema.Type<typeof WorkspaceGitPathActionInputSchema>
 export type WorkspaceWorktreeState = Schema.Schema.Type<typeof WorkspaceWorktreeStateSchema>
 export type WorkspaceWorktree = Schema.Schema.Type<typeof WorkspaceWorktreeSchema>
 export type WorkspaceRecord = Schema.Schema.Type<typeof WorkspaceRecordSchema>
@@ -177,11 +212,18 @@ export type PullRequestInfo = Schema.Schema.Type<typeof PullRequestInfoSchema>
 export type WorkspaceErrorKind = Schema.Schema.Type<typeof WorkspaceErrorKindSchema>
 export type WorkspaceErrorPayload = Schema.Schema.Type<typeof WorkspaceErrorPayloadSchema>
 export type WorkspaceGitBranchResponse = Schema.Schema.Type<typeof WorkspaceGitBranchResponseSchema>
+export type WorkspaceGitBranchesResponse = Schema.Schema.Type<
+  typeof WorkspaceGitBranchesResponseSchema
+>
 export type WorkspaceGitWorktreesResponse = Schema.Schema.Type<
   typeof WorkspaceGitWorktreesResponseSchema
 >
 export type WorkspaceGitStatusResponse = Schema.Schema.Type<typeof WorkspaceGitStatusResponseSchema>
 export type WorkspaceFileTreeResponse = Schema.Schema.Type<typeof WorkspaceFileTreeResponseSchema>
+export type WorkspaceDiffPatchResponse = Schema.Schema.Type<typeof WorkspaceDiffPatchResponseSchema>
+export type WorkspaceGitPathActionResponse = Schema.Schema.Type<
+  typeof WorkspaceGitPathActionResponseSchema
+>
 export type WorkspacePortsResponse = Schema.Schema.Type<typeof WorkspacePortsResponseSchema>
 export type WorkspacePullRequestResponse = Schema.Schema.Type<
   typeof WorkspacePullRequestResponseSchema

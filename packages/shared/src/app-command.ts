@@ -2,6 +2,7 @@ export type PaneFocusDirection = 'left' | 'down' | 'up' | 'right'
 
 export type AppCommand =
   | { type: 'toggle-sidebar' }
+  | { type: 'close-right-sidebar' }
   | { type: 'new-tab' }
   | { type: 'close-tab' }
   | { type: 'close-pane' }

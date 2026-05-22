@@ -192,6 +192,10 @@ pub const Daemon = struct {
         return workspace_mod.handleReorderLocked(self, allocator, request);
     }
 
+    pub fn handleWorkspaceBranchesLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return workspace_mod.handleBranchesLocked(self, allocator, request);
+    }
+
     pub fn handleWorktreeListLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         return worktree_mod.handleListLocked(self, allocator, request);
     }

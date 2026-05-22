@@ -40,6 +40,7 @@
     "tsc": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
+    "@pierre/diffs": "1.2.1",
     "@pierre/trees": "1.0.0-beta.4",
     "@tao/shared": "workspace:*",
     "@xterm/addon-clipboard": "^0.2.0",

@@ -16,7 +16,12 @@ import type {
   OutputFrame,
 } from '@tao/shared/taod-protocol'
 import type {
+  WorkspaceDiffPatchResponse,
+  WorkspaceDiffPatchInput,
+  WorkspaceGitPathActionInput,
+  WorkspaceGitPathActionResponse,
   WorkspaceGitBranchResponse,
+  WorkspaceGitBranchesResponse,
   WorkspaceFileTreeResponse,
   WorkspaceGitStatusResponse,
   WorkspaceGitWorktreesResponse,
@@ -70,9 +75,13 @@ export interface ElectronAPI {
   onWorkspaceChanged(callback: (workspace: WorkspaceRecord) => void): () => void
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>
+  getGitBranches(workspacePath: string): Promise<WorkspaceGitBranchesResponse>
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse>
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse>
   getWorkspaceFileTree(workspacePath: string): Promise<WorkspaceFileTreeResponse>
+  getWorkspaceDiffPatch(input: WorkspaceDiffPatchInput): Promise<WorkspaceDiffPatchResponse>
+  stagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse>
+  revertPath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse>
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse>
   getPullRequestInfo(workspacePath: string): Promise<WorkspacePullRequestResponse>
   listWorkspaces(): Promise<WorkspaceListResponse>

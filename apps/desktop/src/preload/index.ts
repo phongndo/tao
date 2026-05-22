@@ -22,10 +22,15 @@ import {
   decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
   workspaceErrorFromUnknown,
+  type WorkspaceDiffPatchResponse,
+  type WorkspaceDiffPatchInput,
   type WorkspaceFileTreeResponse,
   type WorkspaceGitBranchResponse,
+  type WorkspaceGitBranchesResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
+  type WorkspaceGitPathActionResponse,
+  type WorkspaceGitPathActionInput,
   type WorkspaceIpcResponse,
   type WorkspaceListResponse,
   type WorkspacePortsResponse,
@@ -844,6 +849,10 @@ const electronAPI = {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitBranch(workspacePath))
   },
 
+  getGitBranches(workspacePath: string): Promise<WorkspaceGitBranchesResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitBranches(workspacePath))
+  },
+
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitWorktrees(workspacePath))
   },
@@ -854,6 +863,18 @@ const electronAPI = {
 
   getWorkspaceFileTree(workspacePath: string): Promise<WorkspaceFileTreeResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getWorkspaceFileTree(workspacePath))
+  },
+
+  getWorkspaceDiffPatch(input: WorkspaceDiffPatchInput): Promise<WorkspaceDiffPatchResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getWorkspaceDiffPatch(input))
+  },
+
+  stagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.stagePath(input))
+  },
+
+  revertPath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.revertPath(input))
   },
 
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse> {

@@ -76,6 +76,12 @@ const WorkspacePayload = struct {
     workspace: WorkspaceResponse,
 };
 
+const WorkspaceBranchesPayload = struct {
+    id: ?[]const u8 = null,
+    ok: bool = true,
+    branches: []const []const u8,
+};
+
 pub fn errorJsonAlloc(allocator: std.mem.Allocator, request: rpc.ControlRequestJson, code: []const u8, message: []const u8) ![]u8 {
     return rpc.responseJsonAlloc(allocator, .{
         .id = request.requestId(),
@@ -214,6 +220,25 @@ pub fn handleAddLocked(self: anytype, allocator: std.mem.Allocator, request: rpc
     return jsonAlloc(allocator, WorkspacePayload{
         .id = request.requestId(),
         .workspace = responses[0],
+    });
+}
+
+pub fn handleBranchesLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+    const input_path = request.requestRootPath() orelse request.cwd orelse return errorJsonAlloc(allocator, request, ErrorCode.invalid_path.text(), "root_path is required");
+
+    const branches = blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.branchesAlloc(self.allocator, input_path);
+    } catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorJsonAlloc(allocator, request, ErrorCode.git_failed.text(), "failed to list branches"),
+        else => return err,
+    };
+    defer git.freeBranches(self.allocator, branches);
+
+    return jsonAlloc(allocator, WorkspaceBranchesPayload{
+        .id = request.requestId(),
+        .branches = branches,
     });
 }
 

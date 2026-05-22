@@ -47,6 +47,7 @@ export type TaodControlResponse = {
   readonly native_session_id?: string | null
   readonly removed_sessions?: number
   readonly removed_bytes?: number
+  readonly branches?: unknown
   readonly error_code?: string
   readonly error_message?: string
 }
@@ -205,6 +206,12 @@ function optionalNullableString(value: unknown): string | null | undefined {
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
 }
 
 const VALID_WORKTREE_STATES = new Set<WorkspaceWorktreeState>([
@@ -730,6 +737,16 @@ export class TaodClient {
       workspaceId,
     })
     if (!response.ok) throw responseError(response)
+  }
+
+  async listBranches(rootPath: string): Promise<string[]> {
+    const response = await this.request({
+      type: 'workspace.branches',
+      id: nextRequestId('workspace-branches'),
+      rootPath,
+    })
+    if (!response.ok) throw responseError(response)
+    return stringArray(response.branches)
   }
 
   async createWorktree(input: TaodCreateWorktreeInput): Promise<WorkspaceWorktree> {
