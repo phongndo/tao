@@ -39,6 +39,7 @@ type PtyDataCallback = (data: string) => void
 type SessionOutputCallback = (frame: OutputFrame) => void
 type SessionSnapshotCallback = (frame: CurrentScreenSnapshotFrame) => void
 type SessionResizeCallback = (cols: number, rows: number) => void
+type SessionTitleCallback = (title: string) => void
 type SessionExitCallback = (info: ExitInfo) => void
 type SessionErrorCallback = (error: string) => void
 type AgentStatusCallback = (status: AgentStatus) => void
@@ -100,6 +101,7 @@ const ptyDataCallbacks = new Map<string, PtyDataCallback[]>()
 const sessionOutputCallbacks = new Map<string, SessionOutputCallback[]>()
 const sessionSnapshotCallbacks = new Map<string, SessionSnapshotCallback[]>()
 const sessionResizeCallbacks = new Map<string, SessionResizeCallback[]>()
+const sessionTitleCallbacks = new Map<string, SessionTitleCallback[]>()
 const sessionExitCallbacks = new Map<string, SessionExitCallback[]>()
 const sessionErrorCallbacks = new Map<string, SessionErrorCallback[]>()
 const agentStatusCallbacks = new Map<string, AgentStatusCallback[]>()
@@ -277,6 +279,7 @@ function clearSessionState(sessionId: string) {
   sessionOutputCallbacks.delete(sessionId)
   sessionSnapshotCallbacks.delete(sessionId)
   sessionResizeCallbacks.delete(sessionId)
+  sessionTitleCallbacks.delete(sessionId)
   sessionExitCallbacks.delete(sessionId)
   sessionErrorCallbacks.delete(sessionId)
   agentStatusCallbacks.delete(sessionId)
@@ -385,6 +388,12 @@ function handleAgentStatus(sessionId: string, status: AgentStatus) {
   }
 }
 
+function handleSessionTitle(sessionId: string, title: string) {
+  for (const callback of sessionTitleCallbacks.get(sessionId) ?? []) {
+    callback(title)
+  }
+}
+
 function handlePtyMessage(message: PtyServiceMessage) {
   switch (message.type) {
     case 'ready':
@@ -417,6 +426,9 @@ function handlePtyMessage(message: PtyServiceMessage) {
       for (const callback of sessionResizeCallbacks.get(message.sessionId) ?? []) {
         callback(message.cols, message.rows)
       }
+      break
+    case 'title':
+      handleSessionTitle(message.sessionId, message.title)
       break
     case 'snapshot':
       handleSessionSnapshot({
@@ -722,6 +734,12 @@ const electronAPI = {
     const callbacks = callbacksFor(sessionResizeCallbacks, sessionId)
     callbacks.push(callback)
     return () => removeCallback(sessionResizeCallbacks, sessionId, callback)
+  },
+
+  onSessionTitle(sessionId: string, callback: (title: string) => void): () => void {
+    const callbacks = callbacksFor(sessionTitleCallbacks, sessionId)
+    callbacks.push(callback)
+    return () => removeCallback(sessionTitleCallbacks, sessionId, callback)
   },
 
   onSessionExit(sessionId: string, callback: (info: ExitInfo) => void): () => void {
