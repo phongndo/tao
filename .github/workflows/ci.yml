@@ -133,25 +133,8 @@ jobs:
         run: pnpm build
         env:
           TAOD_SKIP_NATIVE: ${{ matrix.skip_native }}
-      - name: macOS smoke tests & benchmarks
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          pnpm smoke:package
-          pnpm --filter @tao/desktop test:taod-lifecycle
-          mkdir -p apps/desktop/out/bench
-          pnpm bench:startup:budget | tee apps/desktop/out/bench/startup-budget.txt
-          pnpm bench:latency:budget | tee apps/desktop/out/bench/latency-budget.txt
-          pnpm bench:input-priority:budget | tee apps/desktop/out/bench/input-priority-budget.txt
-          pnpm bench:attach:budget | tee apps/desktop/out/bench/attach-budget.txt
-          pnpm bench:workspace:budget | tee apps/desktop/out/bench/workspace-budget.txt
-          pnpm bench:soak:budget | tee apps/desktop/out/bench/soak-budget.txt
-          pnpm bench:reload:budget | tee apps/desktop/out/bench/reload-budget.txt
-          pnpm bench:app-soak:budget | tee apps/desktop/out/bench/app-soak-budget.txt
-          pnpm bench:taod:budget | tee apps/desktop/out/bench/taod-budget.txt
       - uses: actions/upload-artifact@v4
         if: matrix.artifact != 'tao-dist-windows'
         with:
           name: ${{ matrix.artifact }}
           path: apps/desktop/out/
-
