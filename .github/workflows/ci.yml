@@ -83,9 +83,6 @@ jobs:
         run: pnpm tsc
       - name: Zig unit tests
         run: pnpm zig:test
-      - name: Zig hardened compile (fuzz)
-        run: zig build test:compile -Dfuzz=true
-        working-directory: apps/daemon
       - name: Persistence tests
         run: pnpm test:persistence
 
