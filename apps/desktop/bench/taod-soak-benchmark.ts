@@ -252,6 +252,7 @@ function streamDiagnostics(response: ControlResponse): Record<string, unknown> {
 }
 
 async function rssKb(pid: number): Promise<number> {
+  if (process.platform === 'win32') return 0
   const { stdout } = await execFileAsync('ps', ['-o', 'rss=', '-p', String(pid)], {
     timeout: 3000,
     encoding: 'utf8',

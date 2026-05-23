@@ -306,9 +306,6 @@ fn runAdapterCommandAlloc(
         return null;
     }
 
-    const request_json = try adapterRequestJsonAlloc(allocator, command, provider, context, native_session_id);
-    defer allocator.free(request_json);
-
     const runner = std.process.getEnvVarOwned(allocator, "TAOD_ADAPTER_RUNNER") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
@@ -723,6 +720,7 @@ test "agent adapter command timeout returns no detection" {
 }
 
 fn chmodPathForTest(allocator: std.mem.Allocator, path: []const u8, mode: std.c.mode_t) !void {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
     if (std.c.chmod(path_z.ptr, mode) != 0) return error.ChmodFailed;

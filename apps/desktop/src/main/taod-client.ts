@@ -1205,7 +1205,11 @@ export class TaodClient {
   async ensureRunning(): Promise<void> {
     if (this.disposed) throw new Error('taod client is disposed')
     this.startHealthChecks()
-    if (await this.canConnect()) return
+    if (await this.canConnect()) {
+      if (this.disposed) throw new Error('taod client is disposed')
+      return
+    }
+    if (this.disposed) throw new Error('taod client is disposed')
 
     this.transitionLifecycle('starting', 'daemon-start-requested')
     this.startPromise ??= this.startDaemon().finally(() => {
@@ -1241,7 +1245,7 @@ export class TaodClient {
         break
       case 'restart-owned-daemon':
         this.clearScheduledRestart()
-        await this.ensureRunning()
+        await this.restartOwnedDaemon('manual-recovery-restart-owned')
         break
       case 'replace-incompatible-daemon':
         this.clearScheduledRestart()
@@ -1678,12 +1682,15 @@ export class TaodClient {
   }
 
   private async startDaemon(): Promise<void> {
+    if (this.disposed) throw new Error('taod client is disposed')
     const startRequestedAt = Date.now()
     this.lastStartRequestedAt = startRequestedAt
     if (await this.canConnect()) {
+      if (this.disposed) throw new Error('taod client is disposed')
       this.lastStartDurationMs = Date.now() - startRequestedAt
       return
     }
+    if (this.disposed) throw new Error('taod client is disposed')
 
     const binaryPath = findTaodBinary()
     if (!binaryPath) {
@@ -1699,6 +1706,7 @@ export class TaodClient {
       this.spawnedProcess.exitCode !== null ||
       this.spawnedProcess.killed
     ) {
+      if (this.disposed) throw new Error('taod client is disposed')
       const adapterDir = findTaodAdapterDir()
       const stdio: StdioOptions = this.detachDaemon ? 'ignore' : ['ignore', 'ignore', 'pipe']
       const child = spawn(binaryPath, [], {
@@ -1746,8 +1754,10 @@ export class TaodClient {
     const deadline = Date.now() + this.startTimeoutMs
     let lastError: unknown = null
     while (Date.now() < deadline) {
+      if (this.disposed) throw new Error('taod client is disposed')
       try {
         if (await this.canConnect()) {
+          if (this.disposed) throw new Error('taod client is disposed')
           this.lastStartDurationMs = Date.now() - startRequestedAt
           return
         }
@@ -1796,7 +1806,11 @@ export class TaodClient {
     console.warn(`[taod-client] ${reason}; scheduling restart`)
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null
-      void this.ensureRunning().catch((error) => {
+      const recovery =
+        this.spawnedProcess && !hasExited(this.spawnedProcess)
+          ? this.restartOwnedDaemon('scheduled-restart-owned')
+          : this.ensureRunning()
+      void recovery.catch((error) => {
         console.warn('[taod-client] taod restart failed:', error)
       })
     }, this.restartBackoffMs)

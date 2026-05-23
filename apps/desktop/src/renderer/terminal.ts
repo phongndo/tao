@@ -526,10 +526,14 @@ export async function createTerminal(
 
     container.classList.add('terminal-surface-restoring')
     const finishOpen = startRendererSpan('terminal:xterm-open')
-    term.open(container)
-    finishOpen()
+    try {
+      term.open(container)
+    } finally {
+      finishOpen()
+    }
     installWebglRenderer(term)
   } catch (err) {
+    finishCreate()
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
     renderTerminalError(container, err)
@@ -537,6 +541,7 @@ export async function createTerminal(
   }
 
   if (!term) {
+    finishCreate()
     throw new Error('Terminal failed to initialize')
   }
   const openedTerm = term

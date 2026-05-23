@@ -2100,12 +2100,21 @@ function ChangedFilesTreePanel({
       setError(null)
 
       try {
+        const actionPath =
+          typeof path === 'string'
+            ? path
+            : path.filter((candidate) => candidate.trim().length > 0)
+        if (Array.isArray(actionPath) && actionPath.length === 0) {
+          setError('No paths selected')
+          return
+        }
+        const checkedPath = actionPath as string | readonly [string, ...string[]]
         const response =
           action === 'stage'
-            ? await window.electronAPI.stagePath({ workspacePath: rootPath, path })
+            ? await window.electronAPI.stagePath({ workspacePath: rootPath, path: checkedPath })
             : action === 'unstage'
-              ? await window.electronAPI.unstagePath({ workspacePath: rootPath, path })
-              : await window.electronAPI.revertPath({ workspacePath: rootPath, path })
+              ? await window.electronAPI.unstagePath({ workspacePath: rootPath, path: checkedPath })
+              : await window.electronAPI.revertPath({ workspacePath: rootPath, path: checkedPath })
         if (!response.ok) {
           setError(response.error.message)
           return

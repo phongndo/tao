@@ -676,6 +676,7 @@ body {
 .right-sidebar-diff-file-tree-directory-label,
 .right-sidebar-diff-file-tree-item {
   --diff-tree-depth: 0;
+
   width: 100%;
   min-width: 0;
   height: 28px;

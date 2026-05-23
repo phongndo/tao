@@ -204,8 +204,17 @@ pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request
             .error_message = "unknown method",
         }),
     };
-    ok = request_type != .unknown;
+    ok = responsePayloadOk(allocator, response);
     return response;
+}
+
+fn responsePayloadOk(allocator: std.mem.Allocator, response: []const u8) bool {
+    const MinimalResponse = struct { ok: bool = false };
+    var parsed = std.json.parseFromSlice(MinimalResponse, allocator, response, .{
+        .ignore_unknown_fields = true,
+    }) catch return false;
+    defer parsed.deinit();
+    return parsed.value.ok;
 }
 
 pub fn handleStream(self: anytype, stream: std.net.Stream) !void {

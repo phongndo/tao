@@ -1192,7 +1192,9 @@ fn parseWorkspaceFileStatusAlloc(allocator: std.mem.Allocator, output: []const u
             .path = owned_path,
             .status = workspaceFileStatusKind(index_status, working_tree_status),
         });
-        if (index_status == 'R' or index_status == 'C') skip_next = true;
+        if (index_status == 'R' or index_status == 'C' or working_tree_status == 'R' or working_tree_status == 'C') {
+            skip_next = true;
+        }
     }
 
     return entries.toOwnedSlice(allocator);
@@ -1212,7 +1214,7 @@ fn validateDiffCompareBranch(branch: []const u8) ![]const u8 {
     const trimmed = std.mem.trim(u8, branch, " \n\r\t");
     if (trimmed.len == 0 or trimmed[0] == '-') return error.InvalidName;
     for (trimmed) |byte| {
-        const valid = std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '_' or byte == '/' or byte == '-';
+        const valid = std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '_' or byte == '/' or byte == '-' or byte == '@' or byte == '{' or byte == '}';
         if (!valid) return error.InvalidName;
     }
     return trimmed;
@@ -1379,7 +1381,7 @@ fn processCwdAlloc(allocator: std.mem.Allocator, pid: u32) !?[]u8 {
 fn isPathInside(parent_path: []const u8, candidate_path: []const u8) bool {
     if (std.mem.eql(u8, parent_path, candidate_path)) return true;
     if (!std.mem.startsWith(u8, candidate_path, parent_path)) return false;
-    return parent_path.len > 0 and parent_path[parent_path.len - 1] == std.fs.path.sep or
+    return (parent_path.len > 0 and parent_path[parent_path.len - 1] == std.fs.path.sep) or
         (candidate_path.len > parent_path.len and candidate_path[parent_path.len] == std.fs.path.sep);
 }
 
