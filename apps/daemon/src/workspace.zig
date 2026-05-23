@@ -505,7 +505,10 @@ pub fn handlePortsLocked(self: anytype, allocator: std.mem.Allocator, request: r
         self.unlock();
         defer self.lock();
         break :blk workspacePortsAlloc(self.allocator, input_path);
-    } catch try self.allocator.alloc(WorkspacePortResponse, 0);
+    } catch |err| switch (err) {
+        error.FileNotFound, error.LsofFailed => try self.allocator.alloc(WorkspacePortResponse, 0),
+        else => return err,
+    };
     defer freeWorkspacePorts(self.allocator, ports);
 
     return jsonAlloc(allocator, WorkspacePortsPayload{
@@ -1394,11 +1397,11 @@ fn workspacePortLessThan(_: void, lhs: WorkspacePortResponse, rhs: WorkspacePort
 }
 
 fn workspacePortsAlloc(allocator: std.mem.Allocator, workspace_path: []const u8) ![]WorkspacePortResponse {
-    const workspace_real = std.fs.realpathAlloc(allocator, workspace_path) catch return try allocator.alloc(WorkspacePortResponse, 0);
+    const workspace_real = try std.fs.realpathAlloc(allocator, workspace_path);
     defer allocator.free(workspace_real);
 
     const args = [_][]const u8{ "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpnc" };
-    const output = runLsofAlloc(allocator, &args, 1024 * 1024) catch return try allocator.alloc(WorkspacePortResponse, 0);
+    const output = try runLsofAlloc(allocator, &args, 1024 * 1024);
     defer allocator.free(output);
 
     const listening_ports = try parseListeningPortsAlloc(allocator, output);
