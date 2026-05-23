@@ -1,12 +1,9 @@
-import { Effect, ManagedRuntime } from 'effect'
-import { WorkspaceService, WorkspaceServiceLive } from './workspace-service'
+import { Effect } from 'effect'
 
-const mainRuntime = ManagedRuntime.make(WorkspaceServiceLive)
-
-export function runMainEffect<A, E>(program: Effect.Effect<A, E, WorkspaceService>): Promise<A> {
-  return mainRuntime.runPromise(program)
+export function runMainEffect<A, E>(program: Effect.Effect<A, E, never>): Promise<A> {
+  return Effect.runPromise(program)
 }
 
 export function disposeMainRuntime(): Promise<void> {
-  return mainRuntime.dispose()
+  return Promise.resolve()
 }

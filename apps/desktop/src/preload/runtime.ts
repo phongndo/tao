@@ -2,13 +2,23 @@ import { Context, Effect, Layer, ManagedRuntime, Schema } from 'effect'
 import { ipcRenderer } from 'electron'
 import {
   WorkspaceError,
+  WorkspaceDiffPatchResponseSchema,
+  WorkspaceFileTreeResponseSchema,
+  WorkspaceGitPathActionResponseSchema,
   WorkspaceGitBranchResponseSchema,
+  WorkspaceGitBranchesResponseSchema,
   WorkspaceGitStatusResponseSchema,
   WorkspaceGitWorktreesResponseSchema,
   WorkspacePortsResponseSchema,
   WorkspacePullRequestResponseSchema,
   WORKSPACE_IPC_TIMEOUT_MS,
   type WorkspaceGitBranchResponse,
+  type WorkspaceGitBranchesResponse,
+  type WorkspaceDiffPatchInput,
+  type WorkspaceDiffPatchResponse,
+  type WorkspaceFileTreeResponse,
+  type WorkspaceGitPathActionInput,
+  type WorkspaceGitPathActionResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
   type WorkspacePortsResponse,
@@ -23,12 +33,30 @@ export class PreloadWorkspaceIpc extends Context.Service<
     readonly getGitBranch: (
       workspacePath: string,
     ) => Effect.Effect<WorkspaceGitBranchResponse, WorkspaceError>
+    readonly getGitBranches: (
+      workspacePath: string,
+    ) => Effect.Effect<WorkspaceGitBranchesResponse, WorkspaceError>
     readonly getGitWorktrees: (
       workspacePath: string,
     ) => Effect.Effect<WorkspaceGitWorktreesResponse, WorkspaceError>
     readonly getGitStatus: (
       workspacePath: string,
     ) => Effect.Effect<WorkspaceGitStatusResponse, WorkspaceError>
+    readonly getWorkspaceFileTree: (
+      workspacePath: string,
+    ) => Effect.Effect<WorkspaceFileTreeResponse, WorkspaceError>
+    readonly getWorkspaceDiffPatch: (
+      input: WorkspaceDiffPatchInput,
+    ) => Effect.Effect<WorkspaceDiffPatchResponse, WorkspaceError>
+    readonly stagePath: (
+      input: WorkspaceGitPathActionInput,
+    ) => Effect.Effect<WorkspaceGitPathActionResponse, WorkspaceError>
+    readonly unstagePath: (
+      input: WorkspaceGitPathActionInput,
+    ) => Effect.Effect<WorkspaceGitPathActionResponse, WorkspaceError>
+    readonly revertPath: (
+      input: WorkspaceGitPathActionInput,
+    ) => Effect.Effect<WorkspaceGitPathActionResponse, WorkspaceError>
     readonly getWorkspacePorts: (
       workspacePath: string,
     ) => Effect.Effect<WorkspacePortsResponse, WorkspaceError>
@@ -40,11 +68,11 @@ export class PreloadWorkspaceIpc extends Context.Service<
 
 function invokeWorkspace<A>(
   channel: string,
-  workspacePath: string,
+  input: unknown,
   schema: Schema.Decoder<A>,
 ): Effect.Effect<A, WorkspaceError> {
   return Effect.tryPromise({
-    try: () => ipcRenderer.invoke(channel, workspacePath) as Promise<unknown>,
+    try: () => ipcRenderer.invoke(channel, input) as Promise<unknown>,
     catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
   }).pipe(
     Effect.timeoutOrElse({
@@ -64,6 +92,8 @@ function invokeWorkspace<A>(
 const PreloadWorkspaceIpcLive = Layer.succeed(PreloadWorkspaceIpc)({
   getGitBranch: (workspacePath) =>
     invokeWorkspace('workspace:getGitBranch', workspacePath, WorkspaceGitBranchResponseSchema),
+  getGitBranches: (workspacePath) =>
+    invokeWorkspace('workspace:getGitBranches', workspacePath, WorkspaceGitBranchesResponseSchema),
   getGitWorktrees: (workspacePath) =>
     invokeWorkspace(
       'workspace:getGitWorktrees',
@@ -72,6 +102,20 @@ const PreloadWorkspaceIpcLive = Layer.succeed(PreloadWorkspaceIpc)({
     ),
   getGitStatus: (workspacePath) =>
     invokeWorkspace('workspace:getGitStatus', workspacePath, WorkspaceGitStatusResponseSchema),
+  getWorkspaceFileTree: (workspacePath) =>
+    invokeWorkspace(
+      'workspace:getWorkspaceFileTree',
+      workspacePath,
+      WorkspaceFileTreeResponseSchema,
+    ),
+  getWorkspaceDiffPatch: (input) =>
+    invokeWorkspace('workspace:getWorkspaceDiffPatch', input, WorkspaceDiffPatchResponseSchema),
+  stagePath: (input) =>
+    invokeWorkspace('workspace:stagePath', input, WorkspaceGitPathActionResponseSchema),
+  unstagePath: (input) =>
+    invokeWorkspace('workspace:unstagePath', input, WorkspaceGitPathActionResponseSchema),
+  revertPath: (input) =>
+    invokeWorkspace('workspace:revertPath', input, WorkspaceGitPathActionResponseSchema),
   getWorkspacePorts: (workspacePath) =>
     invokeWorkspace('workspace:getWorkspacePorts', workspacePath, WorkspacePortsResponseSchema),
   getPullRequestInfo: (workspacePath) =>

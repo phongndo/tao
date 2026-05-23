@@ -1,0 +1,43 @@
+name: Long Performance
+
+env:
+  ZIG_VERSION: '0.15.2'
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 11 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-app-long-profile:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: '22' }
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/out/bench
+          pnpm bench:app-trace | tee apps/desktop/out/bench/app-trace.txt
+          pnpm bench:app-trace:summary | tee apps/desktop/out/bench/app-trace-summary.json
+          pnpm bench:app-soak:hour | tee apps/desktop/out/bench/app-soak-hour.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: tao-long-performance-macos
+          path: |
+            apps/desktop/out/bench/*.txt
+            apps/desktop/out/bench/*.json
+          retention-days: 14

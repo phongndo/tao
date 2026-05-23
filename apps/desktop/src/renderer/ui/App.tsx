@@ -1,28 +1,53 @@
 import {
+  FiAlertTriangle,
+  FiChevronsDown,
   FiChevronLeft,
   FiChevronRight,
+  FiChevronDown,
   FiArchive,
+  FiChevronsUp,
+  FiFileText,
+  FiFolder,
+  FiGitPullRequest,
+  FiColumns,
+  FiList,
+  FiMaximize2,
+  FiMinusSquare,
+  FiPlusSquare,
+  FiRefreshCw,
+  FiRotateCcw,
   FiFolderPlus,
-  FiMenu,
   FiPlus,
   FiSettings,
   FiTerminal,
   FiTrash2,
   FiX,
 } from 'react-icons/fi'
+import { TbLayoutSidebar, TbLayoutSidebarRight } from 'react-icons/tb'
 import {
+  Component,
+  type ErrorInfo,
   type ComponentType,
   type CSSProperties,
   type DragEvent,
   memo,
   type ReactNode,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react'
 import { Mosaic, type MosaicNode, type MosaicProps } from 'react-mosaic-component'
+import { FileDiff } from '@pierre/diffs/react'
+import {
+  createFileTreeIconResolver,
+  FileTree as PierreFileTree,
+  getBuiltInSpriteSheet,
+  prepareFileTreeInput,
+} from '@pierre/trees'
+import type { FileTreeDirectoryHandle, GitStatusEntry } from '@pierre/trees'
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData } from '@tao/shared/session'
 import {
@@ -34,20 +59,103 @@ import {
   type Workspace,
   worktreeContextId,
 } from '../state/store'
+import { sanitizeTerminalTitle } from '../osc-title'
 import { runRendererEffect } from '../runtime'
 import { WorkspaceMetadataCache } from '../workspace-service'
 import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
-import type { WorkspaceRecord } from '@tao/shared/workspace'
+import { getDiffFileName, type ParsedDiffFile, type ParsedDiffResult } from '../diff-parser'
+import { parseDiffFilesOffThread } from '../diff-parser-client'
+import { markRendererEvent } from '../trace'
+import type { WorkspaceFileTree, WorkspaceRecord } from '@tao/shared/workspace'
+import type {
+  TaodLifecycleDiagnostics,
+  TaodLifecycleRecoveryAction,
+} from '@tao/shared/taod-protocol'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
 const SIDEBAR_EXPANDED_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
+const RIGHT_SIDEBAR_MAX_WIDTH = SIDEBAR_MAX_WIDTH * 2
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tao-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
 const LAYOUT_WRITE_DEBOUNCE_MS = 150
 const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
+const EMPTY_FILE_TREE: WorkspaceFileTree = { paths: [], gitStatus: [] }
+const DEFAULT_DIFF_COMPARE_BRANCH = 'main'
+const DIFF_FOCUS_FILE_EVENT = 'tao:focus-diff-file'
+const DIFF_AUTO_COLLAPSE_FILE_COUNT = 20
+const DIFF_AUTO_COLLAPSE_PATCH_CHARS = 1024 * 1024
+const DIFF_MAX_EXPANDED_FILE_BODIES = 12
+const TAOD_DIAGNOSTICS_POLL_MS = 5000
+const FILE_TREE_ICONS = { set: 'complete', colored: true } as const
+const FILE_TREE_ICON_SPRITE = getBuiltInSpriteSheet(FILE_TREE_ICONS.set)
+const FILE_TREE_ICON_RESOLVER = createFileTreeIconResolver(FILE_TREE_ICONS)
+const FILE_TREE_UNSAFE_CSS = `
+  :host {
+    --trees-bg-override: #191919;
+    --trees-fg-override: #c9c7cd;
+    --trees-fg-muted-override: #747783;
+    --trees-bg-muted-override: #1f1f22;
+    --trees-accent-override: #c9c7cd;
+    --trees-border-color-override: #242428;
+    --trees-focus-ring-color-override: #424246;
+    --trees-focus-ring-offset-override: 0;
+    --trees-font-family-override: Menlo, Monaco, 'Courier New', monospace;
+    --trees-font-size-override: 12px;
+    --trees-font-weight-regular-override: 700;
+    --trees-font-weight-semibold-override: 700;
+    --trees-border-radius-override: 0;
+    --trees-level-gap-override: 9px;
+    --trees-item-padding-x-override: 8px;
+    --trees-item-margin-x-override: 0;
+    --trees-item-row-gap-override: 7px;
+    --trees-icon-width-override: 14px;
+    --trees-padding-inline-override: 0;
+    --trees-scrollbar-thumb-override: #424246;
+    --trees-selected-bg-override: #242428;
+    --trees-selected-focused-border-color-override: #424246;
+    --trees-status-added-override: #90b99f;
+    --trees-status-modified-override: #e6b99d;
+    --trees-status-renamed-override: #aca1cf;
+    --trees-status-untracked-override: #90b99f;
+    --trees-status-deleted-override: #f5a191;
+    --trees-git-added-color-override: #90b99f;
+    --trees-git-modified-color-override: #e6b99d;
+    --trees-git-renamed-color-override: #aca1cf;
+    --trees-git-untracked-color-override: #90b99f;
+    --trees-git-deleted-color-override: #f5a191;
+    --trees-file-icon-color: #9699a8;
+    --trees-file-icon-color-git: #e06c4f;
+    --trees-file-icon-color-json: #e6b99d;
+    --trees-file-icon-color-markdown: #90b99f;
+    --trees-file-icon-color-npm: #e06c4f;
+    --trees-file-icon-color-typescript: #6f8dbd;
+    --trees-file-icon-color-yml: #f5a191;
+  }
+
+  [data-file-tree-virtualized-scroll='true'] {
+    padding-block: 4px 10px;
+  }
+
+  [data-file-tree-search-container] {
+    display: none;
+  }
+
+  [data-type='item'] {
+    min-height: 26px;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  [data-type='item']:hover {
+    background: #1f1f22;
+  }
+
+  [data-item-section='content'] {
+    letter-spacing: 0;
+  }
+`
 
 function readLegacyLocalStorageLayout(): unknown | null {
   try {
@@ -90,11 +198,118 @@ type PaneRect = PaneBounds & {
   id: string
 }
 
+type RightSidebarView = 'files' | 'changes'
+type DiffViewMode = 'unified' | 'split'
+type ChangedFilesViewMode = 'tree' | 'folders'
+
+type DiffFileTreeNode = {
+  name: string
+  path: string
+  children: Map<string, DiffFileTreeNode>
+  file?: ParsedDiffFile
+}
+
+type DiffSummary = {
+  files: number
+  additions: number
+  deletions: number
+}
+
+type ChangedFileGroup = {
+  directory: string
+  files: ParsedDiffFile[]
+}
+
+type ChangedFilesSectionKind = 'base' | 'unstaged' | 'staged'
+
+type ChangedFilesSection = {
+  kind: ChangedFilesSectionKind
+  label: string
+  files: ParsedDiffFile[]
+  error: string | null
+}
+
+type DaemonRecoveryNotice = {
+  tone: 'info' | 'warning' | 'error'
+  label: string
+  title: string
+}
+
+type DaemonRecoveryPanelRow = {
+  label: string
+  value: string
+  tone?: 'error'
+}
+
+type DiffPanelErrorBoundaryProps = {
+  children: ReactNode
+}
+
+type DiffPanelErrorBoundaryState = {
+  error: string | null
+}
+
 const PANE_BORDER_EPSILON = 0.0001
+
+class DiffPanelErrorBoundary extends Component<
+  DiffPanelErrorBoundaryProps,
+  DiffPanelErrorBoundaryState
+> {
+  state: DiffPanelErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: unknown): DiffPanelErrorBoundaryState {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+
+  componentDidCatch(error: unknown, errorInfo: ErrorInfo) {
+    console.warn('[diff-view] Render failed:', error, errorInfo.componentStack)
+  }
+
+  render() {
+    if (this.state.error) {
+      return <div className="right-sidebar-file-tree-error">{this.state.error}</div>
+    }
+
+    return this.props.children
+  }
+}
+
+const FileTreeIconSprite = memo(function FileTreeIconSprite() {
+  return (
+    <span
+      className="right-sidebar-file-tree-icon-sprite"
+      aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: FILE_TREE_ICON_SPRITE }}
+    />
+  )
+})
+
+function ChangedFileIcon({ path }: { path: string }) {
+  const icon = FILE_TREE_ICON_RESOLVER.resolveIcon('file-tree-icon-file', path)
+
+  return (
+    <svg
+      className="right-sidebar-diff-file-tree-icon"
+      data-icon-token={icon.token}
+      viewBox={icon.viewBox ?? '0 0 16 16'}
+      width={icon.width ?? 14}
+      height={icon.height ?? 14}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <use href={`#${icon.name}`} />
+    </svg>
+  )
+}
 
 function layoutContainsPane(layout: MosaicNode<string>, paneId: string): boolean {
   if (typeof layout === 'string') return layout === paneId
   return layoutContainsPane(layout.first, paneId) || layoutContainsPane(layout.second, paneId)
+}
+
+function getFirstPaneId(layout: MosaicNode<string>): string | null {
+  if (typeof layout === 'string') return layout
+  return getFirstPaneId(layout.first)
 }
 
 function getPaneCount(layout: MosaicNode<string>): number {
@@ -278,8 +493,323 @@ function workspaceFromRecord(record: WorkspaceRecord): Workspace {
   }
 }
 
-function normalizeSidebarWidth(nextWidth: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
+function activeContextPath(workspace: Workspace, activeContextId: string | null): string {
+  const worktree = (workspace.worktrees ?? []).find(
+    (candidate) => worktreeContextId(candidate.id) === activeContextId,
+  )
+  return worktree?.path ?? workspace.projectPath
+}
+
+function workspaceForContext(
+  workspaces: readonly Workspace[],
+  contextId: string | null,
+): Workspace | null {
+  if (!contextId) return null
+  return (
+    workspaces.find(
+      (workspace) =>
+        workspace.id === contextId ||
+        (workspace.worktrees ?? []).some(
+          (worktree) => worktreeContextId(worktree.id) === contextId,
+        ),
+    ) ?? null
+  )
+}
+
+function activeContextCompareBranch(
+  workspace: Workspace | null,
+  activeContextId: string | null,
+): string {
+  if (!workspace) return DEFAULT_DIFF_COMPARE_BRANCH
+  const worktree = (workspace.worktrees ?? []).find(
+    (candidate) => worktreeContextId(candidate.id) === activeContextId,
+  )
+  return worktree?.baseBranch ?? DEFAULT_DIFF_COMPARE_BRANCH
+}
+
+function activeContextBranchName(
+  workspace: Workspace | null,
+  activeContextId: string | null,
+): string {
+  if (!workspace) return ''
+  const worktree = (workspace.worktrees ?? []).find(
+    (candidate) => worktreeContextId(candidate.id) === activeContextId,
+  )
+  return worktree?.branch ?? workspace.branch ?? workspace.name
+}
+
+function daemonRecoveryNotice(
+  diagnostics: TaodLifecycleDiagnostics | null,
+  error: string | null,
+): DaemonRecoveryNotice | null {
+  if (error) {
+    return {
+      tone: 'error',
+      label: 'Daemon diagnostics unavailable',
+      title: `Daemon diagnostics unavailable: ${error}`,
+    }
+  }
+  if (!diagnostics || diagnostics.recoveryAction === 'none') return null
+
+  const base = `state=${diagnostics.state}, owner=${diagnostics.daemonOwnership}, action=${diagnostics.recoveryAction}`
+  switch (diagnostics.recoveryAction) {
+    case 'reuse-external-daemon':
+      return {
+        tone: 'info',
+        label: 'Using existing daemon',
+        title: `Using existing daemon; ${base}`,
+      }
+    case 'keep-detached-daemon':
+      return {
+        tone: 'info',
+        label: 'Detached daemon preserved',
+        title: `Detached daemon preserved; ${base}`,
+      }
+    case 'wait-for-start':
+    case 'start-daemon':
+      return {
+        tone: 'warning',
+        label: 'Daemon starting',
+        title: `Daemon starting; ${base}`,
+      }
+    case 'clear-stale-socket-and-start':
+      return {
+        tone: 'warning',
+        label: 'Recovering stale daemon socket',
+        title: `Recovering stale daemon socket; ${base}`,
+      }
+    case 'restart-owned-daemon':
+      return {
+        tone: 'warning',
+        label: 'Restarting daemon',
+        title: `Restarting daemon; ${base}`,
+      }
+    case 'replace-incompatible-daemon':
+      return {
+        tone: 'error',
+        label: 'Daemon version mismatch',
+        title: `Daemon version mismatch; ${base}`,
+      }
+  }
+}
+
+function formatDiagnosticsMs(value: number | undefined): string {
+  return typeof value === 'number' ? `${Math.round(value)} ms` : 'none'
+}
+
+function formatDiagnosticsPid(diagnostics: TaodLifecycleDiagnostics | null): string {
+  if (!diagnostics) return 'none'
+  if (typeof diagnostics.spawnedPid === 'number') return String(diagnostics.spawnedPid)
+  if (typeof diagnostics.releasedDetachedPid === 'number') {
+    return `${diagnostics.releasedDetachedPid} released`
+  }
+  return diagnostics.daemonOwnership === 'external' ? 'external' : 'none'
+}
+
+function daemonRecoveryRows(
+  diagnostics: TaodLifecycleDiagnostics | null,
+  error: string | null,
+  recoveryError: string | null,
+): DaemonRecoveryPanelRow[] {
+  if (!diagnostics) {
+    return [
+      {
+        label: 'Diagnostics',
+        value: recoveryError ?? error ?? 'unavailable',
+        tone: recoveryError || error ? 'error' : undefined,
+      },
+    ]
+  }
+
+  const rows: DaemonRecoveryPanelRow[] = [
+    { label: 'State', value: diagnostics.state },
+    { label: 'Owner', value: diagnostics.daemonOwnership },
+    { label: 'Action', value: diagnostics.recoveryAction },
+    { label: 'Version', value: diagnostics.daemonVersion ?? 'unknown' },
+    { label: 'Protocol', value: String(diagnostics.protocolVersion ?? 'unknown') },
+    { label: 'PID', value: formatDiagnosticsPid(diagnostics) },
+    { label: 'Last ping', value: formatDiagnosticsMs(diagnostics.timing.lastPingDurationMs) },
+    { label: 'Last start', value: formatDiagnosticsMs(diagnostics.timing.lastStartDurationMs) },
+    { label: 'Last control', value: diagnostics.lastControlRequest?.type ?? 'none' },
+  ]
+
+  if (diagnostics.lastError) {
+    rows.push({ label: 'Last error', value: diagnostics.lastError, tone: 'error' })
+  }
+  if (error) {
+    rows.push({ label: 'Poll error', value: error, tone: 'error' })
+  }
+  if (recoveryError) {
+    rows.push({ label: 'Recovery', value: recoveryError, tone: 'error' })
+  }
+
+  return rows
+}
+
+function daemonRecoveryActionLabel(action: TaodLifecycleRecoveryAction): string | null {
+  switch (action) {
+    case 'start-daemon':
+      return 'Start daemon'
+    case 'wait-for-start':
+      return 'Retry start'
+    case 'clear-stale-socket-and-start':
+      return 'Clear stale socket'
+    case 'restart-owned-daemon':
+      return 'Restart daemon'
+    case 'replace-incompatible-daemon':
+      return 'Replace daemon'
+    case 'none':
+    case 'reuse-external-daemon':
+    case 'keep-detached-daemon':
+      return null
+  }
+}
+
+function collectDirectoryPaths(paths: readonly string[]): string[] {
+  const directories = new Set<string>()
+
+  for (const path of paths) {
+    const segments = path.split('/').filter(Boolean)
+    for (let index = 1; index < segments.length; index++) {
+      directories.add(segments.slice(0, index).join('/'))
+    }
+  }
+
+  return [...directories].sort((left, right) => right.length - left.length)
+}
+
+function summarizeParsedDiffFiles(files: readonly ParsedDiffFile[]): DiffSummary {
+  return files.reduce(
+    (summary, file) => ({
+      files: summary.files + 1,
+      additions: summary.additions + file.additions,
+      deletions: summary.deletions + file.deletions,
+    }),
+    { files: 0, additions: 0, deletions: 0 },
+  )
+}
+
+function useParsedDiffFiles(patch: string, idPrefix: string): ParsedDiffResult {
+  const [result, setResult] = useState<ParsedDiffResult>({ files: [], error: null })
+
+  useEffect(() => {
+    let cancelled = false
+    if (patch.trim().length === 0) {
+      setResult({ files: [], error: null })
+      return
+    }
+
+    setResult({ files: [], error: null })
+    parseDiffFilesOffThread(patch, idPrefix).then(
+      (nextResult) => {
+        if (!cancelled) setResult(nextResult)
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setResult({ files: [], error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [idPrefix, patch])
+
+  return result
+}
+
+function buildDiffFileTree(files: readonly ParsedDiffFile[]): DiffFileTreeNode[] {
+  const root = new Map<string, DiffFileTreeNode>()
+
+  for (const file of files) {
+    const segments = file.path.split('/').filter(Boolean)
+    let siblings = root
+    let currentPath = ''
+
+    for (const [index, segment] of segments.entries()) {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment
+      const existing = siblings.get(segment)
+      const node =
+        existing ??
+        ({
+          name: segment,
+          path: currentPath,
+          children: new Map<string, DiffFileTreeNode>(),
+        } satisfies DiffFileTreeNode)
+
+      if (index === segments.length - 1) node.file = file
+      siblings.set(segment, node)
+      siblings = node.children
+    }
+  }
+
+  return sortDiffFileTreeNodes([...root.values()])
+}
+
+function groupDiffFilesByDirectory(files: readonly ParsedDiffFile[]): ChangedFileGroup[] {
+  const groups = new Map<string, ParsedDiffFile[]>()
+
+  for (const file of files) {
+    const separatorIndex = file.path.lastIndexOf('/')
+    const directory = separatorIndex === -1 ? 'Root' : file.path.slice(0, separatorIndex)
+    const group = groups.get(directory)
+    if (group) {
+      group.push(file)
+    } else {
+      groups.set(directory, [file])
+    }
+  }
+
+  return [...groups.entries()]
+    .map(([directory, groupedFiles]) => ({
+      directory,
+      files: [...groupedFiles].sort((left, right) =>
+        getDiffFileName(left.fileDiff).localeCompare(getDiffFileName(right.fileDiff)),
+      ),
+    }))
+    .sort((left, right) => left.directory.localeCompare(right.directory))
+}
+
+function sortDiffFileTreeNodes(nodes: DiffFileTreeNode[]): DiffFileTreeNode[] {
+  return nodes
+    .sort((left, right) => {
+      const leftIsDirectory = left.children.size > 0 && !left.file
+      const rightIsDirectory = right.children.size > 0 && !right.file
+      if (leftIsDirectory !== rightIsDirectory) return leftIsDirectory ? -1 : 1
+      return left.name.localeCompare(right.name)
+    })
+    .map((node) => ({
+      ...node,
+      children: new Map(
+        sortDiffFileTreeNodes([...node.children.values()]).map((child) => [child.name, child]),
+      ),
+    }))
+}
+
+function collectDiffFileTreeDirectoryKeys(
+  nodes: readonly DiffFileTreeNode[],
+  sectionKind: ChangedFilesSectionKind,
+): string[] {
+  const keys: string[] = []
+
+  for (const node of nodes) {
+    if (node.file) continue
+    keys.push(`${sectionKind}:${node.path}`)
+    keys.push(...collectDiffFileTreeDirectoryKeys([...node.children.values()], sectionKind))
+  }
+
+  return keys
+}
+
+function isFileTreeDirectoryHandle(
+  item: ReturnType<PierreFileTree['getItem']>,
+): item is FileTreeDirectoryHandle {
+  return item?.isDirectory() === true
+}
+
+function normalizeSidebarWidth(nextWidth: number, maxWidth = SIDEBAR_MAX_WIDTH): number {
+  return Math.min(maxWidth, Math.max(SIDEBAR_EXPANDED_MIN_WIDTH, nextWidth))
 }
 
 function getDropPlacement(
@@ -300,7 +830,6 @@ function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean 
 function WorkspaceItem({
   workspace,
   onReorderWorkspace,
-  onExitSettings,
 }: {
   workspace: Workspace
   onReorderWorkspace(
@@ -308,7 +837,6 @@ function WorkspaceItem({
     targetWorkspaceId: string,
     placement: ReorderPlacement,
   ): void
-  onExitSettings(): void
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
@@ -360,7 +888,6 @@ function WorkspaceItem({
       }
       setIsExpanded(true)
       upsertWorktree(workspaceResponse.value.id, response.value)
-      onExitSettings()
       selectWorktree(response.value.id)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -481,10 +1008,7 @@ function WorkspaceItem({
             className={isActive ? 'local-branch-row local-branch-row-active' : 'local-branch-row'}
             aria-pressed={isActive}
             title={`Local checkout — ${branchLabel}`}
-            onClick={() => {
-              onExitSettings()
-              selectWorkspace(workspace.id)
-            }}
+            onClick={() => selectWorkspace(workspace.id)}
           >
             <span className="worktree-details">
               <span className="worktree-title">{branchLabel}</span>
@@ -503,10 +1027,7 @@ function WorkspaceItem({
                   className="worktree-item"
                   aria-pressed={isWorktreeActive}
                   title={`${title} — ${worktree.branch}`}
-                  onClick={() => {
-                    onExitSettings()
-                    selectWorktree(worktree.id)
-                  }}
+                  onClick={() => selectWorktree(worktree.id)}
                 >
                   <span className="worktree-details">
                     <span className="worktree-title">{title}</span>
@@ -534,11 +1055,17 @@ function WorkspaceItem({
 function ResizeShell({
   children,
   width,
+  side = 'left',
+  className = 'tao-sidebar',
+  ariaLabel = 'Workspaces',
   onResize,
   onResizePreview,
 }: {
   children: ReactNode
   width: number
+  side?: 'left' | 'right'
+  className?: string
+  ariaLabel?: string
   onResize(width: number): void
   onResizePreview?(width: number | null): void
 }) {
@@ -550,6 +1077,7 @@ function ResizeShell({
   const pendingWidthRef = useRef<number | null>(null)
   const frameRef = useRef<number | null>(null)
   const displayWidth = draftWidth ?? width
+  const maxWidth = side === 'right' ? RIGHT_SIDEBAR_MAX_WIDTH : SIDEBAR_MAX_WIDTH
 
   useEffect(() => {
     if (!isResizing) currentWidthRef.current = width
@@ -559,17 +1087,18 @@ function ResizeShell({
     const nextWidth = pendingWidthRef.current
     pendingWidthRef.current = null
     if (nextWidth === null) return
-    const clampedWidth = normalizeSidebarWidth(nextWidth)
+    const clampedWidth = normalizeSidebarWidth(nextWidth, maxWidth)
     currentWidthRef.current = clampedWidth
     setDraftWidth(clampedWidth)
     onResizePreview?.(clampedWidth)
-  }, [onResizePreview])
+  }, [maxWidth, onResizePreview])
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
       if (!isResizing) return
 
-      pendingWidthRef.current = startWidthRef.current + event.clientX - startXRef.current
+      const deltaX = event.clientX - startXRef.current
+      pendingWidthRef.current = startWidthRef.current + (side === 'left' ? deltaX : -deltaX)
       if (frameRef.current !== null) return
 
       frameRef.current = window.requestAnimationFrame(() => {
@@ -577,7 +1106,7 @@ function ResizeShell({
         flushPendingWidth()
       })
     },
-    [flushPendingWidth, isResizing],
+    [flushPendingWidth, isResizing, side],
   )
 
   const handlePointerUp = useCallback(() => {
@@ -621,16 +1150,22 @@ function ResizeShell({
       role="separator"
       aria-orientation="vertical"
       aria-valuemin={SIDEBAR_EXPANDED_MIN_WIDTH}
-      aria-valuemax={SIDEBAR_MAX_WIDTH}
+      aria-valuemax={maxWidth}
       aria-valuenow={displayWidth}
       aria-label="Resize sidebar"
       tabIndex={0}
-      className={isResizing ? 'resize-handle resize-handle-active' : 'resize-handle'}
+      className={[
+        'resize-handle',
+        side === 'right' ? 'resize-handle-right' : null,
+        isResizing ? 'resize-handle-active' : null,
+      ]
+        .filter(Boolean)
+        .join(' ')}
       onPointerDown={(event) => {
         if (!event.isPrimary || event.button !== 0) return
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
-        const normalizedWidth = normalizeSidebarWidth(width)
+        const normalizedWidth = normalizeSidebarWidth(width, maxWidth)
         startXRef.current = event.clientX
         startWidthRef.current = normalizedWidth
         currentWidthRef.current = normalizedWidth
@@ -641,12 +1176,24 @@ function ResizeShell({
       onKeyDown={(event) => {
         if (event.key === 'ArrowLeft') {
           event.preventDefault()
-          onResize(normalizeSidebarWidth(displayWidth - SIDEBAR_KEYBOARD_RESIZE_STEP))
+          onResize(
+            normalizeSidebarWidth(
+              displayWidth +
+                (side === 'left' ? -SIDEBAR_KEYBOARD_RESIZE_STEP : SIDEBAR_KEYBOARD_RESIZE_STEP),
+              maxWidth,
+            ),
+          )
           return
         }
         if (event.key === 'ArrowRight') {
           event.preventDefault()
-          onResize(normalizeSidebarWidth(displayWidth + SIDEBAR_KEYBOARD_RESIZE_STEP))
+          onResize(
+            normalizeSidebarWidth(
+              displayWidth +
+                (side === 'left' ? SIDEBAR_KEYBOARD_RESIZE_STEP : -SIDEBAR_KEYBOARD_RESIZE_STEP),
+              maxWidth,
+            ),
+          )
           return
         }
         if (event.key === 'Home') {
@@ -656,7 +1203,7 @@ function ResizeShell({
         }
         if (event.key === 'End') {
           event.preventDefault()
-          onResize(SIDEBAR_MAX_WIDTH)
+          onResize(maxWidth)
           return
         }
         if (event.key === 'Enter' || event.key === ' ') {
@@ -667,11 +1214,8 @@ function ResizeShell({
       onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
     />
   )
-
-  const className = ['tao-sidebar'].filter(Boolean).join(' ')
-
   return (
-    <aside className={className} style={{ width: displayWidth }} aria-label="Workspaces">
+    <aside className={className} style={{ width: displayWidth }} aria-label={ariaLabel}>
       {children}
       {resizeHandle}
     </aside>
@@ -685,11 +1229,10 @@ const TabBar = memo(function TabBar({
   isSidebarVisible,
   canGoPreviousWorkspace,
   canGoNextWorkspace,
+  tabLabelsById,
   onToggleSidebar,
   onPreviousWorkspace,
   onNextWorkspace,
-  onNewTab,
-  canCreateTabs,
   onSelectTab,
   onCloseTab,
   onReorderTab,
@@ -701,11 +1244,10 @@ const TabBar = memo(function TabBar({
   isSidebarVisible: boolean
   canGoPreviousWorkspace: boolean
   canGoNextWorkspace: boolean
+  tabLabelsById: ReadonlyMap<string, string>
   onToggleSidebar(): void
   onPreviousWorkspace(): void
   onNextWorkspace(): void
-  onNewTab(): void
-  canCreateTabs: boolean
   onSelectTab(tabId: string): void
   onCloseTab(tabId: string): void
   onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
@@ -727,6 +1269,7 @@ const TabBar = memo(function TabBar({
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId
           const isArchived = archivedTabIds.has(tab.id)
+          const tabLabel = tabLabelsById.get(tab.id) ?? tab.name
           const className = [
             'tab-item',
             isActive ? 'tab-item-active' : null,
@@ -762,12 +1305,11 @@ const TabBar = memo(function TabBar({
                 role="tab"
                 aria-selected={isActive}
                 title={
-                  isArchived ? `${tab.name} — contains a read-only archived session` : tab.name
+                  isArchived ? `${tabLabel} — contains a read-only archived session` : tabLabel
                 }
                 onClick={() => onSelectTab(tab.id)}
               >
-                <FiTerminal size={13} />
-                <span>{tab.name}</span>
+                <span>{tabLabel}</span>
                 {isArchived ? (
                   <span className="tab-archive-pill" aria-label="Read-only archive">
                     <FiArchive size={10} />
@@ -778,7 +1320,7 @@ const TabBar = memo(function TabBar({
               <button
                 type="button"
                 className="tab-close-button"
-                aria-label={`Close ${tab.name}`}
+                aria-label={`Close ${tabLabel}`}
                 title="Close tab"
                 onClick={() => onCloseTab(tab.id)}
               >
@@ -788,16 +1330,6 @@ const TabBar = memo(function TabBar({
           )
         })}
       </div>
-      <button
-        type="button"
-        className="icon-button"
-        aria-label="New tab"
-        title={canCreateTabs ? 'New tab' : 'Add a workspace first'}
-        disabled={!canCreateTabs}
-        onClick={onNewTab}
-      >
-        <FiPlus size={15} />
-      </button>
     </div>
   )
 })
@@ -822,11 +1354,11 @@ const HeaderNavigation = memo(function HeaderNavigation({
       <button
         type="button"
         className="icon-button titlebar-button"
-        aria-label={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-        title={isSidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+        aria-label={isSidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+        title={isSidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
         onClick={onToggleSidebar}
       >
-        <FiMenu size={15} />
+        <TbLayoutSidebar size={16} />
       </button>
       <button
         type="button"
@@ -848,6 +1380,79 @@ const HeaderNavigation = memo(function HeaderNavigation({
       >
         <FiChevronRight size={15} />
       </button>
+    </div>
+  )
+})
+
+const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
+  notice,
+  diagnostics,
+  diagnosticsError,
+  recoveryError,
+  isRecovering,
+  isOpen,
+  onToggle,
+  onRecover,
+}: {
+  notice: DaemonRecoveryNotice | null
+  diagnostics: TaodLifecycleDiagnostics | null
+  diagnosticsError: string | null
+  recoveryError: string | null
+  isRecovering: boolean
+  isOpen: boolean
+  onToggle(): void
+  onRecover(action: TaodLifecycleRecoveryAction): void
+}) {
+  if (!notice) return null
+  const rows = daemonRecoveryRows(diagnostics, diagnosticsError, recoveryError)
+  const action = diagnostics?.recoveryAction ?? null
+  const actionLabel = action ? daemonRecoveryActionLabel(action) : null
+
+  return (
+    <div className="daemon-recovery-host">
+      <button
+        type="button"
+        className={`icon-button daemon-recovery-indicator daemon-recovery-indicator-${notice.tone}`}
+        aria-label={notice.label}
+        aria-expanded={isOpen}
+        title={notice.title}
+        onClick={onToggle}
+      >
+        <FiAlertTriangle size={13} />
+      </button>
+      {isOpen ? (
+        <div className={`daemon-recovery-panel daemon-recovery-panel-${notice.tone}`}>
+          <div className="daemon-recovery-panel-header">{notice.label}</div>
+          <div className="daemon-recovery-panel-rows">
+            {rows.map((row) => (
+              <div className="daemon-recovery-panel-row" key={row.label}>
+                <span className="daemon-recovery-panel-label">{row.label}</span>
+                <span
+                  className={[
+                    'daemon-recovery-panel-value',
+                    row.tone ? `daemon-recovery-panel-value-${row.tone}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  title={row.value}
+                >
+                  {row.value}
+                </span>
+              </div>
+            ))}
+          </div>
+          {action && actionLabel ? (
+            <button
+              type="button"
+              className="daemon-recovery-action-button"
+              disabled={isRecovering}
+              onClick={() => onRecover(action)}
+            >
+              {isRecovering ? 'Working...' : actionLabel}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 })
@@ -916,9 +1521,1380 @@ const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) 
   )
 })
 
+const RightSidebar = memo(function RightSidebar({
+  rootPath,
+  branchName,
+  compareBranch,
+  view,
+  onSelectView,
+  onOpenChangesTab,
+}: {
+  rootPath: string | null
+  branchName: string
+  compareBranch: string
+  view: RightSidebarView
+  onSelectView(view: RightSidebarView): void
+  onOpenChangesTab(): void
+}) {
+  return (
+    <>
+      <div className="right-sidebar-header">
+        <div className="right-sidebar-view-tabs" role="tablist" aria-label="Right sidebar view">
+          <button
+            type="button"
+            className={
+              view === 'files'
+                ? 'right-sidebar-view-tab right-sidebar-view-tab-active'
+                : 'right-sidebar-view-tab'
+            }
+            role="tab"
+            aria-selected={view === 'files'}
+            title="Files"
+            onClick={() => onSelectView('files')}
+          >
+            <FiFileText size={12} />
+            <span>Files</span>
+          </button>
+          <button
+            type="button"
+            className={
+              view === 'changes'
+                ? 'right-sidebar-view-tab right-sidebar-view-tab-active'
+                : 'right-sidebar-view-tab'
+            }
+            role="tab"
+            aria-selected={view === 'changes'}
+            title="Changes"
+            onClick={() => onSelectView('changes')}
+          >
+            <FiGitPullRequest size={12} />
+            <span>Changes</span>
+          </button>
+        </div>
+      </div>
+      <div className="right-sidebar-content">
+        {view === 'files' ? (
+          <WorkspaceFileTreePanel rootPath={rootPath} />
+        ) : (
+          <ChangedFilesTreePanel
+            rootPath={rootPath}
+            branchName={branchName}
+            compareBranch={compareBranch}
+            onOpenChangesTab={onOpenChangesTab}
+          />
+        )}
+      </div>
+    </>
+  )
+})
+
+function WorkspaceFileTreePanel({ rootPath }: { rootPath: string | null }) {
+  const mountRef = useRef<HTMLDivElement | null>(null)
+  const treeRef = useRef<PierreFileTree | null>(null)
+  const [fileTree, setFileTree] = useState<WorkspaceFileTree>(EMPTY_FILE_TREE)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [renderError, setRenderError] = useState<string | null>(null)
+  const [areAllFoldersCollapsed, setAreAllFoldersCollapsed] = useState(true)
+
+  const refreshFileTree = useCallback(() => {
+    if (!rootPath) {
+      setFileTree(EMPTY_FILE_TREE)
+      setError(null)
+      setIsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
+
+    window.electronAPI
+      .getWorkspaceFileTree(rootPath)
+      .then((response) => {
+        if (cancelled) return
+        if (response.ok) {
+          setFileTree(response.value)
+          return
+        }
+        setFileTree(EMPTY_FILE_TREE)
+        setError(response.error.message)
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return
+        setFileTree(EMPTY_FILE_TREE)
+        setError(loadError instanceof Error ? loadError.message : String(loadError))
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [rootPath])
+
+  useEffect(() => {
+    const mount = mountRef.current
+    if (!mount) return
+
+    const tree = new PierreFileTree({
+      density: 'compact',
+      flattenEmptyDirectories: true,
+      initialExpansion: 0,
+      itemHeight: 26,
+      icons: FILE_TREE_ICONS,
+      paths: [],
+      search: false,
+      gitStatus: [],
+      unsafeCSS: FILE_TREE_UNSAFE_CSS,
+    })
+
+    try {
+      tree.render({ containerWrapper: mount })
+      treeRef.current = tree
+      setRenderError(null)
+    } catch (renderErrorValue) {
+      tree.cleanUp()
+      setRenderError(
+        renderErrorValue instanceof Error ? renderErrorValue.message : String(renderErrorValue),
+      )
+      console.warn('[file-tree] Mount failed:', renderErrorValue)
+      return
+    }
+
+    return () => {
+      treeRef.current = null
+      tree.cleanUp()
+      mount.replaceChildren()
+    }
+  }, [])
+
+  useEffect(() => refreshFileTree(), [refreshFileTree])
+
+  useEffect(() => {
+    const tree = treeRef.current
+    if (!tree) return
+
+    try {
+      const preparedInput = prepareFileTreeInput(fileTree.paths, {
+        flattenEmptyDirectories: true,
+      })
+      tree.resetPaths(fileTree.paths, { preparedInput })
+      tree.setGitStatus(fileTree.gitStatus as readonly GitStatusEntry[])
+      setAreAllFoldersCollapsed(true)
+      setRenderError(null)
+    } catch (updateErrorValue) {
+      setRenderError(
+        updateErrorValue instanceof Error ? updateErrorValue.message : String(updateErrorValue),
+      )
+      console.warn('[file-tree] Update failed:', updateErrorValue)
+    }
+  }, [fileTree])
+
+  const collapseAll = useCallback(() => {
+    const tree = treeRef.current
+    if (!tree) return
+
+    try {
+      for (const path of collectDirectoryPaths(fileTree.paths)) {
+        const item = tree.getItem(path)
+        if (isFileTreeDirectoryHandle(item)) item.collapse()
+      }
+      setAreAllFoldersCollapsed(true)
+      setRenderError(null)
+    } catch (collapseErrorValue) {
+      setRenderError(
+        collapseErrorValue instanceof Error
+          ? collapseErrorValue.message
+          : String(collapseErrorValue),
+      )
+      console.warn('[file-tree] Collapse failed:', collapseErrorValue)
+    }
+  }, [fileTree.paths])
+
+  const expandAll = useCallback(() => {
+    const tree = treeRef.current
+    if (!tree) return
+
+    try {
+      for (const path of collectDirectoryPaths(fileTree.paths)) {
+        const item = tree.getItem(path)
+        if (isFileTreeDirectoryHandle(item)) item.expand()
+      }
+      setAreAllFoldersCollapsed(false)
+      setRenderError(null)
+    } catch (expandErrorValue) {
+      setRenderError(
+        expandErrorValue instanceof Error ? expandErrorValue.message : String(expandErrorValue),
+      )
+      console.warn('[file-tree] Expand failed:', expandErrorValue)
+    }
+  }, [fileTree.paths])
+
+  const toggleAllFolders = useCallback(() => {
+    if (areAllFoldersCollapsed) {
+      expandAll()
+    } else {
+      collapseAll()
+    }
+  }, [areAllFoldersCollapsed, collapseAll, expandAll])
+
+  return (
+    <div className="right-sidebar-file-tree">
+      <div className="right-sidebar-file-tree-toolbar">
+        <div className="right-sidebar-file-tree-title">Explorer</div>
+        <div className="right-sidebar-file-tree-actions">
+          <button
+            type="button"
+            className="icon-button right-sidebar-tree-action-button"
+            aria-label={areAllFoldersCollapsed ? 'Expand all folders' : 'Collapse all folders'}
+            title={areAllFoldersCollapsed ? 'Expand all folders' : 'Collapse all folders'}
+            disabled={!rootPath || fileTree.paths.length === 0}
+            onClick={toggleAllFolders}
+          >
+            {areAllFoldersCollapsed ? <FiChevronsDown size={12} /> : <FiChevronsUp size={12} />}
+          </button>
+          <button
+            type="button"
+            className="icon-button right-sidebar-tree-action-button"
+            aria-label="Refresh file tree"
+            title="Refresh file tree"
+            disabled={!rootPath || isLoading}
+            onClick={() => refreshFileTree()}
+          >
+            <FiRefreshCw size={12} />
+          </button>
+        </div>
+      </div>
+      {renderError ? <div className="right-sidebar-file-tree-error">{renderError}</div> : null}
+      {error ? <div className="right-sidebar-file-tree-error">{error}</div> : null}
+      {!rootPath ? <div className="right-sidebar-file-tree-message">Select a workspace</div> : null}
+      {rootPath && !isLoading && !error && !renderError && fileTree.paths.length === 0 ? (
+        <div className="right-sidebar-file-tree-message">No files</div>
+      ) : null}
+      <div
+        ref={mountRef}
+        className="right-sidebar-file-tree-mount"
+        aria-label="Workspace file tree"
+      />
+    </div>
+  )
+}
+
+function DiffBranchPicker({
+  rootPath,
+  branchName,
+  compareBranch,
+  onCompareBranchChange,
+}: {
+  rootPath: string | null
+  branchName: string
+  compareBranch: string
+  onCompareBranchChange(branch: string): void
+}) {
+  const [branchSearch, setBranchSearch] = useState(compareBranch)
+  const [isBranchPickerOpen, setIsBranchPickerOpen] = useState(false)
+  const [isBranchSearchFresh, setIsBranchSearchFresh] = useState(false)
+  const [highlightedBranchIndex, setHighlightedBranchIndex] = useState(0)
+  const [branchOptions, setBranchOptions] = useState<readonly string[]>([])
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false)
+
+  useEffect(() => {
+    setBranchSearch(compareBranch)
+  }, [compareBranch])
+
+  useEffect(() => {
+    if (!rootPath) {
+      setBranchOptions([])
+      setIsLoadingBranches(false)
+      return
+    }
+
+    let cancelled = false
+    setIsLoadingBranches(true)
+
+    window.electronAPI
+      .getGitBranches(rootPath)
+      .then((response) => {
+        if (cancelled) return
+        setBranchOptions(response.ok ? response.value : [])
+      })
+      .catch(() => {
+        if (!cancelled) setBranchOptions([])
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingBranches(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [rootPath])
+
+  const compareBranchOptions = branchOptions.includes(compareBranch)
+    ? branchOptions
+    : compareBranch
+      ? [compareBranch, ...branchOptions]
+      : branchOptions
+  const filteredBranchOptions = useMemo(() => {
+    const query = branchSearch.trim().toLowerCase()
+    if (query.length === 0) return compareBranchOptions
+    return compareBranchOptions.filter((branch) => branch.toLowerCase().includes(query))
+  }, [branchSearch, compareBranchOptions])
+  const selectCompareBranch = useCallback(
+    (branch: string) => {
+      onCompareBranchChange(branch)
+      setBranchSearch(branch)
+      setIsBranchPickerOpen(false)
+      setIsBranchSearchFresh(false)
+      setHighlightedBranchIndex(0)
+    },
+    [onCompareBranchChange],
+  )
+  const commitBranchSearch = useCallback(() => {
+    const branch = filteredBranchOptions[highlightedBranchIndex] ?? filteredBranchOptions[0]
+    if (branch) {
+      selectCompareBranch(branch)
+      return
+    }
+    if (branchSearch.trim().length > 0) {
+      selectCompareBranch(branchSearch.trim())
+    }
+  }, [branchSearch, filteredBranchOptions, highlightedBranchIndex, selectCompareBranch])
+
+  return (
+    <div className="right-sidebar-diff-branch-row">
+      <FiGitPullRequest size={13} />
+      <span className="right-sidebar-diff-branch-name" title={branchName}>
+        {branchName || 'No branch'}
+      </span>
+      <span className="right-sidebar-diff-branch-from">from</span>
+      <div className="right-sidebar-diff-branch-picker">
+        <input
+          className="right-sidebar-diff-branch-base-input"
+          aria-label="Compare branch"
+          aria-controls="right-sidebar-diff-branch-options"
+          aria-autocomplete="list"
+          value={branchSearch}
+          disabled={!rootPath || isLoadingBranches}
+          placeholder={isLoadingBranches ? 'Loading branches...' : 'Search branches...'}
+          onChange={(event) => {
+            setBranchSearch(event.currentTarget.value)
+            setIsBranchSearchFresh(false)
+            setIsBranchPickerOpen(true)
+            setHighlightedBranchIndex(0)
+          }}
+          onFocus={() => {
+            setIsBranchPickerOpen(true)
+            setBranchSearch('')
+            setIsBranchSearchFresh(true)
+            setHighlightedBranchIndex(0)
+          }}
+          onPointerDown={() => {
+            if (!isBranchPickerOpen) {
+              setBranchSearch('')
+              setIsBranchSearchFresh(true)
+              setHighlightedBranchIndex(0)
+            }
+          }}
+          onBlur={() => {
+            window.setTimeout(() => {
+              setIsBranchPickerOpen(false)
+              setBranchSearch(compareBranch)
+              setIsBranchSearchFresh(false)
+              setHighlightedBranchIndex(0)
+            }, 100)
+          }}
+          onKeyDown={(event) => {
+            if (isBranchSearchFresh && event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
+              setBranchSearch('')
+              setIsBranchSearchFresh(false)
+            }
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              setIsBranchPickerOpen(true)
+              setHighlightedBranchIndex((current) =>
+                Math.min(current + 1, Math.max(filteredBranchOptions.length - 1, 0)),
+              )
+              return
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              setHighlightedBranchIndex((current) => Math.max(current - 1, 0))
+              return
+            }
+            if (event.key === 'Enter' || event.key === 'Tab') {
+              if (isBranchPickerOpen || branchSearch !== compareBranch) {
+                event.preventDefault()
+                commitBranchSearch()
+              }
+            }
+            if (event.key === 'Escape') {
+              setIsBranchPickerOpen(false)
+              setBranchSearch(compareBranch)
+              setIsBranchSearchFresh(false)
+              setHighlightedBranchIndex(0)
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="icon-button right-sidebar-diff-branch-picker-button"
+          aria-label="Show branches"
+          title="Show branches"
+          disabled={!rootPath || isLoadingBranches}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsBranchPickerOpen((current) => !current)}
+        >
+          <FiChevronDown size={12} />
+        </button>
+        {isBranchPickerOpen ? (
+          <div id="right-sidebar-diff-branch-options" className="right-sidebar-diff-branch-options">
+            {filteredBranchOptions.length > 0 ? (
+              filteredBranchOptions.slice(0, 40).map((branch, index) => (
+                <button
+                  key={branch}
+                  type="button"
+                  className={
+                    index === highlightedBranchIndex
+                      ? 'right-sidebar-diff-branch-option right-sidebar-diff-branch-option-active'
+                      : 'right-sidebar-diff-branch-option'
+                  }
+                  onMouseEnter={() => setHighlightedBranchIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectCompareBranch(branch)}
+                >
+                  {branch}
+                </button>
+              ))
+            ) : (
+              <div className="right-sidebar-diff-branch-empty">No matching branches</div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ChangedFilesTreePanel({
+  rootPath,
+  branchName,
+  compareBranch,
+  onOpenChangesTab,
+}: {
+  rootPath: string | null
+  branchName: string
+  compareBranch: string
+  onOpenChangesTab(): void
+}) {
+  const [basePatch, setBasePatch] = useState('')
+  const [unstagedPatch, setUnstagedPatch] = useState('')
+  const [stagedPatch, setStagedPatch] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [isMutatingPath, setIsMutatingPath] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [focusedPath, setFocusedPath] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<ChangedFilesViewMode>('folders')
+  const [compareBranchInput, setCompareBranchInput] = useState(compareBranch)
+  const [collapsedTreeDirectoryKeys, setCollapsedTreeDirectoryKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
+  const [collapsedSections, setCollapsedSections] = useState<ReadonlySet<ChangedFilesSectionKind>>(
+    () => new Set(),
+  )
+
+  useEffect(() => {
+    setCompareBranchInput(compareBranch)
+  }, [compareBranch])
+
+  const refreshDiffPatch = useCallback(() => {
+    if (!rootPath) {
+      setBasePatch('')
+      setUnstagedPatch('')
+      setStagedPatch('')
+      setError(null)
+      setIsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
+
+    Promise.all([
+      window.electronAPI.getWorkspaceDiffPatch({
+        workspacePath: rootPath,
+        scope: 'all',
+        compareBranch: compareBranchInput || undefined,
+      }),
+      window.electronAPI.getWorkspaceDiffPatch({
+        workspacePath: rootPath,
+        scope: 'unstaged',
+        compareBranch: compareBranchInput || undefined,
+      }),
+      window.electronAPI.getWorkspaceDiffPatch({
+        workspacePath: rootPath,
+        scope: 'staged',
+        compareBranch: compareBranchInput || undefined,
+      }),
+    ])
+      .then(([baseResponse, unstagedResponse, stagedResponse]) => {
+        if (cancelled) return
+        if (baseResponse.ok && unstagedResponse.ok && stagedResponse.ok) {
+          setBasePatch(baseResponse.value)
+          setUnstagedPatch(unstagedResponse.value)
+          setStagedPatch(stagedResponse.value)
+          return
+        }
+        setBasePatch('')
+        setUnstagedPatch('')
+        setStagedPatch('')
+        if (!baseResponse.ok) {
+          setError(baseResponse.error.message)
+          return
+        }
+        if (!unstagedResponse.ok) {
+          setError(unstagedResponse.error.message)
+          return
+        }
+        if (!stagedResponse.ok) setError(stagedResponse.error.message)
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return
+        setBasePatch('')
+        setUnstagedPatch('')
+        setStagedPatch('')
+        setError(loadError instanceof Error ? loadError.message : String(loadError))
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [compareBranchInput, rootPath])
+
+  useEffect(() => refreshDiffPatch(), [refreshDiffPatch])
+
+  const deferredBasePatch = useDeferredValue(basePatch)
+  const deferredUnstagedPatch = useDeferredValue(unstagedPatch)
+  const deferredStagedPatch = useDeferredValue(stagedPatch)
+  const base = useParsedDiffFiles(deferredBasePatch, 'base')
+  const unstaged = useParsedDiffFiles(deferredUnstagedPatch, 'unstaged')
+  const staged = useParsedDiffFiles(deferredStagedPatch, 'staged')
+
+  const sections = useMemo((): ChangedFilesSection[] => {
+    return [
+      { kind: 'unstaged', label: 'Unstaged', files: unstaged.files, error: unstaged.error },
+      { kind: 'staged', label: 'Staged', files: staged.files, error: staged.error },
+      { kind: 'base', label: 'Against base', files: base.files, error: base.error },
+    ]
+  }, [base, staged, unstaged])
+
+  const totalChangedFiles = sections.reduce((total, section) => total + section.files.length, 0)
+  const baseSummary = summarizeParsedDiffFiles(
+    sections.find((section) => section.kind === 'base')?.files ?? [],
+  )
+  const sectionErrors = sections.map((section) => section.error).filter((value) => value !== null)
+  const hasChangedFiles = totalChangedFiles > 0
+  const sectionsWithFiles = useMemo(
+    () => sections.filter((section) => section.files.length > 0),
+    [sections],
+  )
+  const diffFileTreesBySection = useMemo(
+    () =>
+      new Map(sectionsWithFiles.map((section) => [section.kind, buildDiffFileTree(section.files)])),
+    [sectionsWithFiles],
+  )
+  const treeDirectoryKeys = useMemo(
+    () =>
+      sectionsWithFiles.flatMap((section) =>
+        collectDiffFileTreeDirectoryKeys(
+          diffFileTreesBySection.get(section.kind) ?? [],
+          section.kind,
+        ),
+      ),
+    [diffFileTreesBySection, sectionsWithFiles],
+  )
+  const areAllTreeDirectoriesCollapsed =
+    treeDirectoryKeys.length > 0 &&
+    treeDirectoryKeys.every((key) => collapsedTreeDirectoryKeys.has(key))
+
+  const toggleSection = useCallback((kind: ChangedFilesSectionKind) => {
+    setCollapsedSections((current) => {
+      const next = new Set(current)
+      if (next.has(kind)) {
+        next.delete(kind)
+      } else {
+        next.add(kind)
+      }
+      return next
+    })
+  }, [])
+
+  const toggleAllTreeDirectories = useCallback(() => {
+    if (areAllTreeDirectoriesCollapsed) {
+      setCollapsedTreeDirectoryKeys(new Set())
+    } else {
+      setCollapsedTreeDirectoryKeys(new Set(treeDirectoryKeys))
+    }
+  }, [areAllTreeDirectoriesCollapsed, treeDirectoryKeys])
+
+  const focusDiffFile = useCallback(
+    (file: ParsedDiffFile) => {
+      setFocusedPath(file.path)
+      onOpenChangesTab()
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent(DIFF_FOCUS_FILE_EVENT, {
+            detail: { path: file.path, rootPath },
+          }),
+        )
+      }, 0)
+    },
+    [onOpenChangesTab, rootPath],
+  )
+
+  const runPathAction = useCallback(
+    async (action: 'stage' | 'unstage' | 'revert', path: string | readonly string[]) => {
+      if (!rootPath || isMutatingPath) return
+      setIsMutatingPath(typeof path === 'string' ? path : path.join('\0'))
+      setError(null)
+
+      try {
+        const actionPath =
+          typeof path === 'string' ? path : path.filter((candidate) => candidate.trim().length > 0)
+        if (Array.isArray(actionPath) && actionPath.length === 0) {
+          setError('No paths selected')
+          return
+        }
+        const checkedPath = actionPath as string | readonly [string, ...string[]]
+        const response =
+          action === 'stage'
+            ? await window.electronAPI.stagePath({ workspacePath: rootPath, path: checkedPath })
+            : action === 'unstage'
+              ? await window.electronAPI.unstagePath({ workspacePath: rootPath, path: checkedPath })
+              : await window.electronAPI.revertPath({ workspacePath: rootPath, path: checkedPath })
+        if (!response.ok) {
+          setError(response.error.message)
+          return
+        }
+        refreshDiffPatch()
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : String(actionError))
+      } finally {
+        setIsMutatingPath(null)
+      }
+    },
+    [isMutatingPath, refreshDiffPatch, rootPath],
+  )
+
+  const renderNodes = useCallback(
+    (
+      nodes: readonly DiffFileTreeNode[],
+      sectionKind: ChangedFilesSectionKind,
+      depth = 0,
+    ): ReactNode =>
+      nodes.map((node) => {
+        if (node.file) {
+          const file = node.file
+          const isFocused = focusedPath === file.path
+          return (
+            <button
+              key={file.id}
+              type="button"
+              className={
+                isFocused
+                  ? 'right-sidebar-diff-file-tree-item right-sidebar-diff-file-tree-item-active'
+                  : 'right-sidebar-diff-file-tree-item'
+              }
+              style={{ '--diff-tree-depth': depth } as CSSProperties}
+              title={getDiffFileName(file.fileDiff)}
+              onClick={() => focusDiffFile(file)}
+            >
+              <ChangedFileIcon path={file.path} />
+              <span className="right-sidebar-diff-file-tree-name">{node.name}</span>
+              <span className="right-sidebar-diff-file-tree-delta">
+                <span className="right-sidebar-diff-added">+{file.additions}</span>
+                <span className="right-sidebar-diff-deleted">-{file.deletions}</span>
+              </span>
+              {sectionKind === 'unstaged' ? (
+                <span className="right-sidebar-diff-file-actions">
+                  <button
+                    type="button"
+                    className="icon-button right-sidebar-tree-action-button"
+                    aria-label={`Revert ${file.path}`}
+                    title="Revert"
+                    disabled={isMutatingPath !== null}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runPathAction('revert', file.path)
+                    }}
+                  >
+                    <FiRotateCcw size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button right-sidebar-tree-action-button"
+                    aria-label={`Stage ${file.path}`}
+                    title="Stage"
+                    disabled={isMutatingPath !== null}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runPathAction('stage', file.path)
+                    }}
+                  >
+                    <FiPlus size={12} />
+                  </button>
+                </span>
+              ) : sectionKind === 'staged' ? (
+                <span className="right-sidebar-diff-file-actions">
+                  <button
+                    type="button"
+                    className="icon-button right-sidebar-tree-action-button"
+                    aria-label={`Unstage ${file.path}`}
+                    title="Unstage"
+                    disabled={isMutatingPath !== null}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runPathAction('unstage', file.path)
+                    }}
+                  >
+                    <FiMinusSquare size={12} />
+                  </button>
+                </span>
+              ) : null}
+            </button>
+          )
+        }
+
+        const directoryKey = `${sectionKind}:${node.path}`
+        const isDirectoryCollapsed = collapsedTreeDirectoryKeys.has(directoryKey)
+
+        return (
+          <div className="right-sidebar-diff-file-tree-directory" key={node.path}>
+            <div
+              className="right-sidebar-diff-file-tree-directory-label"
+              style={{ '--diff-tree-depth': depth } as CSSProperties}
+              title={node.path}
+            >
+              <FiFolder size={13} />
+              <span className="right-sidebar-diff-file-tree-name">{node.name}</span>
+            </div>
+            {isDirectoryCollapsed
+              ? null
+              : renderNodes([...node.children.values()], sectionKind, depth + 1)}
+          </div>
+        )
+      }),
+    [collapsedTreeDirectoryKeys, focusDiffFile, focusedPath, isMutatingPath, runPathAction],
+  )
+
+  const renderFileButton = useCallback(
+    (file: ParsedDiffFile, label: string, sectionKind: ChangedFilesSectionKind): ReactNode => {
+      const isFocused = focusedPath === file.path
+      return (
+        <button
+          key={file.id}
+          type="button"
+          className={
+            isFocused
+              ? 'right-sidebar-diff-file-tree-item right-sidebar-diff-file-tree-item-active'
+              : 'right-sidebar-diff-file-tree-item'
+          }
+          title={getDiffFileName(file.fileDiff)}
+          onClick={() => focusDiffFile(file)}
+        >
+          <ChangedFileIcon path={file.path} />
+          <span className="right-sidebar-diff-file-tree-name">{label}</span>
+          <span className="right-sidebar-diff-file-tree-delta">
+            <span className="right-sidebar-diff-added">+{file.additions}</span>
+            <span className="right-sidebar-diff-deleted">-{file.deletions}</span>
+          </span>
+          {sectionKind === 'unstaged' ? (
+            <span className="right-sidebar-diff-file-actions">
+              <button
+                type="button"
+                className="icon-button right-sidebar-tree-action-button"
+                aria-label={`Revert ${file.path}`}
+                title="Revert"
+                disabled={isMutatingPath !== null}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void runPathAction('revert', file.path)
+                }}
+              >
+                <FiRotateCcw size={12} />
+              </button>
+              <button
+                type="button"
+                className="icon-button right-sidebar-tree-action-button"
+                aria-label={`Stage ${file.path}`}
+                title="Stage"
+                disabled={isMutatingPath !== null}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void runPathAction('stage', file.path)
+                }}
+              >
+                <FiPlus size={12} />
+              </button>
+            </span>
+          ) : sectionKind === 'staged' ? (
+            <span className="right-sidebar-diff-file-actions">
+              <button
+                type="button"
+                className="icon-button right-sidebar-tree-action-button"
+                aria-label={`Unstage ${file.path}`}
+                title="Unstage"
+                disabled={isMutatingPath !== null}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void runPathAction('unstage', file.path)
+                }}
+              >
+                <FiMinusSquare size={12} />
+              </button>
+            </span>
+          ) : null}
+        </button>
+      )
+    },
+    [focusDiffFile, focusedPath, isMutatingPath, runPathAction],
+  )
+
+  return (
+    <>
+      <FileTreeIconSprite />
+      <div className="right-sidebar-file-tree">
+        <div className="right-sidebar-file-tree-toolbar right-sidebar-diff-toolbar right-sidebar-diff-toolbar-sidebar">
+          <div className="right-sidebar-diff-toolbar-main">
+            <DiffBranchPicker
+              rootPath={rootPath}
+              branchName={branchName}
+              compareBranch={compareBranchInput}
+              onCompareBranchChange={setCompareBranchInput}
+            />
+            <div className="right-sidebar-diff-control-row">
+              <span className="right-sidebar-diff-summary" title="Line delta">
+                <span>{baseSummary.files} files</span>
+                <span className="right-sidebar-diff-added">+{baseSummary.additions}</span>
+                <span className="right-sidebar-diff-deleted">-{baseSummary.deletions}</span>
+              </span>
+              <div className="right-sidebar-file-tree-actions">
+                {viewMode === 'tree' ? (
+                  <button
+                    type="button"
+                    className="icon-button right-sidebar-tree-action-button"
+                    aria-label={
+                      areAllTreeDirectoriesCollapsed ? 'Expand all folders' : 'Collapse all folders'
+                    }
+                    title={
+                      areAllTreeDirectoriesCollapsed ? 'Expand all folders' : 'Collapse all folders'
+                    }
+                    disabled={treeDirectoryKeys.length === 0}
+                    onClick={toggleAllTreeDirectories}
+                  >
+                    {areAllTreeDirectoriesCollapsed ? (
+                      <FiChevronsDown size={12} />
+                    ) : (
+                      <FiChevronsUp size={12} />
+                    )}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="icon-button right-sidebar-tree-action-button"
+                  aria-label={
+                    viewMode === 'tree'
+                      ? 'Show changed files grouped by folder'
+                      : 'Show changed files as an indented tree'
+                  }
+                  title={
+                    viewMode === 'tree'
+                      ? 'Show changed files grouped by folder'
+                      : 'Show changed files as an indented tree'
+                  }
+                  disabled={!hasChangedFiles}
+                  onClick={() =>
+                    setViewMode((current) => (current === 'tree' ? 'folders' : 'tree'))
+                  }
+                >
+                  {viewMode === 'tree' ? <FiList size={12} /> : <FiFolder size={12} />}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button right-sidebar-tree-action-button"
+                  aria-label="Refresh changed files"
+                  title="Refresh changed files"
+                  disabled={!rootPath || isLoading}
+                  onClick={() => refreshDiffPatch()}
+                >
+                  <FiRefreshCw size={12} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        {error ? <div className="right-sidebar-file-tree-error">{error}</div> : null}
+        {sectionErrors.map((sectionError) => (
+          <div className="right-sidebar-file-tree-error" key={sectionError}>
+            {sectionError}
+          </div>
+        ))}
+        {!rootPath ? (
+          <div className="right-sidebar-file-tree-message">Select a workspace</div>
+        ) : null}
+        {rootPath && !isLoading && !error && sectionErrors.length === 0 && !hasChangedFiles ? (
+          <div className="right-sidebar-file-tree-message">No tracked changes</div>
+        ) : null}
+        {hasChangedFiles ? (
+          <nav className="right-sidebar-diff-file-tree" aria-label="Changed files">
+            {sectionsWithFiles.map((section) => {
+              const isCollapsed = collapsedSections.has(section.kind)
+              const diffFileTree = diffFileTreesBySection.get(section.kind) ?? []
+              const diffFileGroups = groupDiffFilesByDirectory(section.files)
+
+              return (
+                <section className="right-sidebar-diff-change-section" key={section.kind}>
+                  <button
+                    type="button"
+                    className="right-sidebar-diff-change-section-header"
+                    aria-expanded={!isCollapsed}
+                    onClick={() => toggleSection(section.kind)}
+                  >
+                    {isCollapsed ? <FiChevronRight size={13} /> : <FiChevronDown size={13} />}
+                    <span>{section.label}</span>
+                    <span>{section.files.length}</span>
+                    {section.kind === 'unstaged' && section.files.length > 0 ? (
+                      <span className="right-sidebar-diff-section-actions">
+                        <button
+                          type="button"
+                          className="icon-button right-sidebar-tree-action-button"
+                          aria-label="Revert all unstaged changes"
+                          title="Revert all unstaged changes"
+                          disabled={isMutatingPath !== null}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void runPathAction(
+                              'revert',
+                              section.files.map((file) => file.path),
+                            )
+                          }}
+                        >
+                          <FiRotateCcw size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button right-sidebar-tree-action-button"
+                          aria-label="Stage all unstaged changes"
+                          title="Stage all unstaged changes"
+                          disabled={isMutatingPath !== null}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void runPathAction(
+                              'stage',
+                              section.files.map((file) => file.path),
+                            )
+                          }}
+                        >
+                          <FiPlus size={12} />
+                        </button>
+                      </span>
+                    ) : section.kind === 'staged' && section.files.length > 0 ? (
+                      <span className="right-sidebar-diff-section-actions">
+                        <button
+                          type="button"
+                          className="icon-button right-sidebar-tree-action-button"
+                          aria-label="Unstage all staged changes"
+                          title="Unstage all staged changes"
+                          disabled={isMutatingPath !== null}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void runPathAction(
+                              'unstage',
+                              section.files.map((file) => file.path),
+                            )
+                          }}
+                        >
+                          <FiMinusSquare size={12} />
+                        </button>
+                      </span>
+                    ) : null}
+                  </button>
+                  {!isCollapsed && section.files.length > 0
+                    ? viewMode === 'tree'
+                      ? renderNodes(diffFileTree, section.kind)
+                      : diffFileGroups.map((group) => (
+                          <div
+                            className="right-sidebar-diff-file-tree-directory"
+                            key={`${section.kind}:${group.directory}`}
+                          >
+                            <div
+                              className="right-sidebar-diff-file-tree-group-label"
+                              title={group.directory}
+                            >
+                              <span className="right-sidebar-diff-file-tree-group-name">
+                                <FiFolder size={13} />
+                                {group.directory}
+                              </span>
+                              <span>{group.files.length}</span>
+                            </div>
+                            {group.files.map((file) =>
+                              renderFileButton(
+                                file,
+                                file.path.split('/').pop() ?? file.path,
+                                section.kind,
+                              ),
+                            )}
+                          </div>
+                        ))
+                    : null}
+                </section>
+              )
+            })}
+          </nav>
+        ) : null}
+      </div>
+    </>
+  )
+}
+
+function WorkspaceDiffPanel({
+  rootPath,
+  branchName,
+  compareBranch,
+  isFullPane = false,
+  onOpenChangesTab,
+}: {
+  rootPath: string | null
+  branchName: string
+  compareBranch: string
+  isFullPane?: boolean
+  onOpenChangesTab?: () => void
+}) {
+  const [patch, setPatch] = useState('')
+  const [diffViewMode, setDiffViewMode] = useState<DiffViewMode>(isFullPane ? 'split' : 'unified')
+  const [compareBranchInput, setCompareBranchInput] = useState(compareBranch)
+  const [collapsedFileIds, setCollapsedFileIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [focusedFileId, setFocusedFileId] = useState<string | null>(null)
+  const fileSectionRefs = useRef(new Map<string, HTMLElement>())
+
+  useEffect(() => {
+    setCompareBranchInput(compareBranch)
+  }, [compareBranch])
+
+  const refreshDiffPatch = useCallback(() => {
+    if (!rootPath) {
+      setPatch('')
+      setError(null)
+      setIsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
+
+    window.electronAPI
+      .getWorkspaceDiffPatch({
+        workspacePath: rootPath,
+        scope: 'all',
+        compareBranch: compareBranchInput || undefined,
+      })
+      .then((response) => {
+        if (cancelled) return
+        if (response.ok) {
+          setPatch(response.value)
+          return
+        }
+        setPatch('')
+        setError(response.error.message)
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return
+        setPatch('')
+        setError(loadError instanceof Error ? loadError.message : String(loadError))
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [compareBranchInput, rootPath])
+
+  useEffect(() => refreshDiffPatch(), [refreshDiffPatch])
+
+  const deferredPatch = useDeferredValue(patch)
+  const parsedDiffResult = useParsedDiffFiles(deferredPatch, '')
+
+  const parsedDiff = useMemo((): {
+    files: ParsedDiffFile[]
+    summary: DiffSummary
+    error: string | null
+  } => {
+    return {
+      files: parsedDiffResult.files,
+      summary: summarizeParsedDiffFiles(parsedDiffResult.files),
+      error: parsedDiffResult.error,
+    }
+  }, [parsedDiffResult])
+
+  const shouldCapExpandedDiffBodies =
+    parsedDiff.files.length >= DIFF_AUTO_COLLAPSE_FILE_COUNT ||
+    deferredPatch.length >= DIFF_AUTO_COLLAPSE_PATCH_CHARS
+
+  const limitExpandedDiffBodies = useCallback(
+    (nextCollapsedFileIds: Set<string>, preferredFileId?: string): Set<string> => {
+      if (!shouldCapExpandedDiffBodies) return nextCollapsedFileIds
+
+      const expandedFileIds = parsedDiff.files
+        .map((file) => file.id)
+        .filter((id) => !nextCollapsedFileIds.has(id))
+      if (expandedFileIds.length <= DIFF_MAX_EXPANDED_FILE_BODIES) return nextCollapsedFileIds
+
+      const keptExpandedFileIds = new Set<string>()
+      if (preferredFileId && expandedFileIds.includes(preferredFileId)) {
+        keptExpandedFileIds.add(preferredFileId)
+      }
+      for (const id of expandedFileIds) {
+        if (keptExpandedFileIds.size >= DIFF_MAX_EXPANDED_FILE_BODIES) break
+        keptExpandedFileIds.add(id)
+      }
+      for (const id of expandedFileIds) {
+        if (!keptExpandedFileIds.has(id)) nextCollapsedFileIds.add(id)
+      }
+      return nextCollapsedFileIds
+    },
+    [parsedDiff.files, shouldCapExpandedDiffBodies],
+  )
+
+  const collapseAll = useCallback(() => {
+    setCollapsedFileIds(new Set(parsedDiff.files.map((file) => file.id)))
+  }, [parsedDiff.files])
+
+  const expandAll = useCallback(() => {
+    setCollapsedFileIds(limitExpandedDiffBodies(new Set()))
+  }, [limitExpandedDiffBodies])
+
+  const areAllFilesCollapsed =
+    parsedDiff.files.length > 0 && collapsedFileIds.size >= parsedDiff.files.length
+
+  useEffect(() => {
+    if (
+      parsedDiff.files.length >= DIFF_AUTO_COLLAPSE_FILE_COUNT ||
+      deferredPatch.length >= DIFF_AUTO_COLLAPSE_PATCH_CHARS
+    ) {
+      setCollapsedFileIds(new Set(parsedDiff.files.map((file) => file.id)))
+    } else {
+      setCollapsedFileIds(new Set())
+    }
+  }, [deferredPatch.length, parsedDiff.files])
+
+  const toggleAllFilesCollapsed = useCallback(() => {
+    if (areAllFilesCollapsed) {
+      expandAll()
+    } else {
+      collapseAll()
+    }
+  }, [areAllFilesCollapsed, collapseAll, expandAll])
+
+  const toggleFileCollapsed = useCallback(
+    (fileId: string) => {
+      setCollapsedFileIds((current) => {
+        const next = new Set(current)
+        if (next.has(fileId)) {
+          next.delete(fileId)
+        } else {
+          next.add(fileId)
+        }
+        return limitExpandedDiffBodies(next, fileId)
+      })
+    },
+    [limitExpandedDiffBodies],
+  )
+
+  const focusDiffFile = useCallback(
+    (fileId: string) => {
+      setFocusedFileId(fileId)
+      setCollapsedFileIds((current) => {
+        if (!current.has(fileId)) return current
+        const next = new Set(current)
+        next.delete(fileId)
+        return limitExpandedDiffBodies(next, fileId)
+      })
+      window.requestAnimationFrame(() => {
+        fileSectionRefs.current.get(fileId)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      })
+    },
+    [limitExpandedDiffBodies],
+  )
+
+  useEffect(() => {
+    function handleFocusFile(event: Event) {
+      const detail = (event as CustomEvent<{ path?: string; rootPath?: string | null }>).detail
+      if (detail?.rootPath !== rootPath) return
+      const path = detail?.path
+      if (!path) return
+      const file = parsedDiff.files.find((candidate) => candidate.path === path)
+      if (file) focusDiffFile(file.id)
+    }
+
+    window.addEventListener(DIFF_FOCUS_FILE_EVENT, handleFocusFile)
+    return () => window.removeEventListener(DIFF_FOCUS_FILE_EVENT, handleFocusFile)
+  }, [focusDiffFile, parsedDiff.files, rootPath])
+
+  const className = ['right-sidebar-diff', isFullPane ? 'right-sidebar-diff-full-pane' : null]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <div className={className}>
+      <div className="right-sidebar-file-tree-toolbar right-sidebar-diff-toolbar">
+        <div className="right-sidebar-diff-toolbar-main">
+          <DiffBranchPicker
+            rootPath={rootPath}
+            branchName={branchName}
+            compareBranch={compareBranchInput}
+            onCompareBranchChange={setCompareBranchInput}
+          />
+          <div className="right-sidebar-diff-control-row">
+            <span className="right-sidebar-diff-summary" title="Line delta">
+              {parsedDiff.summary.files} files
+              <span className="right-sidebar-diff-added">+{parsedDiff.summary.additions}</span>
+              <span className="right-sidebar-diff-deleted">-{parsedDiff.summary.deletions}</span>
+            </span>
+            <div className="right-sidebar-file-tree-actions">
+              {onOpenChangesTab ? (
+                <button
+                  type="button"
+                  className="icon-button right-sidebar-tree-action-button"
+                  aria-label="Open changes tab"
+                  title="Open changes tab"
+                  disabled={!rootPath}
+                  onClick={onOpenChangesTab}
+                >
+                  <FiMaximize2 size={12} />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="icon-button right-sidebar-tree-action-button"
+                aria-label={
+                  diffViewMode === 'unified' ? 'Show side-by-side diff' : 'Show inline diff'
+                }
+                title={diffViewMode === 'unified' ? 'Show side-by-side diff' : 'Show inline diff'}
+                disabled={parsedDiff.files.length === 0}
+                onClick={() =>
+                  setDiffViewMode((current) => (current === 'unified' ? 'split' : 'unified'))
+                }
+              >
+                <FiColumns size={12} />
+              </button>
+              <button
+                type="button"
+                className="icon-button right-sidebar-tree-action-button"
+                aria-label={areAllFilesCollapsed ? 'Expand all changes' : 'Collapse all changes'}
+                title={areAllFilesCollapsed ? 'Expand all changes' : 'Collapse all changes'}
+                disabled={parsedDiff.files.length === 0}
+                onClick={toggleAllFilesCollapsed}
+              >
+                {areAllFilesCollapsed ? <FiPlusSquare size={12} /> : <FiMinusSquare size={12} />}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {error ? <div className="right-sidebar-file-tree-error">{error}</div> : null}
+      {parsedDiff.error ? (
+        <div className="right-sidebar-file-tree-error">{parsedDiff.error}</div>
+      ) : null}
+      {!rootPath ? <div className="right-sidebar-file-tree-message">Select a workspace</div> : null}
+      {rootPath && !isLoading && !error && !parsedDiff.error && parsedDiff.files.length === 0 ? (
+        <div className="right-sidebar-file-tree-message">No tracked changes</div>
+      ) : null}
+      {parsedDiff.files.length > 0 ? (
+        <DiffPanelErrorBoundary key={`${compareBranchInput}:${deferredPatch.length}`}>
+          <div className="right-sidebar-diff-body">
+            <div className="right-sidebar-diff-view">
+              {parsedDiff.files.map(({ id, fileDiff, additions, deletions }) => {
+                const isCollapsed = collapsedFileIds.has(id)
+                const isFocused = focusedFileId === id
+                return (
+                  <section
+                    className={
+                      isFocused
+                        ? 'right-sidebar-diff-file right-sidebar-diff-file-focused'
+                        : 'right-sidebar-diff-file'
+                    }
+                    key={id}
+                    ref={(node) => {
+                      if (node) {
+                        fileSectionRefs.current.set(id, node)
+                      } else {
+                        fileSectionRefs.current.delete(id)
+                      }
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="right-sidebar-diff-file-header"
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleFileCollapsed(id)}
+                    >
+                      {isCollapsed ? <FiChevronRight size={13} /> : <FiChevronDown size={13} />}
+                      <span className="right-sidebar-diff-file-name">
+                        {getDiffFileName(fileDiff)}
+                      </span>
+                      <span className="right-sidebar-diff-file-delta">
+                        <span className="right-sidebar-diff-added">+{additions}</span>
+                        <span className="right-sidebar-diff-deleted">-{deletions}</span>
+                      </span>
+                    </button>
+                    {!isCollapsed ? (
+                      <FileDiff
+                        fileDiff={fileDiff}
+                        options={{
+                          diffStyle: diffViewMode,
+                          disableFileHeader: true,
+                          expandUnchanged: true,
+                          hunkSeparators: 'line-info-basic',
+                          lineDiffType: 'word',
+                          overflow: 'wrap',
+                          theme: { light: 'github-light-default', dark: 'github-dark-default' },
+                          themeType: 'dark',
+                          unsafeCSS: `
+                            * {
+                              user-select: text;
+                              -webkit-user-select: text;
+                            }
+                          `,
+                        }}
+                      />
+                    ) : null}
+                  </section>
+                )
+              })}
+            </div>
+          </div>
+        </DiffPanelErrorBoundary>
+      ) : null}
+    </div>
+  )
+}
+
 const PaneTile = memo(function PaneTile({
   pane,
   terminalCwd,
+  diffBranchName,
+  diffCompareBranch,
   terminalWorkspaceId,
   terminalWorktreeId,
   isActive,
@@ -931,6 +2907,8 @@ const PaneTile = memo(function PaneTile({
 }: {
   pane: Pane
   terminalCwd?: string
+  diffBranchName: string
+  diffCompareBranch: string
   terminalWorkspaceId?: string
   terminalWorktreeId?: string
   isActive: boolean
@@ -980,6 +2958,13 @@ const PaneTile = memo(function PaneTile({
           onRestartSession={onRestartSession}
           onArchiveStateChange={onArchiveStateChange}
         />
+      ) : pane.type === 'changes' ? (
+        <WorkspaceDiffPanel
+          rootPath={pane.cwd ?? terminalCwd ?? null}
+          branchName={diffBranchName}
+          compareBranch={diffCompareBranch}
+          isFullPane
+        />
       ) : (
         <div className="pane-standby" aria-hidden="true">
           <FiTerminal size={18} />
@@ -992,6 +2977,8 @@ const PaneTile = memo(function PaneTile({
 const PaneGrid = memo(function PaneGrid({
   tab,
   terminalCwd,
+  diffBranchName,
+  diffCompareBranch,
   terminalWorkspaceId,
   terminalWorktreeId,
   panesById,
@@ -1006,6 +2993,8 @@ const PaneGrid = memo(function PaneGrid({
 }: {
   tab: Tab
   terminalCwd?: string
+  diffBranchName: string
+  diffCompareBranch: string
   terminalWorkspaceId?: string
   terminalWorktreeId?: string
   panesById: Map<string, Pane>
@@ -1052,6 +3041,8 @@ const PaneGrid = memo(function PaneGrid({
         <PaneTile
           pane={pane}
           terminalCwd={terminalCwd}
+          diffBranchName={diffBranchName}
+          diffCompareBranch={diffCompareBranch}
           terminalWorkspaceId={terminalWorkspaceId}
           terminalWorktreeId={terminalWorktreeId}
           isActive={pane.id === activePaneId}
@@ -1072,6 +3063,8 @@ const PaneGrid = memo(function PaneGrid({
       onSelectPane,
       panesById,
       terminalCwd,
+      diffBranchName,
+      diffCompareBranch,
       terminalWorkspaceId,
       terminalWorktreeId,
       terminalFocusTokens,
@@ -1110,9 +3103,12 @@ export function App() {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const sidebarExpanded = useTaoStore((state) => state.sidebarExpanded)
   const sidebarWidth = useTaoStore((state) => state.sidebarWidth)
+  const rightSidebarExpanded = useTaoStore((state) => state.rightSidebarExpanded)
+  const rightSidebarWidth = useTaoStore((state) => state.rightSidebarWidth)
   const addWorkspace = useTaoStore((state) => state.addWorkspace)
   const selectWorkspaceByIndex = useTaoStore((state) => state.selectWorkspaceByIndex)
   const newTab = useTaoStore((state) => state.newTab)
+  const openChangesTab = useTaoStore((state) => state.openChangesTab)
   const closeTab = useTaoStore((state) => state.closeTab)
   const closeActiveTab = useTaoStore((state) => state.closeActiveTab)
   const selectTab = useTaoStore((state) => state.selectTab)
@@ -1129,6 +3125,9 @@ export function App() {
   const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
+  const toggleRightSidebar = useTaoStore((state) => state.toggleRightSidebar)
+  const setRightSidebarExpanded = useTaoStore((state) => state.setRightSidebarExpanded)
+  const setRightSidebarWidth = useTaoStore((state) => state.setRightSidebarWidth)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
   const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
   const removeWorktree = useTaoStore((state) => state.removeWorktree)
@@ -1136,16 +3135,43 @@ export function App() {
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
+  const [rightSidebarResizePreviewWidth, setRightSidebarResizePreviewWidth] = useState<
+    number | null
+  >(null)
+  const [rightSidebarView, setRightSidebarView] = useState<RightSidebarView>('files')
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [taodDiagnostics, setTaodDiagnostics] = useState<TaodLifecycleDiagnostics | null>(null)
+  const [taodDiagnosticsError, setTaodDiagnosticsError] = useState<string | null>(null)
+  const [daemonDiagnosticsOpen, setDaemonDiagnosticsOpen] = useState(false)
+  const [daemonRecoveryInFlight, setDaemonRecoveryInFlight] = useState(false)
+  const [daemonRecoveryError, setDaemonRecoveryError] = useState<string | null>(null)
   const activeWorkspaceKey = activeWorkspaceId
   const canCreateTerminal = activeWorkspaceKey !== null
+
+  useEffect(() => {
+    markRendererEvent('ui:app-mounted')
+  }, [])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+    markRendererEvent('ui:layout-loaded')
+  }, [layoutLoaded])
+
   const sidebarSize = useMemo(
     () =>
       normalizeSidebarWidth(
         sidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? sidebarWidth : SIDEBAR_DEFAULT_WIDTH,
       ),
     [sidebarWidth],
+  )
+  const rightSidebarSize = useMemo(
+    () =>
+      normalizeSidebarWidth(
+        rightSidebarWidth >= SIDEBAR_EXPANDED_MIN_WIDTH ? rightSidebarWidth : SIDEBAR_DEFAULT_WIDTH,
+        RIGHT_SIDEBAR_MAX_WIDTH,
+      ),
+    [rightSidebarWidth],
   )
   const sortedWorkspaces = useMemo(
     () => [...workspaces].sort((a, b) => a.order - b.order),
@@ -1161,6 +3187,10 @@ export function App() {
           ),
       ) ?? null,
     [activeWorkspaceId, sortedWorkspaces],
+  )
+  const activeDiffCompareBranch = useMemo(
+    () => activeContextCompareBranch(activeWorkspace, activeWorkspaceKey),
+    [activeWorkspace, activeWorkspaceKey],
   )
   const activeWorkspaceIndex = activeWorkspace
     ? sortedWorkspaces.findIndex((workspace) => workspace.id === activeWorkspace.id)
@@ -1204,6 +3234,22 @@ export function App() {
     [activeTabId, workspaceTabs],
   )
   const panesById = useMemo(() => new Map(panes.map((pane) => [pane.id, pane])), [panes])
+  const activePane = activePaneId ? (panesById.get(activePaneId) ?? null) : null
+  const activeTabMetadata = activeTab ? (contextMetadataById.get(activeTab.workspaceId) ?? {}) : {}
+  const isChangesPaneFocused = activePane?.type === 'changes'
+  const rightSidebarRootPath = isChangesPaneFocused
+    ? (activePane?.cwd ?? activeTabMetadata.cwd ?? null)
+    : activeWorkspace
+      ? activeContextPath(activeWorkspace, activeWorkspaceKey)
+      : null
+  const tabLabelsById = useMemo(() => {
+    const entries = tabs.map((tab): [string, string] => {
+      const firstPaneId = getFirstPaneId(tab.layout)
+      const pane = firstPaneId ? panesById.get(firstPaneId) : null
+      return [tab.id, sanitizeTerminalTitle(pane?.name ?? tab.name) ?? tab.name]
+    })
+    return new Map(entries)
+  }, [panesById, tabs])
   const archivedTabIds = useMemo(
     () => new Set(panes.filter((pane) => pane.status === 'archived').map((pane) => pane.tabId)),
     [panes],
@@ -1263,6 +3309,36 @@ export function App() {
       cancelled = true
     }
   }, [hydrateLayout])
+
+  useEffect(() => {
+    if (!layoutLoaded) return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const refreshTaodDiagnostics = async () => {
+      try {
+        const diagnostics = await window.electronAPI.getTaodDiagnostics()
+        if (cancelled) return
+        setTaodDiagnostics(diagnostics)
+        setTaodDiagnosticsError(null)
+        if (diagnostics?.recoveryAction === 'none') setDaemonRecoveryError(null)
+      } catch (error) {
+        if (cancelled) return
+        setTaodDiagnostics(null)
+        setTaodDiagnosticsError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (!cancelled) timer = setTimeout(refreshTaodDiagnostics, TAOD_DIAGNOSTICS_POLL_MS)
+      }
+    }
+
+    void refreshTaodDiagnostics()
+
+    return () => {
+      cancelled = true
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [layoutLoaded])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -1355,14 +3431,15 @@ export function App() {
 
   useEffect(() => {
     if (!layoutLoaded) return
-    const nextPaneIds = new Set(panes.map((pane) => pane.id))
+    const terminalPanes = panes.filter((pane) => pane.type === 'terminal')
+    const nextPaneIds = new Set(terminalPanes.map((pane) => pane.id))
     for (const [paneId, sessionId] of previousPaneSessionsRef.current) {
       if (!nextPaneIds.has(paneId)) {
         void window.electronAPI.killSession(sessionId)
       }
     }
     previousPaneSessionsRef.current = new Map(
-      panes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id]),
+      terminalPanes.map((pane) => [pane.id, pane.lastSessionId ?? pane.id]),
     )
   }, [layoutLoaded, panes])
 
@@ -1391,6 +3468,9 @@ export function App() {
       switch (command.type) {
         case 'toggle-sidebar':
           toggleSidebar()
+          break
+        case 'toggle-right-sidebar':
+          toggleRightSidebar()
           break
         case 'new-tab':
           setIsSettingsOpen(false)
@@ -1437,6 +3517,8 @@ export function App() {
     selectPaneByDirection,
     selectTabByIndex,
     selectWorkspaceByIndex,
+    setRightSidebarExpanded,
+    toggleRightSidebar,
     splitActivePane,
     toggleSidebar,
   ])
@@ -1503,12 +3585,52 @@ export function App() {
   const handleSidebarResizePreview = useCallback((nextWidth: number | null) => {
     setSidebarResizePreviewWidth(nextWidth)
   }, [])
+  const handleResizeRightSidebar = useCallback(
+    (nextWidth: number) => {
+      setRightSidebarWidth(normalizeSidebarWidth(nextWidth, RIGHT_SIDEBAR_MAX_WIDTH))
+      setRightSidebarExpanded(true)
+      setRightSidebarResizePreviewWidth(null)
+    },
+    [setRightSidebarExpanded, setRightSidebarWidth],
+  )
+  const handleRightSidebarResizePreview = useCallback((nextWidth: number | null) => {
+    setRightSidebarResizePreviewWidth(nextWidth)
+  }, [])
+  const handleOpenChangesTab = useCallback(() => {
+    openChangesTab(activeWorkspaceKey ?? undefined)
+  }, [activeWorkspaceKey, openChangesTab])
   const shellStyle = {
     '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
   } as CSSProperties & Record<'--tao-sidebar-width', string>
   const shellClassName = ['tao-shell', sidebarExpanded ? null : 'tao-shell-sidebar-hidden']
     .filter(Boolean)
     .join(' ')
+  const daemonNotice = useMemo(
+    () => daemonRecoveryNotice(taodDiagnostics, taodDiagnosticsError),
+    [taodDiagnostics, taodDiagnosticsError],
+  )
+
+  useEffect(() => {
+    if (!daemonNotice) setDaemonDiagnosticsOpen(false)
+  }, [daemonNotice])
+
+  const handleToggleDaemonDiagnostics = useCallback(() => {
+    setDaemonDiagnosticsOpen((open) => !open)
+  }, [])
+
+  const handleApplyDaemonRecovery = useCallback(async (action: TaodLifecycleRecoveryAction) => {
+    setDaemonRecoveryInFlight(true)
+    setDaemonRecoveryError(null)
+    try {
+      const diagnostics = await window.electronAPI.recoverTaod(action)
+      setTaodDiagnostics(diagnostics)
+      setTaodDiagnosticsError(null)
+    } catch (error) {
+      setDaemonRecoveryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDaemonRecoveryInFlight(false)
+    }
+  }, [])
 
   if (!layoutLoaded) {
     return <div className="tao-shell" />
@@ -1539,6 +3661,16 @@ export function App() {
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
           />
           <div className="sidebar-top-actions">
+            <DaemonRecoveryIndicator
+              notice={daemonNotice}
+              diagnostics={taodDiagnostics}
+              diagnosticsError={taodDiagnosticsError}
+              recoveryError={daemonRecoveryError}
+              isRecovering={daemonRecoveryInFlight}
+              isOpen={daemonDiagnosticsOpen}
+              onToggle={handleToggleDaemonDiagnostics}
+              onRecover={handleApplyDaemonRecovery}
+            />
             <button
               type="button"
               className="icon-button add-workspace-button"
@@ -1547,6 +3679,15 @@ export function App() {
               onClick={handleAddWorkspace}
             >
               <FiFolderPlus size={15} />
+            </button>
+            <button
+              type="button"
+              className="icon-button sidebar-settings-button"
+              aria-label="Open settings"
+              title="Settings"
+              onClick={() => setIsSettingsOpen(true)}
+            >
+              <FiSettings size={15} />
             </button>
           </div>
           <div className="sidebar-content">
@@ -1557,22 +3698,10 @@ export function App() {
                     key={workspace.id}
                     workspace={workspace}
                     onReorderWorkspace={reorderWorkspace}
-                    onExitSettings={() => setIsSettingsOpen(false)}
                   />
                 ))}
               </div>
             ) : null}
-            <div className="sidebar-footer">
-              <button
-                type="button"
-                className="icon-button sidebar-settings-button"
-                aria-label="Open settings"
-                title="Settings"
-                onClick={() => setIsSettingsOpen(true)}
-              >
-                <FiSettings size={15} />
-              </button>
-            </div>
           </div>
         </ResizeShell>
       ) : null}
@@ -1585,14 +3714,10 @@ export function App() {
             isSidebarVisible={sidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
             canGoNextWorkspace={canGoNextWorkspace}
+            tabLabelsById={tabLabelsById}
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onNewTab={() => {
-              setIsSettingsOpen(false)
-              newTab(activeWorkspaceKey ?? undefined)
-            }}
-            canCreateTabs={canCreateTerminal}
             onSelectTab={(tabId) => {
               setIsSettingsOpen(false)
               selectTab(tabId)
@@ -1601,10 +3726,25 @@ export function App() {
             onReorderTab={reorderTab}
             archivedTabIds={archivedTabIds}
           />
+          {!sidebarExpanded && daemonNotice ? (
+            <div className="titlebar-status-actions">
+              <DaemonRecoveryIndicator
+                notice={daemonNotice}
+                diagnostics={taodDiagnostics}
+                diagnosticsError={taodDiagnosticsError}
+                recoveryError={daemonRecoveryError}
+                isRecovering={daemonRecoveryInFlight}
+                isOpen={daemonDiagnosticsOpen}
+                onToggle={handleToggleDaemonDiagnostics}
+                onRecover={handleApplyDaemonRecovery}
+              />
+            </div>
+          ) : null}
           <div className="pane-grid">
             {mountedTabs.map((tab) => {
               const isTabActive = tab.id === activeTab?.id
               const metadata = contextMetadataById.get(tab.workspaceId) ?? {}
+              const tabWorkspace = workspaceForContext(workspaces, tab.workspaceId)
               return (
                 <div
                   className={
@@ -1616,6 +3756,8 @@ export function App() {
                   <PaneGrid
                     tab={tab}
                     terminalCwd={metadata.cwd}
+                    diffBranchName={activeContextBranchName(tabWorkspace, tab.workspaceId)}
+                    diffCompareBranch={activeContextCompareBranch(tabWorkspace, tab.workspaceId)}
                     terminalWorkspaceId={metadata.workspaceId}
                     terminalWorktreeId={metadata.worktreeId}
                     panesById={panesById}
@@ -1639,7 +3781,10 @@ export function App() {
                       type="button"
                       className="empty-new-tab-button"
                       aria-label="New tab"
-                      onClick={() => newTab(activeWorkspaceKey ?? undefined)}
+                      onClick={() => {
+                        setIsSettingsOpen(false)
+                        newTab(activeWorkspaceKey ?? undefined)
+                      }}
                     >
                       <FiPlus size={15} />
                     </button>
@@ -1650,6 +3795,34 @@ export function App() {
           </div>
         </main>
       </section>
+      {rightSidebarExpanded ? (
+        <ResizeShell
+          width={rightSidebarResizePreviewWidth ?? rightSidebarSize}
+          side="right"
+          className="tao-right-sidebar"
+          ariaLabel="Workspace files"
+          onResize={handleResizeRightSidebar}
+          onResizePreview={handleRightSidebarResizePreview}
+        >
+          <RightSidebar
+            rootPath={rightSidebarRootPath}
+            compareBranch={activeDiffCompareBranch}
+            branchName={activeContextBranchName(activeWorkspace, activeWorkspaceKey)}
+            view={rightSidebarView}
+            onSelectView={setRightSidebarView}
+            onOpenChangesTab={handleOpenChangesTab}
+          />
+        </ResizeShell>
+      ) : null}
+      <button
+        type="button"
+        className="icon-button titlebar-button right-sidebar-toggle-button"
+        aria-label={rightSidebarExpanded ? 'Hide right sidebar' : 'Show right sidebar'}
+        title={rightSidebarExpanded ? 'Hide right sidebar' : 'Show right sidebar'}
+        onClick={() => setRightSidebarExpanded(!rightSidebarExpanded)}
+      >
+        <TbLayoutSidebarRight size={16} />
+      </button>
     </div>
   )
 }

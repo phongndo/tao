@@ -173,7 +173,6 @@ pub fn Context(comptime Daemon: type) type {
                 daemon.unlock();
                 return false;
             };
-            item.transitionTo(.exited);
             if (item.event_log_path) |path| {
                 _ = event_log.appendExit(daemon.allocator, path, &item.last_seq, status.exit_code, status.signal) catch |err| {
                     std.log.warn("failed to append child exit frame for {s}: {t}", .{ item.id, err });
@@ -182,6 +181,7 @@ pub fn Context(comptime Daemon: type) type {
             child.close();
             item.pty_child = null;
             item.reader_started = false;
+            item.transitionTo(.exited);
             try daemon.broadcastExitFrameLocked(item, item.last_seq, status.exit_code, status.signal);
             daemon.recordTerminalEndedLocked(item, status.exit_code, status.signal);
             item.assertInvariants();
@@ -217,9 +217,9 @@ pub fn Context(comptime Daemon: type) type {
                 return true;
             }
             item.assertInvariants();
-            item.transitionTo(.exited);
-            releasePtyChildForBackgroundReap(daemon, item, "synthetic exit");
             item.reader_started = false;
+            releasePtyChildForBackgroundReap(daemon, item, "synthetic exit");
+            item.transitionTo(.exited);
             if (item.event_log_path) |path| {
                 _ = event_log.appendExit(daemon.allocator, path, &item.last_seq, exit_code, signal_value) catch |err| {
                     std.log.warn("failed to append synthetic exit frame for {s}: {t}", .{ item.id, err });

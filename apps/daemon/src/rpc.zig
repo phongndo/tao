@@ -17,6 +17,17 @@ pub const RequestType = enum {
     workspace_remove,
     workspace_refresh,
     workspace_reorder,
+    workspace_branch,
+    workspace_branches,
+    workspace_git_worktrees,
+    workspace_status,
+    workspace_file_tree,
+    workspace_diff,
+    workspace_stage_path,
+    workspace_unstage_path,
+    workspace_revert_path,
+    workspace_ports,
+    workspace_pull_request,
     worktree_list,
     worktree_create,
     worktree_remove,
@@ -54,6 +65,42 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "workspace.reorder")) return .workspace_reorder;
         if (std.mem.eql(u8, text, "workspace:reorder")) return .workspace_reorder;
         if (std.mem.eql(u8, text, "workspace-reorder")) return .workspace_reorder;
+        if (std.mem.eql(u8, text, "workspace.branch")) return .workspace_branch;
+        if (std.mem.eql(u8, text, "workspace:branch")) return .workspace_branch;
+        if (std.mem.eql(u8, text, "workspace-branch")) return .workspace_branch;
+        if (std.mem.eql(u8, text, "workspace.branches")) return .workspace_branches;
+        if (std.mem.eql(u8, text, "workspace:branches")) return .workspace_branches;
+        if (std.mem.eql(u8, text, "workspace-branches")) return .workspace_branches;
+        if (std.mem.eql(u8, text, "workspace.gitWorktrees")) return .workspace_git_worktrees;
+        if (std.mem.eql(u8, text, "workspace:gitWorktrees")) return .workspace_git_worktrees;
+        if (std.mem.eql(u8, text, "workspace.git-worktrees")) return .workspace_git_worktrees;
+        if (std.mem.eql(u8, text, "workspace.status")) return .workspace_status;
+        if (std.mem.eql(u8, text, "workspace:status")) return .workspace_status;
+        if (std.mem.eql(u8, text, "workspace-status")) return .workspace_status;
+        if (std.mem.eql(u8, text, "workspace.fileTree")) return .workspace_file_tree;
+        if (std.mem.eql(u8, text, "workspace:fileTree")) return .workspace_file_tree;
+        if (std.mem.eql(u8, text, "workspace.file-tree")) return .workspace_file_tree;
+        if (std.mem.eql(u8, text, "workspace.files")) return .workspace_file_tree;
+        if (std.mem.eql(u8, text, "workspace-files")) return .workspace_file_tree;
+        if (std.mem.eql(u8, text, "workspace.diff")) return .workspace_diff;
+        if (std.mem.eql(u8, text, "workspace:diff")) return .workspace_diff;
+        if (std.mem.eql(u8, text, "workspace-diff")) return .workspace_diff;
+        if (std.mem.eql(u8, text, "workspace.stagePath")) return .workspace_stage_path;
+        if (std.mem.eql(u8, text, "workspace:stagePath")) return .workspace_stage_path;
+        if (std.mem.eql(u8, text, "workspace.stage-path")) return .workspace_stage_path;
+        if (std.mem.eql(u8, text, "workspace.unstagePath")) return .workspace_unstage_path;
+        if (std.mem.eql(u8, text, "workspace:unstagePath")) return .workspace_unstage_path;
+        if (std.mem.eql(u8, text, "workspace.unstage-path")) return .workspace_unstage_path;
+        if (std.mem.eql(u8, text, "workspace.revertPath")) return .workspace_revert_path;
+        if (std.mem.eql(u8, text, "workspace:revertPath")) return .workspace_revert_path;
+        if (std.mem.eql(u8, text, "workspace.revert-path")) return .workspace_revert_path;
+        if (std.mem.eql(u8, text, "workspace.ports")) return .workspace_ports;
+        if (std.mem.eql(u8, text, "workspace:ports")) return .workspace_ports;
+        if (std.mem.eql(u8, text, "workspace-ports")) return .workspace_ports;
+        if (std.mem.eql(u8, text, "workspace.pullRequest")) return .workspace_pull_request;
+        if (std.mem.eql(u8, text, "workspace:pullRequest")) return .workspace_pull_request;
+        if (std.mem.eql(u8, text, "workspace.pull-request")) return .workspace_pull_request;
+        if (std.mem.eql(u8, text, "workspace-pr")) return .workspace_pull_request;
         if (std.mem.eql(u8, text, "worktree.list")) return .worktree_list;
         if (std.mem.eql(u8, text, "worktree:list")) return .worktree_list;
         if (std.mem.eql(u8, text, "worktree-list")) return .worktree_list;
@@ -79,6 +126,8 @@ pub const RequestType = enum {
 
 pub const ControlRequestJson = struct {
     id: []const u8 = "",
+    trace_id: ?[]const u8 = null,
+    traceId: ?[]const u8 = null,
     method: ?[]const u8 = null,
     type: ?[]const u8 = null,
     session_id: ?[]const u8 = null,
@@ -92,6 +141,9 @@ pub const ControlRequestJson = struct {
     root_path: ?[]const u8 = null,
     rootPath: ?[]const u8 = null,
     path: ?[]const u8 = null,
+    paths: ?[][]const u8 = null,
+    git_paths: ?[][]const u8 = null,
+    gitPaths: ?[][]const u8 = null,
     name: ?[]const u8 = null,
     title: ?[]const u8 = null,
     folder_name: ?[]const u8 = null,
@@ -101,8 +153,11 @@ pub const ControlRequestJson = struct {
     baseBranch: ?[]const u8 = null,
     target_branch: ?[]const u8 = null,
     targetBranch: ?[]const u8 = null,
+    compare_branch: ?[]const u8 = null,
+    compareBranch: ?[]const u8 = null,
     start_point: ?[]const u8 = null,
     startPoint: ?[]const u8 = null,
+    scope: ?[]const u8 = null,
     order_index: ?i64 = null,
     orderIndex: ?i64 = null,
     force: ?bool = null,
@@ -134,6 +189,10 @@ pub const ControlRequestJson = struct {
         return if (self.id.len == 0) null else self.id;
     }
 
+    pub fn requestTraceId(self: ControlRequestJson) ?[]const u8 {
+        return self.trace_id orelse self.traceId orelse self.requestId();
+    }
+
     pub fn requestSessionId(self: ControlRequestJson) ?[]const u8 {
         return self.session_id orelse self.sessionId;
     }
@@ -154,6 +213,10 @@ pub const ControlRequestJson = struct {
         return self.root_path orelse self.rootPath orelse self.path;
     }
 
+    pub fn requestGitPaths(self: ControlRequestJson) ?[][]const u8 {
+        return self.paths orelse self.git_paths orelse self.gitPaths;
+    }
+
     pub fn requestFolderName(self: ControlRequestJson) ?[]const u8 {
         return self.folder_name orelse self.folderName;
     }
@@ -164,6 +227,14 @@ pub const ControlRequestJson = struct {
 
     pub fn requestTargetBranch(self: ControlRequestJson) ?[]const u8 {
         return self.target_branch orelse self.targetBranch;
+    }
+
+    pub fn requestCompareBranch(self: ControlRequestJson) ?[]const u8 {
+        return self.compare_branch orelse self.compareBranch;
+    }
+
+    pub fn requestScope(self: ControlRequestJson) ?[]const u8 {
+        return self.scope;
     }
 
     pub fn requestStartPoint(self: ControlRequestJson) ?[]const u8 {
@@ -247,6 +318,9 @@ pub const Response = union(ResponseTag) {
 pub const ControlResponse = struct {
     id: ?[]const u8 = null,
     ok: bool,
+    protocol_version: ?u16 = null,
+    daemon_version: ?[]const u8 = null,
+    capabilities: ?[]const []const u8 = null,
     session_id: ?[]const u8 = null,
     stream_id: ?[]const u8 = null,
     pid: ?u32 = null,
@@ -262,8 +336,44 @@ pub const ControlResponse = struct {
     removed_bytes: ?u64 = null,
     persistence_enabled: ?bool = null,
     persist_input: ?bool = null,
+    stream_diagnostics: ?StreamDiagnostics = null,
     error_code: ?[]const u8 = null,
     error_message: ?[]const u8 = null,
+};
+
+pub const StreamDiagnostics = struct {
+    active_subscribers: usize = 0,
+    pending_output_sessions: usize = 0,
+    pending_output_frames: usize = 0,
+    pending_output_bytes: usize = 0,
+    input_frames_total: u64 = 0,
+    input_bytes_total: u64 = 0,
+    output_frames_total: u64 = 0,
+    output_bytes_total: u64 = 0,
+    slow_subscriber_drops_total: u64 = 0,
+    pending_output_dropped_frames_total: u64 = 0,
+    pending_output_dropped_bytes_total: u64 = 0,
+    pending_output_truncated_bytes_total: u64 = 0,
+};
+
+pub const ControlDiagnostics = struct {
+    request_count: u64 = 0,
+    failure_count: u64 = 0,
+    last_request_type: ?[]const u8 = null,
+    last_trace_id: ?[]const u8 = null,
+    last_duration_ms: ?u64 = null,
+    last_ok: ?bool = null,
+    last_recorded_at_ms: ?u64 = null,
+};
+
+pub const control_protocol_version: u16 = 1;
+pub const daemon_version: []const u8 = "1.0.0";
+pub const control_capabilities = [_][]const u8{
+    "sessions-v1",
+    "stream-frames-v1",
+    "workspaces-v1",
+    "worktrees-v1",
+    "persistence-v1",
 };
 
 pub fn responseJsonAlloc(allocator: std.mem.Allocator, response: ControlResponse) ![]u8 {
@@ -271,6 +381,29 @@ pub fn responseJsonAlloc(allocator: std.mem.Allocator, response: ControlResponse
     errdefer out.deinit();
 
     try out.writer.print("{f}\n", .{std.json.fmt(response, .{})});
+    return out.toOwnedSlice();
+}
+
+pub fn responseJsonWithTraceAlloc(allocator: std.mem.Allocator, response: []const u8, trace_id: ?[]const u8) ![]u8 {
+    const trace = trace_id orelse return allocator.dupe(u8, response);
+    const trimmed = std.mem.trimRight(u8, response, " \n\r\t");
+    if (trimmed.len == 0 or trimmed[trimmed.len - 1] != '}') return allocator.dupe(u8, response);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll(trimmed[0 .. trimmed.len - 1]);
+    try out.writer.print(",\"trace_id\":{f}}}\n", .{std.json.fmt(trace, .{})});
+    return out.toOwnedSlice();
+}
+
+pub fn responseJsonWithControlDiagnosticsAlloc(allocator: std.mem.Allocator, response: []const u8, diagnostics: ControlDiagnostics) ![]u8 {
+    const trimmed = std.mem.trimRight(u8, response, " \n\r\t");
+    if (trimmed.len == 0 or trimmed[trimmed.len - 1] != '}') return allocator.dupe(u8, response);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll(trimmed[0 .. trimmed.len - 1]);
+    try out.writer.print(",\"control_diagnostics\":{f}}}\n", .{std.json.fmt(diagnostics, .{})});
     return out.toOwnedSlice();
 }
 
@@ -462,6 +595,16 @@ test "request type decoding is stable" {
     try std.testing.expectEqual(RequestType.clear_history, RequestType.fromText("clearHistory"));
     try std.testing.expectEqual(RequestType.cleanup, RequestType.fromText("cleanup"));
     try std.testing.expectEqual(RequestType.configure_persistence, RequestType.fromText("configure-persistence"));
+    try std.testing.expectEqual(RequestType.workspace_branch, RequestType.fromText("workspace.branch"));
+    try std.testing.expectEqual(RequestType.workspace_git_worktrees, RequestType.fromText("workspace.gitWorktrees"));
+    try std.testing.expectEqual(RequestType.workspace_status, RequestType.fromText("workspace.status"));
+    try std.testing.expectEqual(RequestType.workspace_file_tree, RequestType.fromText("workspace.fileTree"));
+    try std.testing.expectEqual(RequestType.workspace_diff, RequestType.fromText("workspace.diff"));
+    try std.testing.expectEqual(RequestType.workspace_stage_path, RequestType.fromText("workspace.stagePath"));
+    try std.testing.expectEqual(RequestType.workspace_unstage_path, RequestType.fromText("workspace.unstagePath"));
+    try std.testing.expectEqual(RequestType.workspace_revert_path, RequestType.fromText("workspace.revertPath"));
+    try std.testing.expectEqual(RequestType.workspace_ports, RequestType.fromText("workspace.ports"));
+    try std.testing.expectEqual(RequestType.workspace_pull_request, RequestType.fromText("workspace.pullRequest"));
     try std.testing.expectEqual(RequestType.ping, RequestType.fromText("ping"));
     try std.testing.expectEqual(RequestType.unknown, RequestType.fromText("other"));
 }
@@ -490,11 +633,13 @@ test "control request JSON decodes create messages" {
 
 test "control request JSON accepts protocol type and camelCase identifiers" {
     var parsed = try std.json.parseFromSlice(ControlRequestJson, std.testing.allocator,
-        \\{"id":"1","type":"create","sessionId":"s1","terminalId":"t1"}
+        \\{"id":"1","traceId":"trace-1","type":"create","sessionId":"s1","terminalId":"t1"}
     , .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
     try std.testing.expectEqual(RequestType.create, parsed.value.requestType());
+    try std.testing.expectEqualStrings("1", parsed.value.requestId().?);
+    try std.testing.expectEqualStrings("trace-1", parsed.value.requestTraceId().?);
     try std.testing.expectEqualStrings("s1", parsed.value.requestSessionId().?);
     try std.testing.expectEqualStrings("t1", parsed.value.requestTerminalId().?);
 }
@@ -508,6 +653,16 @@ test "control request JSON deterministic shape sweep" {
         .{ .json = "{\"method\":\"resize\",\"session_id\":\"s\",\"cols\":1,\"rows\":1}", .request_type = .resize },
         .{ .json = "{\"type\":\"clearHistory\",\"sessionIds\":[\"s\"]}", .request_type = .clear_history },
         .{ .json = "{\"type\":\"configurePersistence\",\"enabled\":true,\"persistInput\":false}", .request_type = .configure_persistence },
+        .{ .json = "{\"type\":\"workspace.status\",\"rootPath\":\"/tmp/repo\"}", .request_type = .workspace_status },
+        .{ .json = "{\"type\":\"workspace.branch\",\"rootPath\":\"/tmp/repo\"}", .request_type = .workspace_branch },
+        .{ .json = "{\"type\":\"workspace.gitWorktrees\",\"rootPath\":\"/tmp/repo\"}", .request_type = .workspace_git_worktrees },
+        .{ .json = "{\"type\":\"workspace.fileTree\",\"rootPath\":\"/tmp/repo\"}", .request_type = .workspace_file_tree },
+        .{ .json = "{\"type\":\"workspace.diff\",\"rootPath\":\"/tmp/repo\",\"scope\":\"staged\"}", .request_type = .workspace_diff },
+        .{ .json = "{\"type\":\"workspace.stagePath\",\"rootPath\":\"/tmp/repo\",\"paths\":[\"a.txt\"]}", .request_type = .workspace_stage_path },
+        .{ .json = "{\"type\":\"workspace.unstagePath\",\"rootPath\":\"/tmp/repo\",\"paths\":[\"a.txt\"]}", .request_type = .workspace_unstage_path },
+        .{ .json = "{\"type\":\"workspace.revertPath\",\"rootPath\":\"/tmp/repo\",\"paths\":[\"a.txt\"]}", .request_type = .workspace_revert_path },
+        .{ .json = "{\"type\":\"workspace.ports\",\"rootPath\":\"/tmp/repo\"}", .request_type = .workspace_ports },
+        .{ .json = "{\"type\":\"workspace.pullRequest\",\"rootPath\":\"/tmp/repo\"}", .request_type = .workspace_pull_request },
         .{ .json = "{\"method\":\"unknown\"}", .request_type = .unknown },
     };
 
@@ -524,6 +679,9 @@ test "control response formats as newline-delimited JSON" {
     const json = try responseJsonAlloc(std.testing.allocator, .{
         .id = "1",
         .ok = true,
+        .protocol_version = control_protocol_version,
+        .daemon_version = daemon_version,
+        .capabilities = control_capabilities[0..],
         .session_id = "s1",
         .status = "live",
         .cols = 80,
@@ -534,7 +692,275 @@ test "control response formats as newline-delimited JSON" {
 
     try std.testing.expect(std.mem.endsWith(u8, json, "\n"));
     try std.testing.expect(std.mem.indexOf(u8, json, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"protocol_version\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"capabilities\":[\"sessions-v1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"session_id\":\"s1\"") != null);
+}
+
+test "control response trace wrapper preserves one-line JSON" {
+    const json = try responseJsonAlloc(std.testing.allocator, .{
+        .id = "1",
+        .ok = true,
+    });
+    defer std.testing.allocator.free(json);
+
+    const traced = try responseJsonWithTraceAlloc(std.testing.allocator, json, "trace:\"1\"");
+    defer std.testing.allocator.free(traced);
+
+    try std.testing.expect(std.mem.endsWith(u8, traced, "\n"));
+    try std.testing.expect(std.mem.indexOf(u8, traced, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, traced, "\"trace_id\":\"trace:\\\"1\\\"\"") != null);
+}
+
+fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    const path = try std.fmt.allocPrint(
+        allocator,
+        "../../packages/shared/fixtures/taod-protocol/{s}",
+        .{name},
+    );
+    defer allocator.free(path);
+    return std.fs.cwd().readFileAlloc(allocator, path, 4096);
+}
+
+const ProtocolSpecFixture = struct {
+    name: []const u8,
+    version: u16,
+    control: struct {
+        protocolVersion: u16,
+        daemonVersion: []const u8,
+        capabilities: []const []const u8,
+        requestFixtures: []const []const u8,
+        responseFixtures: []const []const u8,
+    },
+    stream: struct {
+        magic: u32,
+        version: u16,
+        sessionIdSize: usize,
+        headerSize: usize,
+        maxPayloadBytes: u32,
+        frameKinds: []const struct {
+            name: []const u8,
+            value: u16,
+        },
+        fixtures: []const []const u8,
+        corruptFixtures: []const []const u8,
+    },
+};
+
+fn expectStringListEqual(expected: []const []const u8, actual: []const []const u8) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |expected_item, actual_item| {
+        try std.testing.expectEqualStrings(expected_item, actual_item);
+    }
+}
+
+test "protocol spec matches Zig constants and fixture files" {
+    const spec_json = try readProtocolFixtureAlloc(std.testing.allocator, "spec.json");
+    defer std.testing.allocator.free(spec_json);
+
+    var parsed = try std.json.parseFromSlice(ProtocolSpecFixture, std.testing.allocator, spec_json, .{});
+    defer parsed.deinit();
+    const spec = parsed.value;
+
+    try std.testing.expectEqual(@as(u16, 1), spec.version);
+    try std.testing.expectEqual(control_protocol_version, spec.control.protocolVersion);
+    try std.testing.expectEqualStrings(daemon_version, spec.control.daemonVersion);
+    try expectStringListEqual(control_capabilities[0..], spec.control.capabilities);
+    try std.testing.expectEqual(stream_magic, spec.stream.magic);
+    try std.testing.expectEqual(stream_version, spec.stream.version);
+    try std.testing.expectEqual(stream_session_id_size, spec.stream.sessionIdSize);
+    try std.testing.expectEqual(stream_header_size, spec.stream.headerSize);
+    try std.testing.expectEqual(max_stream_payload_bytes, spec.stream.maxPayloadBytes);
+
+    const expected_kinds = [_]struct {
+        name: []const u8,
+        value: u16,
+    }{
+        .{ .name = "output", .value = @intFromEnum(StreamKind.output) },
+        .{ .name = "input", .value = @intFromEnum(StreamKind.input) },
+        .{ .name = "resize", .value = @intFromEnum(StreamKind.resize) },
+        .{ .name = "snapshot", .value = @intFromEnum(StreamKind.snapshot) },
+        .{ .name = "exit", .value = @intFromEnum(StreamKind.exit) },
+        .{ .name = "agent", .value = @intFromEnum(StreamKind.agent) },
+    };
+    try std.testing.expectEqual(expected_kinds.len, spec.stream.frameKinds.len);
+    for (expected_kinds, spec.stream.frameKinds) |expected, actual| {
+        try std.testing.expectEqualStrings(expected.name, actual.name);
+        try std.testing.expectEqual(expected.value, actual.value);
+    }
+
+    for (spec.control.requestFixtures) |fixture| {
+        const bytes = try readProtocolFixtureAlloc(std.testing.allocator, fixture);
+        defer std.testing.allocator.free(bytes);
+        try std.testing.expect(bytes.len > 0);
+    }
+    for (spec.control.responseFixtures) |fixture| {
+        const bytes = try readProtocolFixtureAlloc(std.testing.allocator, fixture);
+        defer std.testing.allocator.free(bytes);
+        try std.testing.expect(bytes.len > 0);
+    }
+    for (spec.stream.fixtures) |fixture| {
+        const bytes = try readProtocolFixtureAlloc(std.testing.allocator, fixture);
+        defer std.testing.allocator.free(bytes);
+        try std.testing.expect(bytes.len > 0);
+    }
+    for (spec.stream.corruptFixtures) |fixture| {
+        const bytes = try readProtocolFixtureAlloc(std.testing.allocator, fixture);
+        defer std.testing.allocator.free(bytes);
+        try std.testing.expect(bytes.len > 0);
+    }
+}
+
+test "control ping response matches shared golden fixture" {
+    const base_json = try responseJsonAlloc(std.testing.allocator, .{
+        .id = "ping-1",
+        .ok = true,
+        .protocol_version = control_protocol_version,
+        .daemon_version = daemon_version,
+        .capabilities = control_capabilities[0..],
+        .status = "ok",
+        .stream_diagnostics = .{},
+    });
+    defer std.testing.allocator.free(base_json);
+
+    const json = try responseJsonWithControlDiagnosticsAlloc(std.testing.allocator, base_json, .{});
+    defer std.testing.allocator.free(json);
+
+    const golden = try readProtocolFixtureAlloc(std.testing.allocator, "control-ping-response.ndjson");
+    defer std.testing.allocator.free(golden);
+
+    try std.testing.expectEqualStrings(golden, json);
+}
+
+test "control attach and error responses match shared golden fixtures" {
+    const attach_json = try responseJsonAlloc(std.testing.allocator, .{
+        .id = "attach-1",
+        .ok = true,
+        .session_id = "session-1",
+        .stream_id = "session-1",
+        .pid = 123,
+        .status = "live",
+        .cwd = "/tmp/tao",
+        .cols = 80,
+        .rows = 24,
+        .last_seq = 4,
+        .attach_kind = "live",
+    });
+    defer std.testing.allocator.free(attach_json);
+    const attach_golden = try readProtocolFixtureAlloc(std.testing.allocator, "control-attach-response.ndjson");
+    defer std.testing.allocator.free(attach_golden);
+    try std.testing.expectEqualStrings(attach_golden, attach_json);
+
+    const error_json = try responseJsonAlloc(std.testing.allocator, .{
+        .id = "err-1",
+        .ok = false,
+        .error_code = "session_not_found",
+        .error_message = "session not found",
+    });
+    defer std.testing.allocator.free(error_json);
+    const error_golden = try readProtocolFixtureAlloc(std.testing.allocator, "control-error-response.ndjson");
+    defer std.testing.allocator.free(error_golden);
+    try std.testing.expectEqualStrings(error_golden, error_json);
+}
+
+test "maintenance and persistence control responses match shared golden fixtures" {
+    const cases = [_]struct {
+        fixture: []const u8,
+        response: ControlResponse,
+    }{
+        .{
+            .fixture = "control-clear-history-response.ndjson",
+            .response = .{
+                .id = "clear-history-fixture",
+                .ok = true,
+                .removed_sessions = 1,
+                .removed_bytes = 2048,
+            },
+        },
+        .{
+            .fixture = "control-cleanup-response.ndjson",
+            .response = .{
+                .id = "cleanup-fixture",
+                .ok = true,
+                .removed_sessions = 2,
+                .removed_bytes = 4096,
+            },
+        },
+        .{
+            .fixture = "control-configure-persistence-response.ndjson",
+            .response = .{
+                .id = "configure-persistence-fixture",
+                .ok = true,
+                .persistence_enabled = true,
+                .persist_input = false,
+            },
+        },
+        .{
+            .fixture = "control-workspace-remove-response.ndjson",
+            .response = .{
+                .id = "workspace-remove-fixture",
+                .ok = true,
+            },
+        },
+        .{
+            .fixture = "control-worktree-remove-response.ndjson",
+            .response = .{
+                .id = "worktree-remove-fixture",
+                .ok = true,
+            },
+        },
+    };
+
+    for (cases) |case| {
+        const json = try responseJsonAlloc(std.testing.allocator, case.response);
+        defer std.testing.allocator.free(json);
+        const golden = try readProtocolFixtureAlloc(std.testing.allocator, case.fixture);
+        defer std.testing.allocator.free(golden);
+        try std.testing.expectEqualStrings(golden, json);
+    }
+}
+
+test "workspace control request fixtures decode to stable request types" {
+    const cases = [_]struct {
+        fixture: []const u8,
+        request_type: RequestType,
+    }{
+        .{ .fixture = "control-workspace-branches-request.ndjson", .request_type = .workspace_branches },
+        .{ .fixture = "control-workspace-branch-request.ndjson", .request_type = .workspace_branch },
+        .{ .fixture = "control-workspace-git-worktrees-request.ndjson", .request_type = .workspace_git_worktrees },
+        .{ .fixture = "control-workspace-status-request.ndjson", .request_type = .workspace_status },
+        .{ .fixture = "control-workspace-file-tree-request.ndjson", .request_type = .workspace_file_tree },
+        .{ .fixture = "control-workspace-diff-request.ndjson", .request_type = .workspace_diff },
+        .{ .fixture = "control-workspace-ports-request.ndjson", .request_type = .workspace_ports },
+        .{ .fixture = "control-workspace-pull-request-request.ndjson", .request_type = .workspace_pull_request },
+        .{ .fixture = "control-workspace-stage-path-request.ndjson", .request_type = .workspace_stage_path },
+        .{ .fixture = "control-workspace-unstage-path-request.ndjson", .request_type = .workspace_unstage_path },
+        .{ .fixture = "control-workspace-revert-path-request.ndjson", .request_type = .workspace_revert_path },
+    };
+
+    for (cases) |case| {
+        const fixture = try readProtocolFixtureAlloc(std.testing.allocator, case.fixture);
+        defer std.testing.allocator.free(fixture);
+        const line = std.mem.trim(u8, fixture, " \n\r\t");
+
+        var parsed = try std.json.parseFromSlice(ControlRequestJson, std.testing.allocator, line, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
+
+        try std.testing.expectEqual(case.request_type, parsed.value.requestType());
+        try std.testing.expectEqualStrings("/tmp/tao-workspace", parsed.value.requestRootPath().?);
+        if (case.request_type == .workspace_stage_path or case.request_type == .workspace_unstage_path or case.request_type == .workspace_revert_path) {
+            const paths = parsed.value.requestGitPaths().?;
+            try std.testing.expectEqual(@as(usize, 2), paths.len);
+            try std.testing.expectEqualStrings("src/app.ts", paths[0]);
+            try std.testing.expectEqualStrings("README.md", paths[1]);
+        }
+        if (case.request_type == .workspace_diff) {
+            try std.testing.expectEqualStrings("staged", parsed.value.requestScope().?);
+            try std.testing.expectEqualStrings("main", parsed.value.requestCompareBranch().?);
+        }
+    }
 }
 
 fn responseJsonForAllocationFailure(allocator: std.mem.Allocator) !void {
@@ -584,6 +1010,117 @@ test "stream frames encode and parse binary payloads" {
     try std.testing.expectEqual(encoded.len, result.valid_bytes);
     try std.testing.expectEqual(@as(usize, 1), result.frames_seen);
     try std.testing.expectEqual(@as(usize, 1), recorder.count);
+}
+
+test "stream frame codec matches shared golden output fixture" {
+    const golden_fixture = try readProtocolFixtureAlloc(std.testing.allocator, "stream-output-frame.hex");
+    defer std.testing.allocator.free(golden_fixture);
+    const golden_hex = std.mem.trim(u8, golden_fixture, " \n\r\t");
+    var golden: [encodedStreamFrameSize(5)]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&golden, golden_hex);
+
+    var buffer: [encodedStreamFrameSize(5)]u8 = undefined;
+    const encoded = try encodeStreamFrame(&buffer, .output, "session-1", 7, "hello");
+    try std.testing.expectEqualSlices(u8, &golden, encoded);
+
+    var recorder = struct {
+        count: usize = 0,
+        pub fn visit(self: *@This(), frame: StreamFrame) !void {
+            self.count += 1;
+            try std.testing.expectEqual(StreamKind.output, frame.kind);
+            try std.testing.expectEqualStrings("session-1", frame.session_id);
+            try std.testing.expectEqual(@as(u64, 7), frame.seq);
+            try std.testing.expectEqualStrings("hello", frame.payload);
+        }
+    }{};
+
+    const result = try parseStreamFrames(&golden, &recorder);
+    try std.testing.expectEqual(golden.len, result.valid_bytes);
+    try std.testing.expectEqual(@as(usize, 1), result.frames_seen);
+    try std.testing.expectEqual(@as(usize, 1), recorder.count);
+}
+
+test "stream frame codec matches shared golden resize exit and snapshot fixtures" {
+    const cases = [_]struct {
+        fixture: []const u8,
+        kind: StreamKind,
+        seq: u64,
+        payload: []const u8,
+    }{
+        .{
+            .fixture = "stream-resize-frame.hex",
+            .kind = .resize,
+            .seq = 11,
+            .payload = &[_]u8{ 0x00, 0x78, 0x00, 0x28 },
+        },
+        .{
+            .fixture = "stream-exit-frame.hex",
+            .kind = .exit,
+            .seq = 12,
+            .payload = &[_]u8{ 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0f },
+        },
+        .{
+            .fixture = "stream-snapshot-frame.hex",
+            .kind = .snapshot,
+            .seq = 13,
+            .payload = "state",
+        },
+    };
+
+    for (cases) |case| {
+        const golden_fixture = try readProtocolFixtureAlloc(std.testing.allocator, case.fixture);
+        defer std.testing.allocator.free(golden_fixture);
+        const golden_hex = std.mem.trim(u8, golden_fixture, " \n\r\t");
+        var golden: [stream_header_size + 8]u8 = undefined;
+        const golden_bytes = try std.fmt.hexToBytes(&golden, golden_hex);
+
+        var buffer: [stream_header_size + 8]u8 = undefined;
+        const encoded = try encodeStreamFrame(&buffer, case.kind, "session-1", case.seq, case.payload);
+        try std.testing.expectEqualSlices(u8, golden_bytes, encoded);
+
+        var recorder = struct {
+            expected_kind: StreamKind,
+            expected_seq: u64,
+            expected_payload: []const u8,
+            count: usize = 0,
+            pub fn visit(self: *@This(), frame: StreamFrame) !void {
+                self.count += 1;
+                try std.testing.expectEqual(self.expected_kind, frame.kind);
+                try std.testing.expectEqualStrings("session-1", frame.session_id);
+                try std.testing.expectEqual(self.expected_seq, frame.seq);
+                try std.testing.expectEqualSlices(u8, self.expected_payload, frame.payload);
+            }
+        }{
+            .expected_kind = case.kind,
+            .expected_seq = case.seq,
+            .expected_payload = case.payload,
+        };
+
+        const result = try parseStreamFrames(golden_bytes, &recorder);
+        try std.testing.expectEqual(golden_bytes.len, result.valid_bytes);
+        try std.testing.expectEqual(@as(usize, 1), result.frames_seen);
+        try std.testing.expectEqual(@as(usize, 1), recorder.count);
+    }
+}
+
+test "stream parser rejects shared golden corrupt CRC fixture" {
+    const corrupt_fixture = try readProtocolFixtureAlloc(std.testing.allocator, "stream-corrupt-crc-frame.hex");
+    defer std.testing.allocator.free(corrupt_fixture);
+    const corrupt_hex = std.mem.trim(u8, corrupt_fixture, " \n\r\t");
+    var corrupt: [encodedStreamFrameSize(5)]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&corrupt, corrupt_hex);
+
+    var recorder = struct {
+        count: usize = 0,
+        pub fn visit(self: *@This(), _: StreamFrame) !void {
+            self.count += 1;
+        }
+    }{};
+
+    const result = try parseStreamFrames(&corrupt, &recorder);
+    try std.testing.expectEqual(@as(usize, 0), result.valid_bytes);
+    try std.testing.expectEqual(@as(usize, 0), result.frames_seen);
+    try std.testing.expectEqual(@as(usize, 0), recorder.count);
 }
 
 test "stream parser leaves partial tails unread" {

@@ -78,7 +78,11 @@ export const PaneLayoutSchema = Schema.Struct({
   id: Schema.String,
   terminalId: Schema.String,
   tabId: Schema.String,
-  type: Schema.Union([Schema.Literal('terminal'), Schema.Literal('webview')]),
+  type: Schema.Union([
+    Schema.Literal('terminal'),
+    Schema.Literal('webview'),
+    Schema.Literal('changes'),
+  ]),
   name: Schema.String,
   cwd: Schema.optional(Schema.String),
   status: Schema.optional(
@@ -104,6 +108,8 @@ export const PaneLayoutDataSchema = Schema.Struct({
   activePaneId: Schema.NullOr(Schema.String),
   sidebarExpanded: Schema.Boolean,
   sidebarWidth: Schema.Number,
+  rightSidebarExpanded: Schema.optional(Schema.Boolean),
+  rightSidebarWidth: Schema.optional(Schema.Number),
 })
 
 export const SettingsDataSchema = Schema.Struct({

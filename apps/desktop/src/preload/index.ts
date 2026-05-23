@@ -1,9 +1,22 @@
 import { Effect, Schema } from 'effect'
 import { clipboard, contextBridge, ipcRenderer, shell } from 'electron'
-import type { PtyClientMessage, PtyExitInfo, PtySize } from '../main/pty-protocol'
-import { type PtyServiceMessage, PtyServiceMessageSchema } from '../main/pty-protocol'
+import type {
+  PtyClientMessage,
+  PtyExitInfo,
+  PtySize,
+  TaodPtyBridgeDiagnostics,
+} from '../main/pty-protocol'
+import {
+  type PtyServiceMessage,
+  PtyServiceMessageSchema,
+  TaodPtyBridgeDiagnosticsSchema,
+} from '../main/pty-protocol'
 import type { AppCommand } from '@tao/shared/app-command'
 import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
+import {
+  TaodLifecycleDiagnosticsSchema,
+  TaodLifecycleRecoveryInputSchema,
+} from '@tao/shared/taod-protocol'
 import type {
   AttachSessionInput,
   AttachSessionMode,
@@ -14,23 +27,45 @@ import type {
   CurrentScreenSnapshotFrame,
   ExitInfo,
   OutputFrame,
+  TaodLifecycleDiagnostics,
+  TaodLifecycleRecoveryInput,
 } from '@tao/shared/taod-protocol'
 import {
   WorkspaceError,
+  WorkspaceAddInputSchema,
   WorkspacePickDirectoryResponseSchema,
   WorkspaceRecordSchema,
+  WorkspaceRefreshInputSchema,
+  WorkspaceRemoveInputSchema,
+  WorkspaceWatcherDiagnosticsSchema,
+  WorktreeCreateInputSchema,
+  WorktreeRefreshInputSchema,
+  WorktreeRemoveInputSchema,
   decodeWorkspaceIpcResponse,
   workspaceIpcFailure,
   workspaceErrorFromUnknown,
+  type WorkspaceDiffPatchResponse,
+  type WorkspaceDiffPatchInput,
+  type WorkspaceFileTreeResponse,
   type WorkspaceGitBranchResponse,
+  type WorkspaceGitBranchesResponse,
   type WorkspaceGitStatusResponse,
   type WorkspaceGitWorktreesResponse,
+  type WorkspaceGitPathActionResponse,
+  type WorkspaceGitPathActionInput,
   type WorkspaceIpcResponse,
   type WorkspaceListResponse,
   type WorkspacePortsResponse,
   type WorkspacePullRequestResponse,
+  type WorkspaceAddInput,
   type WorkspaceRecord,
   type WorkspaceRecordResponse,
+  type WorkspaceRefreshInput,
+  type WorkspaceRemoveInput,
+  type WorkspaceWatcherDiagnostics,
+  type WorktreeCreateInput,
+  type WorktreeRefreshInput,
+  type WorktreeRemoveInput,
   type WorkspaceWorktreeResponse,
 } from '@tao/shared/workspace'
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
@@ -59,6 +94,22 @@ type PendingDataState = {
 type PendingOutputState = {
   frames: OutputFrame[]
   bufferedChars: number
+}
+
+type TerminalPreloadDiagnostics = {
+  pendingClientMessages: number
+  pendingDataSessions: number
+  pendingDataChars: number
+  pendingDataDroppedChunksTotal: number
+  pendingDataDroppedCharsTotal: number
+  pendingDataTruncatedCharsTotal: number
+  pendingOutputSessions: number
+  pendingOutputChars: number
+  pendingOutputDroppedFramesTotal: number
+  pendingOutputDroppedCharsTotal: number
+  pendingOutputTruncatedCharsTotal: number
+  pendingSnapshotSessions: number
+  readySessions: number
 }
 
 type ReadyState = {
@@ -91,6 +142,12 @@ let ptyPortRequest: PtyPortRequest | null = null
 let rendererReadySignaled = false
 let rendererShown = false
 let pendingClientMessages: PtyClientMessage[] = []
+let pendingDataDroppedChunksTotal = 0
+let pendingDataDroppedCharsTotal = 0
+let pendingDataTruncatedCharsTotal = 0
+let pendingOutputDroppedFramesTotal = 0
+let pendingOutputDroppedCharsTotal = 0
+let pendingOutputTruncatedCharsTotal = 0
 const rendererShownWaiters: Array<() => void> = []
 const readyStates = new Map<string, ReadyState>()
 const pendingData = new Map<string, PendingDataState>()
@@ -292,6 +349,30 @@ function rejectAndClearSessionState(sessionId: string, error: Error) {
   clearSessionState(sessionId)
 }
 
+function getTerminalPreloadDiagnostics(): TerminalPreloadDiagnostics {
+  let pendingDataChars = 0
+  for (const pending of pendingData.values()) pendingDataChars += pending.bufferedChars
+
+  let pendingOutputChars = 0
+  for (const pending of pendingSessionOutput.values()) pendingOutputChars += pending.bufferedChars
+
+  return {
+    pendingClientMessages: pendingClientMessages.length,
+    pendingDataSessions: pendingData.size,
+    pendingDataChars,
+    pendingDataDroppedChunksTotal,
+    pendingDataDroppedCharsTotal,
+    pendingDataTruncatedCharsTotal,
+    pendingOutputSessions: pendingSessionOutput.size,
+    pendingOutputChars,
+    pendingOutputDroppedFramesTotal,
+    pendingOutputDroppedCharsTotal,
+    pendingOutputTruncatedCharsTotal,
+    pendingSnapshotSessions: pendingSnapshots.size,
+    readySessions: readyStates.size,
+  }
+}
+
 function flushPendingData(sessionId: string) {
   const pending = pendingData.get(sessionId)
   const callbacks = ptyDataCallbacks.get(sessionId)
@@ -325,11 +406,16 @@ function handlePtyData(sessionId: string, data: string) {
     pending.chunks.push(data)
     pending.bufferedChars += data.length
     while (pending.bufferedChars > MAX_PENDING_DATA_CHARS && pending.chunks.length > 1) {
-      pending.bufferedChars -= pending.chunks.shift()?.length ?? 0
+      const droppedChars = pending.chunks.shift()?.length ?? 0
+      pending.bufferedChars -= droppedChars
+      pendingDataDroppedChunksTotal += 1
+      pendingDataDroppedCharsTotal += droppedChars
     }
     if (pending.bufferedChars > MAX_PENDING_DATA_CHARS && pending.chunks.length === 1) {
+      const truncatedChars = pending.bufferedChars - MAX_PENDING_DATA_CHARS
       pending.chunks[0] = pending.chunks[0].slice(-MAX_PENDING_DATA_CHARS)
       pending.bufferedChars = pending.chunks[0].length
+      pendingDataTruncatedCharsTotal += truncatedChars
     }
     return
   }
@@ -346,15 +432,20 @@ function handleSessionOutput(frame: OutputFrame) {
     pending.frames.push(frame)
     pending.bufferedChars += frame.data.length
     while (pending.bufferedChars > MAX_PENDING_OUTPUT_CHARS && pending.frames.length > 1) {
-      pending.bufferedChars -= pending.frames.shift()?.data.length ?? 0
+      const droppedChars = pending.frames.shift()?.data.length ?? 0
+      pending.bufferedChars -= droppedChars
+      pendingOutputDroppedFramesTotal += 1
+      pendingOutputDroppedCharsTotal += droppedChars
     }
     if (pending.bufferedChars > MAX_PENDING_OUTPUT_CHARS && pending.frames.length === 1) {
       const onlyFrame = pending.frames[0]!
+      const truncatedChars = pending.bufferedChars - MAX_PENDING_OUTPUT_CHARS
       pending.frames[0] = {
         ...onlyFrame,
         data: onlyFrame.data.slice(-MAX_PENDING_OUTPUT_CHARS),
       }
       pending.bufferedChars = pending.frames[0]!.data.length
+      pendingOutputTruncatedCharsTotal += truncatedChars
     }
     return
   }
@@ -853,6 +944,44 @@ const electronAPI = {
     }
   },
 
+  getTerminalPreloadDiagnostics(): TerminalPreloadDiagnostics {
+    return getTerminalPreloadDiagnostics()
+  },
+
+  async getTaodDiagnostics(): Promise<TaodLifecycleDiagnostics | null> {
+    const payload = await ipcRenderer.invoke('taod:getDiagnostics')
+    if (payload === null) return null
+    const decoded = Schema.decodeUnknownOption(TaodLifecycleDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid taod diagnostics payload')
+    return decoded.value
+  },
+
+  async getTaodPtyBridgeDiagnostics(): Promise<TaodPtyBridgeDiagnostics | null> {
+    const payload = await ipcRenderer.invoke('taod:getPtyBridgeDiagnostics')
+    if (payload === null) return null
+    const decoded = Schema.decodeUnknownOption(TaodPtyBridgeDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid taod bridge diagnostics payload')
+    return decoded.value
+  },
+
+  async recoverTaod(action: TaodLifecycleRecoveryInput): Promise<TaodLifecycleDiagnostics | null> {
+    const decodedInput = Schema.decodeUnknownOption(TaodLifecycleRecoveryInputSchema)(action)
+    if (decodedInput._tag === 'None') throw new Error('Invalid taod recovery action')
+    const payload = await ipcRenderer.invoke('taod:recover', decodedInput.value)
+    if (payload === null) return null
+    const decoded = Schema.decodeUnknownOption(TaodLifecycleDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid taod diagnostics payload')
+    return decoded.value
+  },
+
+  async getWorkspaceWatcherDiagnostics(): Promise<WorkspaceWatcherDiagnostics | null> {
+    const payload = await ipcRenderer.invoke('workspace:getWatcherDiagnostics')
+    if (payload === null) return null
+    const decoded = Schema.decodeUnknownOption(WorkspaceWatcherDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid workspace watcher diagnostics payload')
+    return decoded.value
+  },
+
   pickWorkspaceDirectory(): Promise<string | null> {
     return pickWorkspaceDirectory()
   },
@@ -861,12 +990,36 @@ const electronAPI = {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitBranch(workspacePath))
   },
 
+  getGitBranches(workspacePath: string): Promise<WorkspaceGitBranchesResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitBranches(workspacePath))
+  },
+
   getGitWorktrees(workspacePath: string): Promise<WorkspaceGitWorktreesResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitWorktrees(workspacePath))
   },
 
   getGitStatus(workspacePath: string): Promise<WorkspaceGitStatusResponse> {
     return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getGitStatus(workspacePath))
+  },
+
+  getWorkspaceFileTree(workspacePath: string): Promise<WorkspaceFileTreeResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getWorkspaceFileTree(workspacePath))
+  },
+
+  getWorkspaceDiffPatch(input: WorkspaceDiffPatchInput): Promise<WorkspaceDiffPatchResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.getWorkspaceDiffPatch(input))
+  },
+
+  stagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.stagePath(input))
+  },
+
+  unstagePath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.unstagePath(input))
+  },
+
+  revertPath(input: WorkspaceGitPathActionInput): Promise<WorkspaceGitPathActionResponse> {
+    return runWorkspaceIpc((workspaceIpc) => workspaceIpc.revertPath(input))
   },
 
   getWorkspacePorts(workspacePath: string): Promise<WorkspacePortsResponse> {
@@ -881,53 +1034,58 @@ const electronAPI = {
     return invokeWorkspaceDaemon('workspace:list') as Promise<WorkspaceListResponse>
   },
 
-  addWorkspace(input: {
-    rootPath: string
-    workspaceId?: string
-    name?: string
-    orderIndex?: number
-  }): Promise<WorkspaceRecordResponse> {
-    return invokeWorkspaceDaemon('workspace:add', input) as Promise<WorkspaceRecordResponse>
-  },
-
-  refreshWorkspace(workspaceId: string): Promise<WorkspaceRecordResponse> {
+  addWorkspace(input: WorkspaceAddInput): Promise<WorkspaceRecordResponse> {
     return invokeWorkspaceDaemon(
-      'workspace:refresh',
-      workspaceId,
+      'workspace:add',
+      input,
+      WorkspaceAddInputSchema,
+      'invalid-workspace',
     ) as Promise<WorkspaceRecordResponse>
   },
 
-  removeWorkspace(workspaceId: string): Promise<WorkspaceIpcResponse<void>> {
-    return invokeWorkspaceDaemon('workspace:remove', workspaceId) as Promise<
-      WorkspaceIpcResponse<void>
-    >
-  },
-
-  createWorktree(input: {
-    workspaceId: string
-    baseBranch?: string
-    targetBranch?: string
-    branch?: string
-    folderName?: string
-    startPoint?: string
-    title?: string
-  }): Promise<WorkspaceWorktreeResponse> {
-    return invokeWorkspaceDaemon('worktree:create', input) as Promise<WorkspaceWorktreeResponse>
-  },
-
-  refreshWorktree(worktreeId: string): Promise<WorkspaceWorktreeResponse> {
+  refreshWorkspace(workspaceId: WorkspaceRefreshInput): Promise<WorkspaceRecordResponse> {
     return invokeWorkspaceDaemon(
-      'worktree:refresh',
-      worktreeId,
+      'workspace:refresh',
+      workspaceId,
+      WorkspaceRefreshInputSchema,
+      'invalid-workspace',
+    ) as Promise<WorkspaceRecordResponse>
+  },
+
+  removeWorkspace(workspaceId: WorkspaceRemoveInput): Promise<WorkspaceIpcResponse<void>> {
+    return invokeWorkspaceDaemon(
+      'workspace:remove',
+      workspaceId,
+      WorkspaceRemoveInputSchema,
+      'invalid-workspace',
+    ) as Promise<WorkspaceIpcResponse<void>>
+  },
+
+  createWorktree(input: WorktreeCreateInput): Promise<WorkspaceWorktreeResponse> {
+    return invokeWorkspaceDaemon(
+      'worktree:create',
+      input,
+      WorktreeCreateInputSchema,
+      'invalid-worktree',
     ) as Promise<WorkspaceWorktreeResponse>
   },
 
-  removeWorktree(input: {
-    worktreeId: string
-    force?: boolean
-    deleteBranch?: boolean
-  }): Promise<WorkspaceIpcResponse<void>> {
-    return invokeWorkspaceDaemon('worktree:remove', input) as Promise<WorkspaceIpcResponse<void>>
+  refreshWorktree(worktreeId: WorktreeRefreshInput): Promise<WorkspaceWorktreeResponse> {
+    return invokeWorkspaceDaemon(
+      'worktree:refresh',
+      worktreeId,
+      WorktreeRefreshInputSchema,
+      'invalid-worktree',
+    ) as Promise<WorkspaceWorktreeResponse>
+  },
+
+  removeWorktree(input: WorktreeRemoveInput): Promise<WorkspaceIpcResponse<void>> {
+    return invokeWorkspaceDaemon(
+      'worktree:remove',
+      input,
+      WorktreeRemoveInputSchema,
+      'invalid-worktree',
+    ) as Promise<WorkspaceIpcResponse<void>>
   },
 
   readLayout(): Promise<PaneLayoutData | null> {
@@ -953,8 +1111,29 @@ function runWorkspaceIpc<T>(program: WorkspaceIpcProgram<T>): Promise<T> {
   )
 }
 
-function invokeWorkspaceDaemon(channel: string, input?: unknown): Promise<unknown> {
-  return (ipcRenderer.invoke(channel, input) as Promise<unknown>).catch((error) =>
+function invokeWorkspaceDaemon<S extends Schema.Decoder<unknown, any>>(
+  channel: string,
+  input?: unknown,
+  inputSchema?: S,
+  fallbackKind: WorkspaceError['kind'] = 'ipc-failed',
+): Promise<unknown> {
+  let payload = input
+  if (inputSchema) {
+    const decoded = Schema.decodeUnknownOption(inputSchema as unknown as Schema.Decoder<unknown>)(
+      input,
+    )
+    if (decoded._tag === 'None') {
+      return Promise.resolve(
+        workspaceIpcFailure(
+          new WorkspaceError(fallbackKind, `Invalid payload for ${channel}`),
+          fallbackKind,
+        ),
+      )
+    }
+    payload = decoded.value
+  }
+
+  return (ipcRenderer.invoke(channel, payload) as Promise<unknown>).catch((error) =>
     workspaceIpcFailure(error, 'ipc-failed'),
   )
 }

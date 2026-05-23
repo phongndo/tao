@@ -159,11 +159,34 @@ pub fn defaultBranchAlloc(allocator: std.mem.Allocator, path: []const u8) !?[]u8
     return currentBranchAlloc(allocator, path);
 }
 
+pub fn branchesAlloc(allocator: std.mem.Allocator, repository_path: []const u8) ![][]u8 {
+    const args = [_][]const u8{
+        "for-each-ref",
+        "--sort=refname",
+        "--format=%(refname:short)",
+        "refs/heads",
+        "refs/remotes",
+    };
+    const output = try runGitAlloc(allocator, repository_path, &args);
+    defer allocator.free(output);
+    return parseBranches(allocator, output);
+}
+
 pub fn branchExists(allocator: std.mem.Allocator, repository_path: []const u8, branch: []const u8) !bool {
     const ref = try std.fmt.allocPrint(allocator, "refs/heads/{s}", .{branch});
     defer allocator.free(ref);
     const args = [_][]const u8{ "show-ref", "--verify", "--quiet", ref };
     return runGitCheck(allocator, repository_path, &args);
+}
+
+pub fn freeBranches(allocator: std.mem.Allocator, branches: [][]u8) void {
+    for (branches) |branch| allocator.free(branch);
+    allocator.free(branches);
+}
+
+pub fn freeWorktreeList(allocator: std.mem.Allocator, entries: []WorktreeListEntry) void {
+    for (entries) |*entry| entry.deinit(allocator);
+    allocator.free(entries);
 }
 
 pub fn worktreeAddNewBranch(
@@ -285,6 +308,24 @@ fn trimTrailingNewlines(value: []const u8) []const u8 {
     return value[0..end];
 }
 
+fn parseBranches(allocator: std.mem.Allocator, output: []const u8) ![][]u8 {
+    var branches: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (branches.items) |branch| allocator.free(branch);
+        branches.deinit(allocator);
+    }
+
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw_line| {
+        const branch = std.mem.trim(u8, raw_line, " \t\r");
+        if (branch.len == 0) continue;
+        if (std.mem.endsWith(u8, branch, "/HEAD")) continue;
+        try branches.append(allocator, try allocator.dupe(u8, branch));
+    }
+
+    return branches.toOwnedSlice(allocator);
+}
+
 test "parses git status porcelain" {
     const summary = parseStatus(
         \\ M changed.txt
@@ -300,15 +341,28 @@ test "parses git status porcelain" {
 test "parses worktree porcelain z output" {
     const sample = "worktree /repo\x00HEAD abc123\x00branch refs/heads/main\x00\x00worktree /tmp/wt\x00HEAD def456\x00branch refs/heads/luminous-galileo-a13f\x00\x00";
     const entries = try parseWorktreeListPorcelainZ(std.testing.allocator, sample);
-    defer {
-        for (entries) |*entry| entry.deinit(std.testing.allocator);
-        std.testing.allocator.free(entries);
-    }
+    defer freeWorktreeList(std.testing.allocator, entries);
     try std.testing.expectEqual(@as(usize, 2), entries.len);
     try std.testing.expectEqualStrings("/repo", entries[0].path);
     try std.testing.expectEqualStrings("main", entries[0].branch.?);
     try std.testing.expectEqualStrings("/tmp/wt", entries[1].path);
     try std.testing.expectEqualStrings("luminous-galileo-a13f", entries[1].branch.?);
+}
+
+test "parses comparable branches" {
+    const branches = try parseBranches(std.testing.allocator,
+        \\main
+        \\origin/HEAD
+        \\origin/main
+        \\feature/demo
+        \\
+    );
+    defer freeBranches(std.testing.allocator, branches);
+
+    try std.testing.expectEqual(@as(usize, 3), branches.len);
+    try std.testing.expectEqualStrings("main", branches[0]);
+    try std.testing.expectEqualStrings("origin/main", branches[1]);
+    try std.testing.expectEqualStrings("feature/demo", branches[2]);
 }
 
 fn parseWorktreeListPorcelainZForAllocationFailure(allocator: std.mem.Allocator) !void {

@@ -29,7 +29,11 @@ import type {
   CurrentScreenSnapshotFrame,
   OutputFrame,
 } from '@tao/shared/taod-protocol'
-import { createBatchedTerminalWriter } from './terminal-output-writer'
+import {
+  createBatchedTerminalWriter,
+  type TerminalOutputWriterDiagnostics,
+} from './terminal-output-writer'
+import { markRendererEvent, startRendererSpan } from './trace'
 
 type CreateTerminalOptions = {
   readonly terminalId?: string
@@ -81,6 +85,12 @@ const warnedSnapshotBackends = new Set<string>()
 
 const MIN_TERMINAL_COLS = 2
 const MIN_TERMINAL_ROWS = 1
+
+type TerminalDiagnosticsRegistry = Map<string, () => TerminalOutputWriterDiagnostics>
+
+type DiagnosticWindow = Window & {
+  __TAO_TERMINAL_DIAGNOSTICS__?: TerminalDiagnosticsRegistry
+}
 
 let terminalFontsLoad: Promise<void> | null = null
 
@@ -137,6 +147,12 @@ function renderTerminalError(container: HTMLElement, err: unknown) {
   errorNode.style.fontFamily = 'monospace'
   errorNode.textContent = `Error opening terminal: ${String(err)}`
   container.replaceChildren(errorNode)
+}
+
+function terminalDiagnosticsRegistry(): TerminalDiagnosticsRegistry {
+  const diagnosticWindow = window as DiagnosticWindow
+  diagnosticWindow.__TAO_TERMINAL_DIAGNOSTICS__ ??= new Map()
+  return diagnosticWindow.__TAO_TERMINAL_DIAGNOSTICS__
 }
 
 function nextAnimationFrame(): Promise<void> {
@@ -248,16 +264,22 @@ async function revealTerminalAfterStableRender(
   container: HTMLElement,
   term: Terminal,
 ): Promise<void> {
+  const finishReveal = startRendererSpan('terminal:reveal')
   forceTerminalRender(term)
-  // Show the window, then do one final fit/render before making the terminal surface visible.
-  await window.electronAPI.signalReady()
-  fitTerminalToContainer(container, term)
-  forceTerminalRender(term)
-  // Wait for Chromium to present the final post-attach resize/render. Without this gate, cold
-  // replay can briefly show historical replay dimensions before the current pane fit is applied.
-  await nextAnimationFrame()
-  await nextAnimationFrame()
-  container.classList.remove('terminal-surface-restoring')
+  try {
+    // Show the window, then do one final fit/render before making the terminal surface visible.
+    await window.electronAPI.signalReady()
+    fitTerminalToContainer(container, term)
+    forceTerminalRender(term)
+    // Wait for Chromium to present the final post-attach resize/render. Without this gate, cold
+    // replay can briefly show historical replay dimensions before the current pane fit is applied.
+    await nextAnimationFrame()
+    await nextAnimationFrame()
+    container.classList.remove('terminal-surface-restoring')
+    markRendererEvent('terminal:surface-visible')
+  } finally {
+    finishReveal()
+  }
 }
 
 function observeTerminalResize(container: HTMLElement, term: Terminal): () => void {
@@ -449,6 +471,7 @@ export async function createTerminal(
   sessionId: string,
   options: CreateTerminalOptions = {},
 ): Promise<Terminal> {
+  const finishCreate = startRendererSpan('terminal:create')
   // Step 1: Load terminal fonts before starting the shell. The PTY must be
   // spawned at the fitted terminal size, otherwise shell prompts with right-side content
   // render against the initial 80x24 size and leave stale fragments after pane splits.
@@ -459,7 +482,8 @@ export async function createTerminal(
   let term: Terminal | null = null
 
   try {
-    await fontsReady
+    const finishFonts = startRendererSpan('terminal:fonts')
+    await fontsReady.finally(finishFonts)
     updateStatus(`Terminal fonts ready in ${(performance.now() - t0).toFixed(0)}ms`)
 
     // Step 2: Create the xterm.js terminal and its fit addon.
@@ -501,9 +525,15 @@ export async function createTerminal(
     }
 
     container.classList.add('terminal-surface-restoring')
-    term.open(container)
+    const finishOpen = startRendererSpan('terminal:xterm-open')
+    try {
+      term.open(container)
+    } finally {
+      finishOpen()
+    }
     installWebglRenderer(term)
   } catch (err) {
+    finishCreate()
     console.error('[terminal] term.open() threw:', err)
     term?.dispose()
     renderTerminalError(container, err)
@@ -511,6 +541,7 @@ export async function createTerminal(
   }
 
   if (!term) {
+    finishCreate()
     throw new Error('Terminal failed to initialize')
   }
   const openedTerm = term
@@ -519,6 +550,7 @@ export async function createTerminal(
   updateStatus('Wiring IPC...')
 
   const outputWriter = createBatchedTerminalWriter(openedTerm)
+  terminalDiagnosticsRegistry().set(sessionId, () => outputWriter.diagnostics())
   const titleSubscription = options.onTitle ? openedTerm.onTitleChange(options.onTitle) : null
   const unsubSessionTitle = options.onTitle
     ? window.electronAPI.onSessionTitle(sessionId, options.onTitle)
@@ -662,15 +694,18 @@ export async function createTerminal(
   let didAttachSession = false
 
   try {
-    const attachedSession = await window.electronAPI.attachSession({
-      sessionId,
-      terminalId: options.terminalId,
-      workspaceId: options.workspaceId,
-      worktreeId: options.worktreeId,
-      cols: term.cols,
-      rows: term.rows,
-      cwd: options.cwd,
-    })
+    const finishAttach = startRendererSpan('terminal:attach')
+    const attachedSession = await window.electronAPI
+      .attachSession({
+        sessionId,
+        terminalId: options.terminalId,
+        workspaceId: options.workspaceId,
+        worktreeId: options.worktreeId,
+        cols: term.cols,
+        rows: term.rows,
+        cwd: options.cwd,
+      })
+      .finally(finishAttach)
     didAttachSession = true
     if (attachedSession.archived) {
       archived = true
@@ -700,7 +735,10 @@ export async function createTerminal(
     }
     await flushStartupOutput(suppressOutputThroughSeq)
     await revealTerminalAfterStableRender(container, term)
+    markRendererEvent('terminal:ready')
+    finishCreate()
   } catch (err) {
+    finishCreate()
     unsubSessionOutput()
     unsubSessionSnapshot()
     unsubSessionResize()
@@ -709,6 +747,7 @@ export async function createTerminal(
     unsubSessionTitle?.()
     titleSubscription?.dispose()
     outputWriter.dispose()
+    terminalDiagnosticsRegistry().delete(sessionId)
     if (didAttachSession) {
       await window.electronAPI.detachSession(sessionId).catch(() => {})
     }
@@ -736,6 +775,7 @@ export async function createTerminal(
     unsubSessionTitle?.()
     titleSubscription?.dispose()
     outputWriter.dispose()
+    terminalDiagnosticsRegistry().delete(sessionId)
     void window.electronAPI.detachSession(sessionId)
     stopResizeObserver?.()
     stopResizeObserver = null

@@ -12,7 +12,14 @@ const writeAllFd = fd_io.writeAllFd;
 
 const owner_dir_mode: std.c.mode_t = 0o700;
 const owner_socket_mode: std.c.mode_t = 0o600;
+const control_slow_log_threshold_ms: u64 = 250;
 const assert = std.debug.assert;
+
+const ControlLogKind = enum {
+    none,
+    failed,
+    slow,
+};
 
 extern "c" fn getpeereid(socket: std.c.fd_t, euid: *std.c.uid_t, egid: *std.c.gid_t) c_int;
 
@@ -22,6 +29,21 @@ fn handleConnectionThread(context: anytype) void {
     context.daemon.handleStream(context.stream) catch |err| {
         std.log.warn("control RPC connection failed: {s}", .{@errorName(err)});
     };
+}
+
+fn controlLogKind(ok: bool, duration_ms: u64) ControlLogKind {
+    if (!ok) return .failed;
+    if (duration_ms >= control_slow_log_threshold_ms) return .slow;
+    return .none;
+}
+
+fn logControlRequestIfNeeded(request_type: rpc.RequestType, trace_id: ?[]const u8, duration_ms: u64, ok: bool) void {
+    const trace = trace_id orelse "(none)";
+    switch (controlLogKind(ok, duration_ms)) {
+        .none => {},
+        .failed => std.log.warn("control request failed type={s} trace_id={s} duration_ms={d}", .{ @tagName(request_type), trace, duration_ms }),
+        .slow => std.log.warn("control request slow type={s} trace_id={s} duration_ms={d}", .{ @tagName(request_type), trace, duration_ms }),
+    }
 }
 
 pub fn prepareStorage(self: anytype) !void {
@@ -112,14 +134,27 @@ pub fn handleControlPayload(self: anytype, allocator: std.mem.Allocator, payload
     };
     defer parsed.deinit();
 
-    return self.handleControlRequest(allocator, parsed.value);
+    const response = try self.handleControlRequest(allocator, parsed.value);
+    defer allocator.free(response);
+    return rpc.responseJsonWithTraceAlloc(allocator, response, parsed.value.requestTraceId());
 }
 
 pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
     var lock = self.acquireLock();
     defer lock.deinit();
 
-    return switch (request.requestType()) {
+    const request_type = request.requestType();
+    const trace_id = request.requestTraceId();
+    const started_ns = std.time.nanoTimestamp();
+    var ok = false;
+    defer {
+        const elapsed_ns = std.time.nanoTimestamp() - started_ns;
+        const duration_ms: u64 = if (elapsed_ns > 0) @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms)) else 0;
+        self.recordControlDiagnosticsLocked(request_type, trace_id, duration_ms, ok);
+        logControlRequestIfNeeded(request_type, trace_id, duration_ms, ok);
+    }
+
+    const response = try switch (request_type) {
         .create => self.handleCreateLocked(allocator, request),
         .attach => self.handleAttachLocked(allocator, request),
         .resize => self.handleResizeLocked(allocator, request),
@@ -133,23 +168,53 @@ pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request
         .workspace_remove => self.handleWorkspaceRemoveLocked(allocator, request),
         .workspace_refresh => self.handleWorkspaceRefreshLocked(allocator, request),
         .workspace_reorder => self.handleWorkspaceReorderLocked(allocator, request),
+        .workspace_branch => self.handleWorkspaceBranchLocked(allocator, request),
+        .workspace_branches => self.handleWorkspaceBranchesLocked(allocator, request),
+        .workspace_git_worktrees => self.handleWorkspaceGitWorktreesLocked(allocator, request),
+        .workspace_status => self.handleWorkspaceStatusLocked(allocator, request),
+        .workspace_file_tree => self.handleWorkspaceFileTreeLocked(allocator, request),
+        .workspace_diff => self.handleWorkspaceDiffLocked(allocator, request),
+        .workspace_stage_path => self.handleWorkspaceStagePathLocked(allocator, request),
+        .workspace_unstage_path => self.handleWorkspaceUnstagePathLocked(allocator, request),
+        .workspace_revert_path => self.handleWorkspaceRevertPathLocked(allocator, request),
+        .workspace_ports => self.handleWorkspacePortsLocked(allocator, request),
+        .workspace_pull_request => self.handleWorkspacePullRequestLocked(allocator, request),
         .worktree_list => self.handleWorktreeListLocked(allocator, request),
         .worktree_create => self.handleWorktreeCreateLocked(allocator, request),
         .worktree_remove => self.handleWorktreeRemoveLocked(allocator, request),
         .worktree_adopt => self.handleWorktreeAdoptLocked(allocator, request),
         .worktree_refresh => self.handleWorktreeRefreshLocked(allocator, request),
         .worktree_reorder => self.handleWorktreeReorderLocked(allocator, request),
-        .ping => rpc.responseJsonAlloc(allocator, .{
-            .id = request.requestId(),
-            .ok = true,
-            .status = "ok",
-        }),
+        .ping => blk: {
+            const response = try rpc.responseJsonAlloc(allocator, .{
+                .id = request.requestId(),
+                .ok = true,
+                .status = "ok",
+                .protocol_version = rpc.control_protocol_version,
+                .daemon_version = rpc.daemon_version,
+                .capabilities = rpc.control_capabilities[0..],
+                .stream_diagnostics = self.streamDiagnosticsLocked(),
+            });
+            defer allocator.free(response);
+            break :blk rpc.responseJsonWithControlDiagnosticsAlloc(allocator, response, self.controlDiagnosticsLocked());
+        },
         .unknown => rpc.responseJsonAlloc(allocator, .{
             .id = request.requestId(),
             .ok = false,
             .error_message = "unknown method",
         }),
     };
+    ok = responsePayloadOk(allocator, response);
+    return response;
+}
+
+fn responsePayloadOk(allocator: std.mem.Allocator, response: []const u8) bool {
+    const MinimalResponse = struct { ok: bool = false };
+    var parsed = std.json.parseFromSlice(MinimalResponse, allocator, response, .{
+        .ignore_unknown_fields = true,
+    }) catch return false;
+    defer parsed.deinit();
+    return parsed.value.ok;
 }
 
 pub fn handleStream(self: anytype, stream: std.net.Stream) !void {
@@ -177,7 +242,9 @@ pub fn handleStream(self: anytype, stream: std.net.Stream) !void {
     const request = parsed.value;
     const response = try self.handleControlRequest(self.allocator, request);
     defer self.allocator.free(response);
-    try writeAllFd(stream.handle, response);
+    const traced_response = try rpc.responseJsonWithTraceAlloc(self.allocator, response, request.requestTraceId());
+    defer self.allocator.free(traced_response);
+    try writeAllFd(stream.handle, traced_response);
 
     if (request.requestType() == .attach) {
         if (request.requestSessionId()) |session_id| {
@@ -263,6 +330,13 @@ fn verifyPeerOwner(socket_fd: std.c.fd_t) !void {
         },
         else => return error.UnsupportedPlatform,
     }
+}
+
+test "control trace logging policy is quiet unless failed or slow" {
+    try std.testing.expectEqual(ControlLogKind.none, controlLogKind(true, 0));
+    try std.testing.expectEqual(ControlLogKind.none, controlLogKind(true, control_slow_log_threshold_ms - 1));
+    try std.testing.expectEqual(ControlLogKind.slow, controlLogKind(true, control_slow_log_threshold_ms));
+    try std.testing.expectEqual(ControlLogKind.failed, controlLogKind(false, 0));
 }
 
 test "daemon storage and socket paths are owner-only" {
