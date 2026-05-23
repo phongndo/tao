@@ -552,6 +552,9 @@ export async function createTerminal(
   const outputWriter = createBatchedTerminalWriter(openedTerm)
   terminalDiagnosticsRegistry().set(sessionId, () => outputWriter.diagnostics())
   const titleSubscription = options.onTitle ? openedTerm.onTitleChange(options.onTitle) : null
+  const unsubSessionTitle = options.onTitle
+    ? window.electronAPI.onSessionTitle(sessionId, options.onTitle)
+    : null
   let stopResizeObserver: (() => void) | null = null
   let archived = false
   let bufferingStartupOutput = true
@@ -741,6 +744,7 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
+    unsubSessionTitle?.()
     titleSubscription?.dispose()
     outputWriter.dispose()
     terminalDiagnosticsRegistry().delete(sessionId)
@@ -768,6 +772,7 @@ export async function createTerminal(
     unsubSessionResize()
     unsubSessionError()
     unsubSessionExit()
+    unsubSessionTitle?.()
     titleSubscription?.dispose()
     outputWriter.dispose()
     terminalDiagnosticsRegistry().delete(sessionId)

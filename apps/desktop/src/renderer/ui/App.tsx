@@ -18,6 +18,7 @@ import {
   FiRotateCcw,
   FiFolderPlus,
   FiPlus,
+  FiSettings,
   FiTerminal,
   FiTrash2,
   FiX,
@@ -1456,6 +1457,70 @@ const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
   )
 })
 
+const settingsNavItems = ['General', 'Appearance', 'Agent'] as const
+type SettingsSection = (typeof settingsNavItems)[number]
+
+const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) {
+  const [activeSection, setActiveSection] = useState<SettingsSection>('General')
+
+  return (
+    <section className="settings-page" aria-label="Settings">
+      <div className="settings-titlebar" aria-hidden="true" />
+      <aside className="settings-nav" aria-label="Settings sections">
+        <button type="button" className="settings-back-link" onClick={onBack}>
+          <FiChevronLeft size={14} />
+          <span>Back to app</span>
+        </button>
+        <nav className="settings-nav-list">
+          {settingsNavItems.map((item) => (
+            <button
+              type="button"
+              key={item}
+              onClick={() => setActiveSection(item)}
+              className={
+                item === activeSection
+                  ? 'settings-nav-item settings-nav-item-active'
+                  : 'settings-nav-item'
+              }
+              aria-current={item === activeSection ? 'page' : undefined}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
+      </aside>
+      <main className="settings-main">
+        <div className="settings-main-inner">
+          <header className="settings-main-header">
+            <button type="button" className="settings-mobile-back-link" onClick={onBack}>
+              <FiChevronLeft size={14} />
+              <span>Back to app</span>
+            </button>
+            <h1>{activeSection}</h1>
+            <nav className="settings-mobile-nav-list" aria-label="Settings sections">
+              {settingsNavItems.map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  onClick={() => setActiveSection(item)}
+                  className={
+                    item === activeSection
+                      ? 'settings-mobile-nav-item settings-mobile-nav-item-active'
+                      : 'settings-mobile-nav-item'
+                  }
+                  aria-current={item === activeSection ? 'page' : undefined}
+                >
+                  {item}
+                </button>
+              ))}
+            </nav>
+          </header>
+        </div>
+      </main>
+    </section>
+  )
+})
+
 const RightSidebar = memo(function RightSidebar({
   rootPath,
   branchName,
@@ -2101,9 +2166,7 @@ function ChangedFilesTreePanel({
 
       try {
         const actionPath =
-          typeof path === 'string'
-            ? path
-            : path.filter((candidate) => candidate.trim().length > 0)
+          typeof path === 'string' ? path : path.filter((candidate) => candidate.trim().length > 0)
         if (Array.isArray(actionPath) && actionPath.length === 0) {
           setError('No paths selected')
           return
@@ -3077,6 +3140,7 @@ export function App() {
   >(null)
   const [rightSidebarView, setRightSidebarView] = useState<RightSidebarView>('files')
   const [layoutLoaded, setLayoutLoaded] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [taodDiagnostics, setTaodDiagnostics] = useState<TaodLifecycleDiagnostics | null>(null)
   const [taodDiagnosticsError, setTaodDiagnosticsError] = useState<string | null>(null)
   const [daemonDiagnosticsOpen, setDaemonDiagnosticsOpen] = useState(false)
@@ -3409,6 +3473,7 @@ export function App() {
           toggleRightSidebar()
           break
         case 'new-tab':
+          setIsSettingsOpen(false)
           newTab(activeWorkspaceKey ?? undefined)
           break
         case 'close-tab':
@@ -3424,9 +3489,11 @@ export function App() {
           splitActivePane('column')
           break
         case 'switch-workspace':
+          setIsSettingsOpen(false)
           selectWorkspaceByIndex(command.index)
           break
         case 'switch-tab':
+          setIsSettingsOpen(false)
           selectTabByIndex(command.index)
           break
         case 'focus-pane':
@@ -3457,6 +3524,7 @@ export function App() {
   ])
 
   async function handleAddWorkspace() {
+    setIsSettingsOpen(false)
     const projectPath = await window.electronAPI.pickWorkspaceDirectory()
     if (!projectPath) return
     if (
@@ -3489,6 +3557,7 @@ export function App() {
   function selectWorkspaceAtIndex(index: number) {
     const workspace = sortedWorkspaces[index]
     if (!workspace) return
+    setIsSettingsOpen(false)
     useTaoStore.getState().selectWorkspace(workspace.id)
   }
 
@@ -3567,6 +3636,14 @@ export function App() {
     return <div className="tao-shell" />
   }
 
+  if (isSettingsOpen) {
+    return (
+      <div className="tao-shell tao-settings-shell">
+        <SettingsPage onBack={() => setIsSettingsOpen(false)} />
+      </div>
+    )
+  }
+
   return (
     <div className={shellClassName} style={shellStyle}>
       {sidebarExpanded ? (
@@ -3603,6 +3680,15 @@ export function App() {
             >
               <FiFolderPlus size={15} />
             </button>
+            <button
+              type="button"
+              className="icon-button sidebar-settings-button"
+              aria-label="Open settings"
+              title="Settings"
+              onClick={() => setIsSettingsOpen(true)}
+            >
+              <FiSettings size={15} />
+            </button>
           </div>
           <div className="sidebar-content">
             {workspaces.length > 0 ? (
@@ -3632,7 +3718,10 @@ export function App() {
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onSelectTab={selectTab}
+            onSelectTab={(tabId) => {
+              setIsSettingsOpen(false)
+              selectTab(tabId)
+            }}
             onCloseTab={closeTab}
             onReorderTab={reorderTab}
             archivedTabIds={archivedTabIds}
@@ -3692,7 +3781,10 @@ export function App() {
                       type="button"
                       className="empty-new-tab-button"
                       aria-label="New tab"
-                      onClick={() => newTab(activeWorkspaceKey ?? undefined)}
+                      onClick={() => {
+                        setIsSettingsOpen(false)
+                        newTab(activeWorkspaceKey ?? undefined)
+                      }}
                     >
                       <FiPlus size={15} />
                     </button>

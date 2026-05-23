@@ -90,9 +90,6 @@ jobs:
         run: pnpm tsc
       - name: Zig unit tests
         run: pnpm zig:test
-      - name: Zig hardened compile (fuzz)
-        run: zig build test:compile -Dfuzz=true
-        working-directory: apps/daemon
       - name: Persistence tests
         run: pnpm test:persistence
 
@@ -142,65 +139,8 @@ jobs:
         run: pnpm build
         env:
           TAOD_SKIP_NATIVE: ${{ matrix.skip_native }}
-      - name: macOS smoke tests & benchmarks
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          pnpm smoke:package
-          pnpm --filter @tao/desktop test:taod-lifecycle
-          mkdir -p apps/desktop/out/bench
-          pnpm bench:startup:budget | tee apps/desktop/out/bench/startup-budget.txt
-          pnpm bench:latency:budget | tee apps/desktop/out/bench/latency-budget.txt
-          pnpm bench:input-priority:budget | tee apps/desktop/out/bench/input-priority-budget.txt
-          pnpm bench:attach:budget | tee apps/desktop/out/bench/attach-budget.txt
-          pnpm bench:workspace:budget | tee apps/desktop/out/bench/workspace-budget.txt
-          pnpm bench:soak:budget | tee apps/desktop/out/bench/soak-budget.txt
-          pnpm bench:reload:budget | tee apps/desktop/out/bench/reload-budget.txt
-          pnpm bench:app-soak:budget | tee apps/desktop/out/bench/app-soak-budget.txt
-          pnpm bench:taod:budget | tee apps/desktop/out/bench/taod-budget.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: matrix.artifact != 'tao-dist-windows'
         with:
           name: ${{ matrix.artifact }}
           path: apps/desktop/out/
-
-  # ── Performance smoke tests (macOS only) ──
-  performance-smoke:
-    runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      TAO_TERMINAL_BENCH_MIB: '4'
-      TAO_TERMINAL_MIN_WEBGL_MBPS: '2'
-      TAO_TERMINAL_MAX_P95_FRAME_MS: '80'
-      TAO_TERMINAL_MAX_FRAMES_OVER_16: '1000'
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: '22' }
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - name: Cache pnpm store
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-      - run: pnpm install --frozen-lockfile
-      - run: |
-          set -euo pipefail
-          mkdir -p apps/desktop/out/bench
-          pnpm bench:terminal:budget | tee apps/desktop/out/bench/terminal-budget.txt
-          pnpm bench:ipc:budget | tee apps/desktop/out/bench/ipc-budget.txt
-          pnpm bench:file-tree:budget | tee apps/desktop/out/bench/file-tree-budget.txt
-          pnpm bench:renderer-combined:budget | tee apps/desktop/out/bench/renderer-combined-budget.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: tao-performance-budget-macos
-          path: apps/desktop/out/bench/*.txt

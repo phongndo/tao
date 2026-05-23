@@ -83,6 +83,11 @@ export const PtyServiceMessageSchema = Schema.Union([
     replay: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
+    type: Schema.Literal('title'),
+    sessionId: SessionIdSchema,
+    title: Schema.String,
+  }),
+  Schema.Struct({
     type: Schema.Literal('snapshot'),
     sessionId: SessionIdSchema,
     dataBase64: Schema.String,

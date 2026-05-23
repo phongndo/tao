@@ -17,9 +17,11 @@ import {
 import type { SettingsData } from '@tao/shared/session'
 import { TaodClient, type TaodControlResponse, type TaodSessionStream } from './taod-client'
 import { decodeTaodExitPayload, decodeTaodResizePayload } from './taod-stream'
+import { processTitleFromShell, readProcessTitle } from './process-title'
 
 const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 const ATTACH_STREAM_READY_TIMEOUT_MS = 500
+const PROCESS_TITLE_POLL_INTERVAL_MS = 1000
 
 export type TaodPtyBridgeOptions = {
   readonly client?: TaodClient
@@ -35,6 +37,11 @@ type BridgeSession = {
   attachMode: AttachSessionMode
   agentProvider?: string
   nativeSessionId?: string | null
+  rootPid: number
+  fallbackTitle: string
+  processTitle: string | null
+  processTitlePoll: ReturnType<typeof setInterval> | null
+  processTitleInFlight: boolean
 }
 
 function decodeClientMessage(message: unknown): PtyClientMessage | null {
@@ -400,9 +407,15 @@ export class TaodPtyBridge {
       attachMode,
       agentProvider: attachResponse.agent_provider,
       nativeSessionId: attachResponse.native_session_id,
+      rootPid: typeof attachResponse.pid === 'number' ? attachResponse.pid : 0,
+      fallbackTitle: processTitleFromShell(this.defaultShell),
+      processTitle: null,
+      processTitlePoll: null,
+      processTitleInFlight: false,
     }
     this.sessions.set(sessionId, session)
     this.wireStream(sessionId, session, stream)
+    this.startProcessTitlePolling(sessionId, session)
     const attachReady = waitForAttachStreamReady(stream)
     stream.start()
     try {
@@ -522,6 +535,7 @@ export class TaodPtyBridge {
 
   private detachAllStreams(): void {
     for (const [sessionId, session] of this.sessions) {
+      this.stopProcessTitlePolling(session)
       session.stream?.close()
       session.stream = null
       void this.client.detachSession(sessionId).catch(() => {})
@@ -530,6 +544,8 @@ export class TaodPtyBridge {
 
   private async killSession(sessionId: string): Promise<void> {
     this.closeSessionStream(sessionId)
+    const session = this.sessions.get(sessionId)
+    if (session) this.stopProcessTitlePolling(session)
     this.sessions.delete(sessionId)
     await this.client.killSession(sessionId).catch(() => {})
   }
@@ -539,6 +555,7 @@ export class TaodPtyBridge {
     if (!session?.stream) return
     const stream = session.stream
     session.stream = null
+    this.stopProcessTitlePolling(session)
     stream.close()
   }
 
@@ -597,6 +614,49 @@ export class TaodPtyBridge {
 
   private postData(sessionId: string, data: string, seq: number): void {
     this.post({ type: 'data', sessionId, data, seq })
+  }
+
+  private startProcessTitlePolling(sessionId: string, session: BridgeSession): void {
+    this.stopProcessTitlePolling(session)
+    this.updateProcessTitle(sessionId, session)
+    session.processTitlePoll = setInterval(() => {
+      this.updateProcessTitle(sessionId, session)
+    }, PROCESS_TITLE_POLL_INTERVAL_MS)
+    session.processTitlePoll.unref?.()
+  }
+
+  private stopProcessTitlePolling(session: BridgeSession): void {
+    if (session.processTitlePoll) {
+      clearInterval(session.processTitlePoll)
+      session.processTitlePoll = null
+    }
+  }
+
+  private updateProcessTitle(sessionId: string, session: BridgeSession): void {
+    if (this.sessions.get(sessionId) !== session || !session.stream) {
+      this.stopProcessTitlePolling(session)
+      return
+    }
+    if (session.processTitleInFlight) return
+    session.processTitleInFlight = true
+
+    void readProcessTitle(session.rootPid, session.fallbackTitle)
+      .then((title) => {
+        if (this.sessions.get(sessionId) !== session || !session.stream) {
+          this.stopProcessTitlePolling(session)
+          return
+        }
+        if (title.length === 0) {
+          return
+        }
+        if (session.processTitle === title) return
+        session.processTitle = title
+        this.post({ type: 'title', sessionId, title })
+      })
+      .catch(() => {})
+      .finally(() => {
+        session.processTitleInFlight = false
+      })
   }
 
   private postError(sessionId: string, error: string): void {
