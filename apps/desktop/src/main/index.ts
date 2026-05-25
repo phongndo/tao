@@ -17,18 +17,15 @@
 
 import { execFile } from 'node:child_process'
 import { mkdirSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { Effect, Schema } from 'effect'
-import {
-  app,
-  BrowserWindow,
-  contentTracing,
-  dialog,
-  ipcMain,
-  type IpcMainInvokeEvent,
-  MessageChannelMain,
-} from 'electron'
+import type { BrowserWindow as BrowserWindowInstance, IpcMainInvokeEvent } from 'electron'
+
+const require = createRequire(import.meta.url)
+const electronApi = require('electron') as typeof import('electron')
+const { app, BrowserWindow, contentTracing, dialog, ipcMain, MessageChannelMain } = electronApi
 import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { defaultSettings, readSettings, writeSettings } from './settings-store'
@@ -129,7 +126,7 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 // ─── Application State ───
 
-let mainWindow: BrowserWindow | null = null
+let mainWindow: BrowserWindowInstance | null = null
 let mainWindowLoadPromise: Promise<void> | null = null
 let taodBridge: TaodPtyBridge | null = null
 let taodClient: TaodClient | null = null
@@ -137,7 +134,7 @@ let gitStateWatcher: GitStateWatcher | null = null
 
 // ─── Window Creation ───
 
-function createWindow(): BrowserWindow {
+function createWindow(): BrowserWindowInstance {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 600,
@@ -1758,7 +1755,7 @@ async function rssKbForPid(pid: number): Promise<number | null> {
 }
 
 async function sampleElectronSmokeMetrics(
-  window: BrowserWindow,
+  window: BrowserWindowInstance,
 ): Promise<ElectronSmokeProcessMetrics> {
   const taodDiagnostics =
     (await taodClient?.refreshLifecycleDiagnostics().catch(() => null)) ?? null
@@ -1806,7 +1803,7 @@ function summarizeElectronSmokeMetrics(metrics: ElectronSmokeProcessMetrics) {
 }
 
 async function waitForElectronSmokeBaseline(
-  window: BrowserWindow,
+  window: BrowserWindowInstance,
   isSmokeSettled: () => boolean,
 ): Promise<ElectronSmokeProcessMetrics> {
   const deadline = Date.now() + Math.max(500, Math.min(5000, ELECTRON_SMOKE_OUTPUT_START_DELAY_MS))
@@ -1825,7 +1822,7 @@ async function waitForElectronSmokeBaseline(
   return lastMetrics
 }
 
-function waitForRendererReload(window: BrowserWindow): Promise<number> {
+function waitForRendererReload(window: BrowserWindowInstance): Promise<number> {
   const startedAt = performance.now()
   return new Promise((resolve, reject) => {
     const cleanup = () => {

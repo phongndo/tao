@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -41,7 +41,10 @@ void main()
   .finally(() => clearInterval(keepAlive))
 
 async function main(): Promise<void> {
-  if (await isElectronUsable()) return
+  if (await isElectronUsable()) {
+    patchElectronForNixLinux()
+    return
+  }
   await installElectron()
 }
 
@@ -65,6 +68,7 @@ async function isElectronUsable(): Promise<boolean> {
 
 async function installElectron(): Promise<void> {
   if (existsSync(executablePath) && existsSync(requiredRuntimePath) && (await isElectronUsable())) {
+    patchElectronForNixLinux()
     await writeInstallMarkers()
     return
   }
@@ -83,11 +87,78 @@ async function installElectron(): Promise<void> {
   await removePath(distPath)
   await mkdir(distPath, { recursive: true })
   extractZip(zipPath, distPath)
+  patchElectronForNixLinux()
   await writeInstallMarkers()
 
   if (!(await isElectronUsable())) {
     throw new Error(`Electron install is incomplete at ${electronDir}`)
   }
+}
+
+function patchElectronForNixLinux(): void {
+  if (hostPlatform !== 'linux' || platform !== 'linux') return
+  if (!existsSync(executablePath)) return
+
+  const nixCc = process.env.NIX_CC
+  if (!nixCc) return
+
+  const dynamicLinkerPath = join(nixCc, 'nix-support/dynamic-linker')
+  if (!existsSync(dynamicLinkerPath)) {
+    throw new Error(`[electron-install] Nix dynamic linker file not found: ${dynamicLinkerPath}`)
+  }
+
+  const dynamicLinker = readFileSync(dynamicLinkerPath, 'utf8').trim()
+  if (dynamicLinker.length === 0) {
+    throw new Error(`[electron-install] Nix dynamic linker file is empty: ${dynamicLinkerPath}`)
+  }
+
+  patchElfInterpreter(executablePath, dynamicLinker, true)
+  for (const path of listFiles(distPath)) {
+    if (path === executablePath) continue
+    patchElfInterpreter(path, dynamicLinker, false)
+  }
+}
+
+function patchElfInterpreter(path: string, dynamicLinker: string, required: boolean): void {
+  let currentInterpreter: string
+  try {
+    currentInterpreter = execFileSync('patchelf', ['--print-interpreter', path], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch (error) {
+    if (!required) return
+    throw error
+  }
+
+  if (currentInterpreter === dynamicLinker) return
+
+  execFileSync('patchelf', ['--set-interpreter', dynamicLinker, path], {
+    stdio: 'inherit',
+  })
+
+  const patchedInterpreter = execFileSync('patchelf', ['--print-interpreter', path], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim()
+  if (patchedInterpreter !== dynamicLinker) {
+    throw new Error(
+      `[electron-install] Electron interpreter mismatch after patch for ${path}: expected ${dynamicLinker}, found ${patchedInterpreter}`,
+    )
+  }
+}
+
+function listFiles(root: string): string[] {
+  const paths: string[] = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) {
+      paths.push(...listFiles(path))
+      continue
+    }
+    if (entry.isFile()) paths.push(path)
+  }
+  return paths
 }
 
 async function removePath(path: string): Promise<void> {

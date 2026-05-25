@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "taod",
         .root_module = exe_mod,
+        .use_llvm = true,
     });
 
     b.installArtifact(exe);
@@ -80,9 +81,15 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     if (target.result.os.tag == .linux) mod.linkSystemLibrary("util", .{});
-    const mod_tests = b.addTest(.{ .root_module = mod });
+    const mod_tests = b.addTest(.{
+        .root_module = mod,
+        .use_llvm = true,
+    });
 
-    const exe_tests = b.addTest(.{ .root_module = exe.root_module });
+    const exe_tests = b.addTest(.{
+        .root_module = exe.root_module,
+        .use_llvm = true,
+    });
     const test_step = b.step("test", "Run unit tests");
     const mod_test_run = b.addRunArtifact(mod_tests);
     const exe_test_run = b.addRunArtifact(exe_tests);
