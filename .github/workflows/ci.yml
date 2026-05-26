@@ -3,6 +3,7 @@ name: CI
 env:
   ZIG_VERSION: '0.15.2'
   RUST_TOOLCHAIN: stable
+  RUST_MIRI_TOOLCHAIN: nightly-2026-05-24
 
 on:
   push:
@@ -18,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  # ── Required memory-safety gate (kept separate) ──
+  # ── Required memory-safety gate: zig daemon + rust Miri ──
   memory-safety:
     runs-on: macos-15
     timeout-minutes: 30
@@ -32,6 +33,10 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: ${{ env.ZIG_VERSION }}
+      - name: Install nightly Miri
+        run: |
+          rustup toolchain install "$RUST_MIRI_TOOLCHAIN" --profile minimal --component miri --component rust-src
+          cargo +"$RUST_MIRI_TOOLCHAIN" miri setup
       - name: Get pnpm store directory
         id: pnpm-cache
         shell: bash
@@ -44,6 +49,16 @@ jobs:
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-miri-
       - run: pnpm install --frozen-lockfile
       - run: |
           set -euo pipefail
@@ -53,8 +68,10 @@ jobs:
           trap 'rm -rf "$TAOD_CI_HOME"' EXIT
           HOME="$TAOD_CI_HOME" pnpm --filter @tao/daemon check
           pnpm zig:leak-check
+      - name: Miri tests
+        run: cargo +"$RUST_MIRI_TOOLCHAIN" miri test -p tao-bridge --locked
 
-  # ── Combined quality gate: frontend (pnpm) + zig daemon ──
+  # ── Combined quality gate: frontend (pnpm) + zig daemon + rust CLI ──
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -70,6 +87,10 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: ${{ env.ZIG_VERSION }}
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy --component rust-analyzer
+          rustup default "$RUST_TOOLCHAIN"
       - name: Get pnpm store directory
         id: pnpm-cache
         shell: bash
@@ -82,6 +103,16 @@ jobs:
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - run: pnpm install --frozen-lockfile
       - name: Lint (TypeScript + Zig)
         run: pnpm lint
@@ -93,64 +124,16 @@ jobs:
         run: pnpm zig:test
       - name: Persistence tests
         run: pnpm test:persistence
-
-  # ── Rust CLI scaffold quality gate ──
-  rust:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy --component rust-analyzer
-          rustup default "$RUST_TOOLCHAIN"
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
       - name: Rust LSP availability
-        run: rust-analyzer --version
+        run: pnpm cli:lsp
       - name: Rust format check
-        run: cargo fmt --check
+        run: pnpm cli:fmt:check
       - name: Rust lint
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: pnpm cli:lint
       - name: Rust tests
-        run: cargo test --workspace --locked
+        run: pnpm cli:test
       - name: Rust build
-        run: cargo build --workspace --locked
-
-  # ── Rust interpreter checks for UB/leaks in tests ──
-  rust-miri:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-      - name: Install nightly Miri
-        run: |
-          rustup toolchain install nightly-2026-05-24 --profile minimal --component miri --component rust-src
-          cargo +nightly-2026-05-24 miri setup
-      - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-miri-
-      - name: Miri tests
-        run: cargo +nightly-2026-05-24 miri test -p tao-bridge --locked
+        run: pnpm cli:build
 
   # ── Build matrix across platforms ──
   build:
