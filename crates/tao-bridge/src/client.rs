@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct TaodBridge {
@@ -12,8 +12,8 @@ impl TaodBridge {
         }
     }
 
-    pub fn socket_path(&self) -> &PathBuf {
-        &self.socket_path
+    pub fn socket_path(&self) -> &Path {
+        self.socket_path.as_path()
     }
 }
 

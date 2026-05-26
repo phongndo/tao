@@ -1,11 +1,21 @@
-pub fn run(args: impl IntoIterator<Item = String>) {
+pub fn run(args: impl IntoIterator<Item = String>) -> std::process::ExitCode {
     match args.into_iter().next().as_deref() {
-        Some("tui") | None => crate::tui::print_scaffold(),
-        Some("review") => crate::review::print_scaffold(),
-        Some("help" | "--help" | "-h") => print_help(),
+        Some("tui") | None => {
+            crate::tui::print_scaffold();
+            std::process::ExitCode::SUCCESS
+        }
+        Some("review") => {
+            crate::review::print_scaffold();
+            std::process::ExitCode::SUCCESS
+        }
+        Some("help" | "--help" | "-h") => {
+            print_help();
+            std::process::ExitCode::SUCCESS
+        }
         Some(command) => {
             eprintln!("tao: command scaffolded but not implemented yet: {command}");
             print_help();
+            std::process::ExitCode::FAILURE
         }
     }
 }

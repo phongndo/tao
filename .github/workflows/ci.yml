@@ -122,8 +122,6 @@ jobs:
         run: cargo fmt --check
       - name: Rust lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Rust check
-        run: cargo check --workspace --locked
       - name: Rust tests
         run: cargo test --workspace --locked
       - name: Rust build
@@ -139,8 +137,8 @@ jobs:
           persist-credentials: false
       - name: Install nightly Miri
         run: |
-          rustup toolchain install nightly --profile minimal --component miri --component rust-src
-          cargo +nightly miri setup
+          rustup toolchain install nightly-2026-05-24 --profile minimal --component miri --component rust-src
+          cargo +nightly-2026-05-24 miri setup
       - name: Cache Cargo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
@@ -152,7 +150,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-miri-
       - name: Miri tests
-        run: cargo +nightly miri test -p tao-bridge --locked
+        run: cargo +nightly-2026-05-24 miri test -p tao-bridge --locked
 
   # ── Build matrix across platforms ──
   build:
