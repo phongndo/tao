@@ -1,20 +1,80 @@
 pub fn run(args: impl IntoIterator<Item = String>) -> std::process::ExitCode {
-    match args.into_iter().next().as_deref() {
-        Some("tui") | None => {
+    let args: Vec<String> = args.into_iter().collect();
+    let Some(command) = args.first().map(String::as_str) else {
+        crate::tui::print_scaffold();
+        return std::process::ExitCode::SUCCESS;
+    };
+
+    match command {
+        "tui" => {
             crate::tui::print_scaffold();
             std::process::ExitCode::SUCCESS
         }
-        Some("review") => {
+        "review" => {
             crate::review::print_scaffold();
             std::process::ExitCode::SUCCESS
         }
-        Some("help" | "--help" | "-h") => {
+        "wt" | "worktree" => crate::worktree::run(args[1..].to_vec()),
+        "init" => run_shell_init(&args[1..]),
+        "completion" | "completions" => run_completion(&args[1..]),
+        "__complete" => run_hidden_completion(&args[1..]),
+        "__shell-cd" => run_shell_cd(&args[1..]),
+        "help" | "--help" | "-h" => {
             print_help();
             std::process::ExitCode::SUCCESS
         }
-        Some(command) => {
-            eprintln!("tao: command scaffolded but not implemented yet: {command}");
+        command => {
+            eprintln!("tao: unknown command: {command}");
             print_help();
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_hidden_completion(args: &[String]) -> std::process::ExitCode {
+    match args.first().map(String::as_str) {
+        Some("wt-names") => {
+            // Completion must stay cheap and non-mutating: do not start taod and do not
+            // auto-add the current directory as a workspace just because the user hit Tab.
+            crate::worktree::print_worktree_names_for_completion();
+            std::process::ExitCode::SUCCESS
+        }
+        _ => std::process::ExitCode::SUCCESS,
+    }
+}
+
+fn run_shell_init(args: &[String]) -> std::process::ExitCode {
+    let shell = args.first().map(String::as_str).unwrap_or("help");
+    match crate::shell::print_init(shell) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("tao init: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_completion(args: &[String]) -> std::process::ExitCode {
+    let shell = args.first().map(String::as_str).unwrap_or("help");
+    match crate::shell::print_completion(shell) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("tao completion: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_shell_cd(args: &[String]) -> std::process::ExitCode {
+    let Some(scope) = args.first().map(String::as_str) else {
+        eprintln!("tao: internal shell-cd command requires wt/worktree");
+        return std::process::ExitCode::FAILURE;
+    };
+
+    match scope {
+        "wt" | "worktree" => crate::worktree::run_for_shell_cd(args[1..].to_vec()),
+        command => {
+            eprintln!("tao: internal shell-cd does not support {command}");
             std::process::ExitCode::FAILURE
         }
     }
@@ -22,6 +82,6 @@ pub fn run(args: impl IntoIterator<Item = String>) -> std::process::ExitCode {
 
 fn print_help() {
     println!(
-        "tao CLI scaffold\n\nUSAGE:\n  tao tui              TUI shell for agent/worktree/review workflows\n  tao review           Review-diff workflow placeholder\n\nPLANNED HEADLESS COMMANDS:\n  tao agent ...        List/attach/manage AI CLI sessions\n  tao workspace ...    Workspace metadata through taod\n  tao worktree ...     Worktree create/list/remove through taod\n  tao diff ...         Hunk-oriented review diff"
+        "tao CLI\n\nUSAGE:\n  tao tui                         TUI shell for agent/worktree/review workflows\n  tao review                      Review-diff workflow placeholder\n  tao wt new [branch]             Create a git worktree and branch\n  tao wt cd [query]               Print/select a worktree path\n  tao wt ls                       List git worktrees\n  tao wt rm [query]               Remove a git worktree\n  tao init <zsh|bash|fish>        Enable auto-cd and completion\n  tao completion <zsh|bash|fish>  Print completion only\n\nALIASES:\n  tao worktree ...                Same as tao wt ...\n\nRun `tao wt help` for worktree details."
     );
 }
