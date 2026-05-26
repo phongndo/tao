@@ -4,6 +4,9 @@ dist/
 *.log
 .DS_Store
 
+# rust
+target/
+
 # zig
 .zig-cache/
 zig-cache/
