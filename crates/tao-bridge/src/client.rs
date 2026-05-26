@@ -93,8 +93,6 @@ fn request_value<T: Serialize>(_socket_path: &Path, _request: &T) -> Result<Valu
 #[cfg(test)]
 mod tests {
     use super::TaodBridge;
-    use serde_json::json;
-    use std::io::{Read, Write};
 
     #[test]
     fn stores_socket_path() {
@@ -103,15 +101,20 @@ mod tests {
         assert_eq!(bridge.socket_path().to_string_lossy(), "/tmp/taod.sock");
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(miri)))]
     #[test]
     fn request_value_round_trips_one_ndjson_response() {
+        use serde_json::json;
+        use std::io::{Read, Write};
         use std::os::unix::net::UnixListener;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(0);
 
         let socket_path = std::env::temp_dir().join(format!(
             "tao-bridge-test-{}-{}.sock",
             std::process::id(),
-            unique_test_id()
+            NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path).expect("bind test socket");
@@ -149,13 +152,5 @@ mod tests {
 
         server.join().expect("server joins");
         let _ = std::fs::remove_file(socket_path);
-    }
-
-    #[cfg(unix)]
-    fn unique_test_id() -> u128 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock before epoch")
-            .as_nanos()
     }
 }
