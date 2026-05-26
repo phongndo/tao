@@ -7,7 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use tao_bridge::TaodBridge;
+use tao_bridge::{TaodBridge, TaodBridgeError};
 
 pub fn run(args: Vec<String>) -> std::process::ExitCode {
     match run_result(args, OutputMode::Human) {
@@ -374,7 +374,7 @@ fn ensure_daemon_running(bridge: &TaodBridge) -> Result<(), String> {
     match ping_daemon(bridge) {
         Ok(()) => return Ok(()),
         Err(error) if is_daemon_unreachable_error(&error) => {}
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.to_string()),
     }
 
     let binary = find_taod_binary().ok_or_else(|| {
@@ -411,9 +411,9 @@ fn ensure_daemon_running(bridge: &TaodBridge) -> Result<(), String> {
         match ping_daemon(bridge) {
             Ok(()) => return Ok(()),
             Err(error) if is_daemon_unreachable_error(&error) => {
-                last_error = Some(error);
+                last_error = Some(error.to_string());
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.to_string()),
         }
     }
 
@@ -427,19 +427,15 @@ fn ensure_daemon_running(bridge: &TaodBridge) -> Result<(), String> {
     Err(message)
 }
 
-fn is_daemon_unreachable_error(error: &str) -> bool {
-    if error == "taod closed the socket before responding" {
-        return true;
-    }
-
-    if !error.starts_with("failed to connect to taod at ") {
-        return false;
-    }
-
-    error.contains("No such file or directory")
-        || error.contains("Connection refused")
-        || error.contains("connection refused")
-        || error.contains("not found")
+fn is_daemon_unreachable_error(error: &PingError) -> bool {
+    matches!(
+        error,
+        PingError::Bridge(TaodBridgeError::Closed)
+            | PingError::Bridge(TaodBridgeError::Connect {
+                kind: io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused,
+                ..
+            })
+    )
 }
 
 #[cfg(unix)]
@@ -447,12 +443,29 @@ unsafe extern "C" {
     fn setsid() -> i32;
 }
 
-fn ping_daemon(bridge: &TaodBridge) -> Result<(), String> {
-    let response = bridge.request_value(&json!({
-        "type": "ping",
-        "id": request_id("ping"),
-    }))?;
-    ensure_ok(&response)
+#[derive(Debug)]
+enum PingError {
+    Bridge(TaodBridgeError),
+    Daemon(String),
+}
+
+impl std::fmt::Display for PingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bridge(error) => write!(formatter, "{error}"),
+            Self::Daemon(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+fn ping_daemon(bridge: &TaodBridge) -> Result<(), PingError> {
+    let response = bridge
+        .request_value_typed(&json!({
+            "type": "ping",
+            "id": request_id("ping"),
+        }))
+        .map_err(PingError::Bridge)?;
+    ensure_ok(&response).map_err(PingError::Daemon)
 }
 
 fn find_taod_binary() -> Option<PathBuf> {
@@ -926,28 +939,28 @@ mod tests {
 
     #[test]
     fn daemon_unreachable_errors_are_startable() {
-        assert!(is_daemon_unreachable_error(
-            "failed to connect to taod at /tmp/taod.sock: No such file or directory (os error 2)"
-        ));
-        assert!(is_daemon_unreachable_error(
-            "failed to connect to taod at /tmp/taod.sock: Connection refused (os error 61)"
-        ));
-        assert!(is_daemon_unreachable_error(
-            "taod closed the socket before responding"
-        ));
+        assert!(is_daemon_unreachable_error(&connect_ping_error(
+            std::io::ErrorKind::NotFound
+        )));
+        assert!(is_daemon_unreachable_error(&connect_ping_error(
+            std::io::ErrorKind::ConnectionRefused
+        )));
+        assert!(is_daemon_unreachable_error(&PingError::Bridge(
+            TaodBridgeError::Closed
+        )));
     }
 
     #[test]
     fn daemon_protocol_errors_are_not_startable() {
-        assert!(!is_daemon_unreachable_error(
-            "taod unix socket control is only supported on unix platforms"
-        ));
-        assert!(!is_daemon_unreachable_error(
-            "failed to connect to taod at /tmp/taod.sock: Permission denied (os error 13)"
-        ));
-        assert!(!is_daemon_unreachable_error(
-            "failed to decode taod response: expected value at line 1 column 1"
-        ));
+        assert!(!is_daemon_unreachable_error(&PingError::Bridge(
+            TaodBridgeError::UnsupportedPlatform
+        )));
+        assert!(!is_daemon_unreachable_error(&connect_ping_error(
+            std::io::ErrorKind::PermissionDenied
+        )));
+        assert!(!is_daemon_unreachable_error(&PingError::Bridge(
+            TaodBridgeError::Decode("expected value at line 1 column 1".to_string())
+        )));
     }
 
     #[test]
@@ -963,5 +976,13 @@ mod tests {
             branch: branch.to_string(),
             state: "active".to_string(),
         }
+    }
+
+    fn connect_ping_error(kind: std::io::ErrorKind) -> PingError {
+        PingError::Bridge(TaodBridgeError::Connect {
+            socket_path: PathBuf::from("/tmp/taod.sock"),
+            kind,
+            message: "connect failed".to_string(),
+        })
     }
 }

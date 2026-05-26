@@ -1,5 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
+use std::fmt;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +11,51 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct TaodBridge {
     socket_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub enum TaodBridgeError {
+    Connect {
+        socket_path: PathBuf,
+        kind: ErrorKind,
+        message: String,
+    },
+    Io {
+        operation: &'static str,
+        message: String,
+    },
+    Encode(String),
+    Decode(String),
+    Closed,
+    ResponseTooLarge,
+    UnsupportedPlatform,
+}
+
+impl fmt::Display for TaodBridgeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connect {
+                socket_path,
+                message,
+                ..
+            } => write!(
+                formatter,
+                "failed to connect to taod at {}: {message}",
+                socket_path.display()
+            ),
+            Self::Io { operation, message } => {
+                write!(formatter, "failed to {operation}: {message}")
+            }
+            Self::Encode(message) => write!(formatter, "failed to encode taod request: {message}"),
+            Self::Decode(message) => write!(formatter, "failed to decode taod response: {message}"),
+            Self::Closed => write!(formatter, "taod closed the socket before responding"),
+            Self::ResponseTooLarge => write!(formatter, "taod control response too large"),
+            Self::UnsupportedPlatform => write!(
+                formatter,
+                "taod unix socket control is only supported on unix platforms"
+            ),
+        }
+    }
 }
 
 impl TaodBridge {
@@ -27,6 +74,11 @@ impl TaodBridge {
     }
 
     pub fn request_value<T: Serialize>(&self, request: &T) -> Result<Value, String> {
+        self.request_value_typed(request)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn request_value_typed<T: Serialize>(&self, request: &T) -> Result<Value, TaodBridgeError> {
         request_value(self.socket_path(), request)
     }
 }
@@ -40,42 +92,54 @@ pub fn default_socket_path() -> Result<PathBuf, String> {
 }
 
 #[cfg(unix)]
-fn request_value<T: Serialize>(socket_path: &Path, request: &T) -> Result<Value, String> {
+fn request_value<T: Serialize>(socket_path: &Path, request: &T) -> Result<Value, TaodBridgeError> {
     use std::os::unix::net::UnixStream;
 
     const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-    let mut stream = UnixStream::connect(socket_path).map_err(|error| {
-        format!(
-            "failed to connect to taod at {}: {error}",
-            socket_path.display()
-        )
-    })?;
+    let mut stream =
+        UnixStream::connect(socket_path).map_err(|error| TaodBridgeError::Connect {
+            socket_path: socket_path.to_path_buf(),
+            kind: error.kind(),
+            message: error.to_string(),
+        })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|error| format!("failed to set taod read timeout: {error}"))?;
+        .map_err(|error| TaodBridgeError::Io {
+            operation: "set taod read timeout",
+            message: error.to_string(),
+        })?;
     stream
         .set_write_timeout(Some(Duration::from_secs(10)))
-        .map_err(|error| format!("failed to set taod write timeout: {error}"))?;
+        .map_err(|error| TaodBridgeError::Io {
+            operation: "set taod write timeout",
+            message: error.to_string(),
+        })?;
 
-    let mut payload = serde_json::to_vec(request)
-        .map_err(|error| format!("failed to encode taod request: {error}"))?;
+    let mut payload =
+        serde_json::to_vec(request).map_err(|error| TaodBridgeError::Encode(error.to_string()))?;
     payload.push(b'\n');
     stream
         .write_all(&payload)
-        .map_err(|error| format!("failed to write taod request: {error}"))?;
+        .map_err(|error| TaodBridgeError::Io {
+            operation: "write taod request",
+            message: error.to_string(),
+        })?;
 
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
         let read = stream
             .read(&mut buffer)
-            .map_err(|error| format!("failed to read taod response: {error}"))?;
+            .map_err(|error| TaodBridgeError::Io {
+                operation: "read taod response",
+                message: error.to_string(),
+            })?;
         if read == 0 {
-            return Err("taod closed the socket before responding".to_string());
+            return Err(TaodBridgeError::Closed);
         }
         response.extend_from_slice(&buffer[..read]);
         if response.len() > MAX_RESPONSE_BYTES {
-            return Err("taod control response too large".to_string());
+            return Err(TaodBridgeError::ResponseTooLarge);
         }
         if let Some(newline) = response.iter().position(|byte| *byte == b'\n') {
             response.truncate(newline);
@@ -83,13 +147,15 @@ fn request_value<T: Serialize>(socket_path: &Path, request: &T) -> Result<Value,
         }
     }
 
-    serde_json::from_slice(&response)
-        .map_err(|error| format!("failed to decode taod response: {error}"))
+    serde_json::from_slice(&response).map_err(|error| TaodBridgeError::Decode(error.to_string()))
 }
 
 #[cfg(not(unix))]
-fn request_value<T: Serialize>(_socket_path: &Path, _request: &T) -> Result<Value, String> {
-    Err("taod unix socket control is only supported on unix platforms".to_string())
+fn request_value<T: Serialize>(
+    _socket_path: &Path,
+    _request: &T,
+) -> Result<Value, TaodBridgeError> {
+    Err(TaodBridgeError::UnsupportedPlatform)
 }
 
 #[cfg(test)]
@@ -101,6 +167,22 @@ mod tests {
         let bridge = TaodBridge::new("/tmp/taod.sock");
 
         assert_eq!(bridge.socket_path().to_string_lossy(), "/tmp/taod.sock");
+    }
+
+    #[cfg(all(unix, not(miri)))]
+    #[test]
+    fn request_value_typed_reports_connect_kind() {
+        use super::TaodBridgeError;
+
+        let bridge = TaodBridge::new("/tmp/tao-missing-taod.sock");
+        let error = bridge
+            .request_value_typed(&serde_json::json!({ "type": "ping" }))
+            .expect_err("missing socket fails");
+
+        match error {
+            TaodBridgeError::Connect { kind, .. } => assert_eq!(kind, std::io::ErrorKind::NotFound),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[cfg(all(unix, not(miri)))]
