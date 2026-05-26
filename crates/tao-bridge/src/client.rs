@@ -1,7 +1,9 @@
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(unix)]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::time::Duration;
 
 #[derive(Debug, Clone)]

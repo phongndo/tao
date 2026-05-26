@@ -2,6 +2,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -129,10 +131,10 @@ fn new_worktree(args: &[String], output_mode: OutputMode) -> Result<(), String> 
     if let Some(branch) = &branch {
         request["branch"] = json!(branch);
         request["title"] = json!(branch);
+        request["targetBranch"] = json!(branch);
     }
     if let Some(from_ref) = &from_ref {
         request["baseBranch"] = json!(from_ref);
-        request["targetBranch"] = json!(from_ref);
         request["startPoint"] = json!(from_ref);
     }
 
@@ -140,13 +142,13 @@ fn new_worktree(args: &[String], output_mode: OutputMode) -> Result<(), String> 
     ensure_ok(&response)?;
     let worktree = worktree_from_response(&response)?;
 
-    if json_output {
-        println!("{}", selected_worktree_json(&worktree));
-    } else if output_mode == OutputMode::ShellCd {
+    if output_mode == OutputMode::ShellCd {
         eprintln!("Created worktree");
         eprintln!("  branch: {}", worktree.branch);
         eprintln!("  path:   {}", worktree.path.display());
         println!("{}", worktree.path.display());
+    } else if json_output {
+        println!("{}", selected_worktree_json(&worktree));
     } else if print_path {
         println!("{}", worktree.path.display());
     } else {
@@ -312,7 +314,8 @@ fn remove_command(args: &[String]) -> Result<(), String> {
             .read_line(&mut answer)
             .map_err(|error| format!("failed to read confirmation: {error}"))?;
         if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
-            return Err("remove cancelled".to_string());
+            eprintln!("remove cancelled");
+            return Ok(());
         }
     }
 
@@ -368,8 +371,10 @@ fn connected_bridge() -> Result<TaodBridge, String> {
 }
 
 fn ensure_daemon_running(bridge: &TaodBridge) -> Result<(), String> {
-    if ping_daemon(bridge).is_ok() {
-        return Ok(());
+    match ping_daemon(bridge) {
+        Ok(()) => return Ok(()),
+        Err(error) if is_daemon_unreachable_error(&error) => {}
+        Err(error) => return Err(error),
     }
 
     let binary = find_taod_binary().ok_or_else(|| {
@@ -378,24 +383,68 @@ fn ensure_daemon_running(bridge: &TaodBridge) -> Result<(), String> {
             bridge.socket_path().display()
         )
     })?;
-    Command::new(&binary)
+    let mut command = Command::new(&binary);
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    // SAFETY: this closure only calls async-signal-safe `setsid` and returns an
+    // OS error if it fails. It runs in the child after fork and before exec to
+    // detach taod from the CLI's terminal session.
+    unsafe {
+        command.pre_exec(|| {
+            if setsid() == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    command
         .spawn()
         .map_err(|error| format!("failed to start taod at {}: {error}", binary.display()))?;
 
+    let mut last_error = None;
     for _ in 0..40 {
         std::thread::sleep(Duration::from_millis(75));
-        if ping_daemon(bridge).is_ok() {
-            return Ok(());
+        match ping_daemon(bridge) {
+            Ok(()) => return Ok(()),
+            Err(error) if is_daemon_unreachable_error(&error) => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
         }
     }
 
-    Err(format!(
+    let mut message = format!(
         "timed out waiting for taod to start at {}",
         bridge.socket_path().display()
-    ))
+    );
+    if let Some(error) = last_error {
+        message.push_str(&format!(": {error}"));
+    }
+    Err(message)
+}
+
+fn is_daemon_unreachable_error(error: &str) -> bool {
+    if error == "taod closed the socket before responding" {
+        return true;
+    }
+
+    if !error.starts_with("failed to connect to taod at ") {
+        return false;
+    }
+
+    error.contains("No such file or directory")
+        || error.contains("Connection refused")
+        || error.contains("connection refused")
+        || error.contains("not found")
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn setsid() -> i32;
 }
 
 fn ping_daemon(bridge: &TaodBridge) -> Result<(), String> {
@@ -536,31 +585,50 @@ fn choose_worktree(
     if worktrees.len() == 1 {
         return Ok(worktrees[0].clone());
     }
-    print_worktree_table(&worktrees);
+    eprint_worktree_table(&worktrees);
     Err("provide a query, or install fzf for interactive selection".to_string())
 }
 
 fn resolve_worktree(query: &str, worktrees: &[Worktree]) -> Result<Worktree, String> {
-    let mut matches = Vec::new();
+    let mut stderr = io::stderr();
+    resolve_worktree_with_diagnostics(query, worktrees, &mut stderr)
+}
+
+fn resolve_worktree_with_diagnostics(
+    query: &str,
+    worktrees: &[Worktree],
+    diagnostics: &mut impl Write,
+) -> Result<Worktree, String> {
+    let mut exact_matches = Vec::new();
+    let mut partial_matches = Vec::new();
     for worktree in worktrees {
         let path = worktree.path.to_string_lossy();
-        if worktree.id == query
+        let is_exact = worktree.id == query
             || worktree.branch == query
-            || worktree.branch.contains(query)
             || worktree.folder_name == query
+            || path == query;
+        let is_partial = worktree.branch.contains(query)
             || worktree.folder_name.contains(query)
-            || path == query
-            || path.contains(query)
-        {
-            matches.push(worktree.clone());
+            || path.contains(query);
+
+        if is_exact {
+            exact_matches.push(worktree.clone());
+        } else if is_partial {
+            partial_matches.push(worktree.clone());
         }
     }
+
+    let mut matches = if exact_matches.is_empty() {
+        partial_matches
+    } else {
+        exact_matches
+    };
 
     match matches.len() {
         0 => Err(format!("no worktree matches {query:?}")),
         1 => Ok(matches.remove(0)),
         _ => {
-            print_worktree_table(&matches);
+            let _ = write_worktree_table(diagnostics, &matches);
             Err(format!("query {query:?} matched multiple worktrees"))
         }
     }
@@ -621,6 +689,16 @@ fn choose_worktree_with_fzf(worktrees: &[Worktree]) -> Result<Worktree, String> 
 }
 
 fn print_worktree_table(worktrees: &[Worktree]) {
+    let mut stdout = io::stdout();
+    write_worktree_table(&mut stdout, worktrees).expect("write worktree table");
+}
+
+fn eprint_worktree_table(worktrees: &[Worktree]) {
+    let mut stderr = io::stderr();
+    let _ = write_worktree_table(&mut stderr, worktrees);
+}
+
+fn write_worktree_table(output: &mut impl Write, worktrees: &[Worktree]) -> io::Result<()> {
     let branch_width = worktrees
         .iter()
         .map(|worktree| worktree.branch.len())
@@ -633,19 +711,26 @@ fn print_worktree_table(worktrees: &[Worktree]) {
         .chain(std::iter::once("state".len()))
         .max()
         .unwrap_or("state".len());
-    println!(
+    writeln!(
+        output,
         "{:<branch_width$}  {:<state_width$}  path",
         "branch", "state"
-    );
-    println!("{:-<branch_width$}  {:-<state_width$}  {:-<4}", "", "", "");
+    )?;
+    writeln!(
+        output,
+        "{:-<branch_width$}  {:-<state_width$}  {:-<4}",
+        "", "", ""
+    )?;
     for worktree in worktrees {
-        println!(
+        writeln!(
+            output,
             "{:<branch_width$}  {:<state_width$}  {}",
             worktree.branch,
             worktree.state,
             worktree.path.display()
-        );
+        )?;
     }
+    Ok(())
 }
 
 fn print_worktrees_json(worktrees: &[Worktree]) {
@@ -781,7 +866,7 @@ mod tests {
             "feature/login",
             &[
                 test_worktree("worktree-1", "feature/login", "/tmp/tao/worktrees/one"),
-                test_worktree("worktree-2", "feature/logout", "/tmp/tao/worktrees/two"),
+                test_worktree("worktree-2", "feature/login-old", "/tmp/tao/worktrees/two"),
             ],
         )
         .expect("exact branch resolves");
@@ -791,16 +876,19 @@ mod tests {
 
     #[test]
     fn resolve_worktree_reports_ambiguous_query() {
-        let error = resolve_worktree(
+        let mut diagnostics = Vec::new();
+        let error = resolve_worktree_with_diagnostics(
             "feature",
             &[
                 test_worktree("worktree-1", "feature/login", "/tmp/tao/worktrees/one"),
                 test_worktree("worktree-2", "feature/logout", "/tmp/tao/worktrees/two"),
             ],
+            &mut diagnostics,
         )
         .expect_err("ambiguous query fails");
 
         assert!(error.contains("matched multiple worktrees"));
+        assert!(!diagnostics.is_empty());
     }
 
     #[test]
@@ -834,6 +922,32 @@ mod tests {
         .expect_err("error response fails");
 
         assert_eq!(error, "worktree has uncommitted changes (worktree-dirty)");
+    }
+
+    #[test]
+    fn daemon_unreachable_errors_are_startable() {
+        assert!(is_daemon_unreachable_error(
+            "failed to connect to taod at /tmp/taod.sock: No such file or directory (os error 2)"
+        ));
+        assert!(is_daemon_unreachable_error(
+            "failed to connect to taod at /tmp/taod.sock: Connection refused (os error 61)"
+        ));
+        assert!(is_daemon_unreachable_error(
+            "taod closed the socket before responding"
+        ));
+    }
+
+    #[test]
+    fn daemon_protocol_errors_are_not_startable() {
+        assert!(!is_daemon_unreachable_error(
+            "taod unix socket control is only supported on unix platforms"
+        ));
+        assert!(!is_daemon_unreachable_error(
+            "failed to connect to taod at /tmp/taod.sock: Permission denied (os error 13)"
+        ));
+        assert!(!is_daemon_unreachable_error(
+            "failed to decode taod response: expected value at line 1 column 1"
+        ));
     }
 
     #[test]

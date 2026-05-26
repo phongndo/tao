@@ -152,7 +152,7 @@ _tao() {{
     'help:Show help'
   )
   wt_commands=(
-    'new:Create a generated-folder worktree for a branch'
+    'new:Create a taod-managed worktree for a branch'
     'ls:List worktrees'
     'list:List worktrees'
     'cd:Select a worktree path'

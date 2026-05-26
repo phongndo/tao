@@ -32,10 +32,21 @@ fn wt_new_uses_taod_control_api() {
         seen.clone(),
     );
 
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        socket.exists(),
+        "fake taod socket should exist before invoking tao"
+    );
+
     let output = Command::new(bin)
         .arg("wt")
         .arg("new")
         .arg("feature/test")
+        .arg("--from")
+        .arg("main")
         .arg("--json")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -89,56 +100,78 @@ fn spawn_fake_taod(
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .expect("set read timeout");
-            let request = read_json_line(&mut stream);
-            let request_type = request["type"].as_str().expect("request type");
-            seen.lock()
-                .expect("seen lock")
-                .push(request_type.to_string());
-            let response = match request_type {
-                "ping" => json!({ "ok": true, "status": "ok" }),
-                "workspace.list" => json!({ "ok": true, "workspaces": [] }),
-                "workspace.add" => json!({
-                    "ok": true,
-                    "workspace": {
-                        "id": "workspace-1",
-                        "root_path": repo.to_string_lossy(),
-                        "worktrees": []
-                    }
-                }),
-                "worktree.create" => {
-                    assert_eq!(request["workspaceId"].as_str(), Some("workspace-1"));
-                    assert_eq!(request["branch"].as_str(), Some("feature/test"));
-                    json!({
+            while handled < 4 {
+                let Some(request) = read_json_line(&mut stream) else {
+                    break;
+                };
+                let request_type = request["type"].as_str().expect("request type");
+                seen.lock()
+                    .expect("seen lock")
+                    .push(request_type.to_string());
+                let response = match request_type {
+                    "ping" => json!({ "ok": true, "status": "ok" }),
+                    "workspace.list" => json!({ "ok": true, "workspaces": [] }),
+                    "workspace.add" => json!({
                         "ok": true,
-                        "worktree": {
-                            "id": "worktree-1",
-                            "folder_name": "generated-folder",
-                            "path": worktree_path.to_string_lossy(),
-                            "branch": "feature/test",
-                            "state": "active"
+                        "workspace": {
+                            "id": "workspace-1",
+                            "root_path": repo.to_string_lossy(),
+                            "worktrees": []
                         }
-                    })
-                }
-                other => panic!("unexpected fake taod request: {other}"),
-            };
-            writeln!(stream, "{response}").expect("write fake taod response");
-            handled += 1;
+                    }),
+                    "worktree.create" => {
+                        assert_eq!(request["workspaceId"].as_str(), Some("workspace-1"));
+                        assert_eq!(request["branch"].as_str(), Some("feature/test"));
+                        assert_eq!(request["title"].as_str(), Some("feature/test"));
+                        assert_eq!(request["baseBranch"].as_str(), Some("main"));
+                        assert_eq!(request["targetBranch"].as_str(), Some("feature/test"));
+                        assert_eq!(request["startPoint"].as_str(), Some("main"));
+                        assert!(request.get("folderName").is_none());
+                        json!({
+                            "ok": true,
+                            "worktree": {
+                                "id": "worktree-1",
+                                "folder_name": "generated-folder",
+                                "path": worktree_path.to_string_lossy(),
+                                "branch": "feature/test",
+                                "state": "active"
+                            }
+                        })
+                    }
+                    other => panic!("unexpected fake taod request: {other}"),
+                };
+                writeln!(stream, "{response}").expect("write fake taod response");
+                handled += 1;
+            }
         }
         assert_eq!(handled, 4, "fake taod handled all expected requests");
     })
 }
 
-fn read_json_line(stream: &mut impl Read) -> Value {
+fn read_json_line(stream: &mut impl Read) -> Option<Value> {
     let mut line = Vec::new();
     loop {
         let mut byte = [0_u8; 1];
-        stream.read_exact(&mut byte).expect("read request byte");
+        match stream.read(&mut byte) {
+            Ok(0) if line.is_empty() => return None,
+            Ok(0) => panic!("fake taod request ended before newline"),
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return None;
+            }
+            Err(error) => panic!("read request byte: {error}"),
+        }
         if byte[0] == b'\n' {
             break;
         }
         line.push(byte[0]);
     }
-    serde_json::from_slice(&line).expect("request is json")
+    Some(serde_json::from_slice(&line).expect("request is json"))
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
