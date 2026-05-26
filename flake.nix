@@ -52,6 +52,11 @@
           nativeBuildInputs = (with pkgs; [
             nodejs_22 # LTS (matches CI)
             pnpm_10 # Package manager
+            cargo # Rust CLI workspace
+            rustc # Rust CLI workspace
+            rustfmt # Rust formatting
+            clippy # Rust linting
+            rust-analyzer # Rust language server
             zig_0_15 # taod daemon + Ghostty/Zig tooling
             zls_0_15 # Zig language server matching Zig 0.15.x
             nixpkgs-fmt # nix fmt / CI format check
@@ -112,10 +117,14 @@
             echo "   pnpm:  $(pnpm --version)"
             echo "   zig:   $(zig version)"
             echo "   zls:   $(zls --version)"
+            echo "   rust:  $(rustc --version)"
+            echo "   ra:    $(rust-analyzer --version)"
             echo ""
             echo "   pnpm install && pnpm dev"
             echo "   pnpm check        # TS + Zig lint/format/type/test checks"
+            echo "   pnpm cli:check    # Rust CLI workspace check"
             echo "   pnpm zig:lsp      # verify Zig language server availability"
+            echo "   pnpm cli:lsp      # verify Rust language server availability"
             echo ""
           '';
         };
