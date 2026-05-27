@@ -297,6 +297,10 @@ pub const Daemon = struct {
         return worktree_mod.handleAdoptLocked(self, allocator, request);
     }
 
+    pub fn handleWorktreeHandoffLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+        return worktree_mod.handleHandoffLocked(self, allocator, request);
+    }
+
     pub fn handleWorktreeRefreshLocked(self: *Daemon, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
         return worktree_mod.handleRefreshLocked(self, allocator, request);
     }

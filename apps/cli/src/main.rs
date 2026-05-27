@@ -1,6 +1,8 @@
 mod commands;
 mod review;
+mod shell;
 mod tui;
+mod worktree;
 
 use std::process::ExitCode;
 
