@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 pub fn print_init(shell: &str) -> Result<(), String> {
     match shell {
         "zsh" => {
@@ -20,6 +22,76 @@ pub fn print_init(shell: &str) -> Result<(), String> {
             "unsupported shell: {other} (expected zsh, bash, or fish)"
         )),
     }
+}
+
+pub fn install_init(shell: &str) -> Result<(), String> {
+    match shell {
+        "zsh" | "bash" | "fish" => {}
+        "help" | "--help" | "-h" => {
+            print_help();
+            return Ok(());
+        }
+        other => {
+            return Err(format!(
+                "unsupported shell: {other} (expected zsh, bash, or fish)"
+            ));
+        }
+    }
+
+    let path = init_file(shell)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
+    };
+
+    let block = install_block(shell);
+    let updated = if let Some(start) = existing.find(INSTALL_START) {
+        let end = existing[start..]
+            .find(INSTALL_END)
+            .map(|index| start + index + INSTALL_END.len())
+            .ok_or_else(|| {
+                format!(
+                    "{} has an unterminated tao integration block",
+                    path.display()
+                )
+            })?;
+        let mut value = String::new();
+        value.push_str(&existing[..start]);
+        value.push_str(&block);
+        if existing[end..].starts_with('\n') {
+            value.push_str(&existing[end + 1..]);
+        } else {
+            value.push_str(&existing[end..]);
+        }
+        value
+    } else {
+        let mut value = existing;
+        if !value.is_empty() && !value.ends_with('\n') {
+            value.push('\n');
+        }
+        if !value.is_empty() {
+            value.push('\n');
+        }
+        value.push_str(&block);
+        value
+    };
+
+    std::fs::write(&path, updated)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+
+    println!("Installed tao shell integration in {}", path.display());
+    println!("Restart your shell or run:");
+    match shell {
+        "fish" => println!("  source {}", path.display()),
+        _ => println!("  source {}", path.display()),
+    }
+    Ok(())
 }
 
 pub fn print_completion(shell: &str) -> Result<(), String> {
@@ -48,8 +120,80 @@ pub fn print_completion(shell: &str) -> Result<(), String> {
 
 fn print_help() {
     println!(
-        "tao shell integration\n\nUSAGE:\n  tao init zsh\n  tao init bash\n  tao init fish\n\nEXAMPLES:\n  eval \"$(tao init zsh)\"\n  eval \"$(tao init bash)\"\n  tao init fish | source\n\nShell integration enables auto-cd for `tao wt new` and `tao wt cd`, plus completion."
+        "tao shell integration\n\nUSAGE:\n  tao init zsh\n  tao init bash\n  tao init fish\n  tao init <shell> --install\n\nEXAMPLES:\n  eval \"$(tao init zsh)\"\n  eval \"$(tao init bash)\"\n  tao init fish | source\n  tao init zsh --install\n\nShell integration enables auto-cd for `tao wt new` and `tao wt cd`, plus completion.\nInstall writes to the interactive shell rc file (.zshrc, .bashrc, or config.fish)."
     );
+}
+
+const INSTALL_START: &str = "# >>> tao shell integration >>>";
+const INSTALL_END: &str = "# <<< tao shell integration <<<";
+
+fn install_block(shell: &str) -> String {
+    let fallback = current_exe_shell_quoted().unwrap_or_else(|| "tao".to_string());
+    let command = match shell {
+        "fish" => format!(
+            "set -l __tao_path (type -P tao 2>/dev/null)\nif test -n \"$__tao_path\"\n  set -e TAO_BIN\n  command $__tao_path init fish | source\nelse\n  set -gx TAO_BIN {fallback}\n  command $TAO_BIN init fish | source\nend"
+        ),
+        "zsh" => format!(
+            "if (( $+commands[tao] )); then\n  unset TAO_BIN\n  eval \"$($commands[tao] init zsh)\"\nelse\n  export TAO_BIN={fallback}\n  eval \"$($TAO_BIN init zsh)\"\nfi"
+        ),
+        "bash" => format!(
+            "if __tao_path=\"$(type -P tao)\"; then\n  unset TAO_BIN\n  eval \"$($__tao_path init bash)\"\nelse\n  export TAO_BIN={fallback}\n  eval \"$($TAO_BIN init bash)\"\nfi\nunset __tao_path"
+        ),
+        _ => unreachable!("validated shell"),
+    };
+    format!("{INSTALL_START}\n{command}\n{INSTALL_END}\n")
+}
+
+fn current_exe_shell_quoted() -> Option<String> {
+    let path = std::env::current_exe().ok()?;
+    Some(shell_quote(path.to_string_lossy().as_ref()))
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '/' | '.' | '_' | '-' | ':')
+    }) {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn init_file(shell: &str) -> Result<PathBuf, String> {
+    match shell {
+        "zsh" => {
+            if let Some(zdotdir) = non_empty_var("ZDOTDIR") {
+                Ok(PathBuf::from(zdotdir).join(".zshrc"))
+            } else {
+                Ok(home_dir()?.join(".zshrc"))
+            }
+        }
+        "bash" => Ok(home_dir()?.join(".bashrc")),
+        "fish" => {
+            if let Some(config_home) = non_empty_var("XDG_CONFIG_HOME") {
+                Ok(PathBuf::from(config_home).join("fish").join("config.fish"))
+            } else {
+                Ok(home_dir()?.join(".config").join("fish").join("config.fish"))
+            }
+        }
+        _ => Err(format!(
+            "unsupported shell: {shell} (expected zsh, bash, or fish)"
+        )),
+    }
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_string())
+}
+
+fn non_empty_var(name: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(name).filter(|value| !value.is_empty())
 }
 
 fn print_completion_help() {
@@ -80,15 +224,15 @@ fn print_zsh_function() {
     println!(
         r#"tao() {{
   case "$1:$2" in
-    wt:new|worktree:new|wt:cd|worktree:cd)
+    wt:new|worktree:new|wt:cd|worktree:cd|wt:local|worktree:local|wt:root|worktree:root|wt:switch|worktree:switch|wt:sw|worktree:sw)
       local __tao_path
-      __tao_path="$(command tao __shell-cd "$@")" || return $?
+      __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
       if [[ -n "$__tao_path" ]]; then
         builtin cd "$__tao_path"
       fi
       ;;
     *)
-      command tao "$@"
+      command "${{TAO_BIN:-tao}}" "$@"
       ;;
   esac
 }}
@@ -100,15 +244,15 @@ fn print_bash_function() {
     println!(
         r#"tao() {{
   case "$1:$2" in
-    wt:new|worktree:new|wt:cd|worktree:cd)
+    wt:new|worktree:new|wt:cd|worktree:cd|wt:local|worktree:local|wt:root|worktree:root|wt:switch|worktree:switch|wt:sw|worktree:sw)
       local __tao_path
-      __tao_path="$(command tao __shell-cd "$@")" || return $?
+      __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
       if [[ -n "$__tao_path" ]]; then
         builtin cd "$__tao_path"
       fi
       ;;
     *)
-      command tao "$@"
+      command "${{TAO_BIN:-tao}}" "$@"
       ;;
   esac
 }}
@@ -120,8 +264,12 @@ fn print_fish_function() {
     println!(
         r#"function tao
   switch "$argv[1]:$argv[2]"
-    case wt:new worktree:new wt:cd worktree:cd
-      set -l __tao_path (command tao __shell-cd $argv)
+    case wt:new worktree:new wt:cd worktree:cd wt:local worktree:local wt:root worktree:root wt:switch worktree:switch wt:sw worktree:sw
+      set -l __tao_bin tao
+      if set -q TAO_BIN
+        set __tao_bin $TAO_BIN
+      end
+      set -l __tao_path (command $__tao_bin __shell-cd $argv)
       set -l __tao_status $status
       if test $__tao_status -ne 0
         return $__tao_status
@@ -130,7 +278,11 @@ fn print_fish_function() {
         builtin cd "$__tao_path"
       end
     case '*'
-      command tao $argv
+      set -l __tao_bin tao
+      if set -q TAO_BIN
+        set __tao_bin $TAO_BIN
+      end
+      command $__tao_bin $argv
   end
 end
 "#
@@ -140,6 +292,11 @@ end
 fn print_zsh_completion() {
     println!(
         r#"#compdef tao
+autoload -Uz compinit
+if ! (( $+functions[compdef] )); then
+  compinit
+fi
+
 _tao() {{
   local -a commands wt_commands shells wt_names
   commands=(
@@ -156,6 +313,10 @@ _tao() {{
     'ls:List worktrees'
     'list:List worktrees'
     'cd:Select a worktree path'
+    'local:Enter the local workspace checkout'
+    'root:Enter the local workspace checkout'
+    'switch:Switch to the worktree for the current branch'
+    'sw:Switch to the worktree for the current branch'
     'path:Print a worktree path'
     'rm:Remove a worktree'
     'remove:Remove a worktree'
@@ -176,8 +337,8 @@ _tao() {{
         return
       fi
       case "${{words[3]}}" in
-        cd|path|rm|remove|delete)
-          wt_names=(${{(f)"$(command tao __complete wt-names 2>/dev/null)"}})
+        cd|switch|sw|path|rm|remove|delete)
+          wt_names=(${{(f)"$(command "${{TAO_BIN:-tao}}" __complete wt-names 2>/dev/null)"}})
           _describe 'worktree branch' wt_names
           ;;
         new)
@@ -211,12 +372,12 @@ fn print_bash_completion() {
   case "${{COMP_WORDS[1]}}" in
     wt|worktree)
       if [[ $COMP_CWORD -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "new ls list cd path rm remove delete prune help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "new ls list cd local root switch sw path rm remove delete prune help" -- "$cur") )
         return 0
       fi
       case "${{COMP_WORDS[2]}}" in
-        cd|path|rm|remove|delete)
-          COMPREPLY=( $(compgen -W "$(command tao __complete wt-names 2>/dev/null)" -- "$cur") )
+        cd|switch|sw|path|rm|remove|delete)
+          COMPREPLY=( $(compgen -W "$(command "${{TAO_BIN:-tao}}" __complete wt-names 2>/dev/null)" -- "$cur") )
           return 0
           ;;
         new)
@@ -243,7 +404,11 @@ fn print_fish_completion() {
 end
 
 function __tao_worktree_names
-  command tao __complete wt-names 2>/dev/null
+  set -l __tao_bin tao
+  if set -q TAO_BIN
+    set __tao_bin $TAO_BIN
+  end
+  command $__tao_bin __complete wt-names 2>/dev/null
 end
 
 complete -c tao -f
@@ -254,8 +419,8 @@ complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init 
 complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a init -d 'Print shell integration'
 complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a completion -d 'Print completion script'
 complete -c tao -n '__fish_seen_subcommand_from init completion' -a 'zsh bash fish'
-complete -c tao -n '__tao_seen_command wt; or __tao_seen_command worktree' -a 'new ls list cd path rm remove delete prune help'
-complete -c tao -n '__tao_seen_command cd; or __tao_seen_command path; or __tao_seen_command rm; or __tao_seen_command remove; or __tao_seen_command delete' -a '(__tao_worktree_names)'
+complete -c tao -n '__tao_seen_command wt; or __tao_seen_command worktree' -a 'new ls list cd local root switch sw path rm remove delete prune help'
+complete -c tao -n '__tao_seen_command cd; or __tao_seen_command switch; or __tao_seen_command sw; or __tao_seen_command path; or __tao_seen_command rm; or __tao_seen_command remove; or __tao_seen_command delete' -a '(__tao_worktree_names)'
 "#
     );
 }

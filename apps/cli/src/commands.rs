@@ -44,8 +44,37 @@ fn run_hidden_completion(args: &[String]) -> std::process::ExitCode {
 }
 
 fn run_shell_init(args: &[String]) -> std::process::ExitCode {
-    let shell = args.first().map(String::as_str).unwrap_or("help");
-    match crate::shell::print_init(shell) {
+    let mut shell = None;
+    let mut install = false;
+    for arg in args {
+        match arg.as_str() {
+            "--install" => install = true,
+            "help" | "--help" | "-h" => {
+                let _ = crate::shell::print_init("help");
+                return std::process::ExitCode::SUCCESS;
+            }
+            value if value.starts_with('-') => {
+                eprintln!("tao init: unknown option: {value}");
+                return std::process::ExitCode::FAILURE;
+            }
+            value => {
+                if shell.is_some() {
+                    eprintln!("tao init: accepts at most one shell");
+                    return std::process::ExitCode::FAILURE;
+                }
+                shell = Some(value);
+            }
+        }
+    }
+
+    let shell = shell.unwrap_or("help");
+    let result = if install {
+        crate::shell::install_init(shell)
+    } else {
+        crate::shell::print_init(shell)
+    };
+
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("tao init: {error}");
@@ -82,6 +111,6 @@ fn run_shell_cd(args: &[String]) -> std::process::ExitCode {
 
 fn print_help() {
     println!(
-        "tao CLI\n\nUSAGE:\n  tao tui                         TUI shell for agent/worktree/review workflows\n  tao review                      Review-diff workflow placeholder\n  tao wt new [branch]             Create a git worktree and branch\n  tao wt cd [query]               Print/select a worktree path\n  tao wt ls                       List git worktrees\n  tao wt rm [query]               Remove a git worktree\n  tao init <zsh|bash|fish>        Enable auto-cd and completion\n  tao completion <zsh|bash|fish>  Print completion only\n\nALIASES:\n  tao worktree ...                Same as tao wt ...\n\nRun `tao wt help` for worktree details."
+        "tao CLI\n\nUSAGE:\n  tao tui                         TUI shell for agent/worktree/review workflows\n  tao review                      Review-diff workflow placeholder\n  tao wt new [branch]             Create a git worktree and branch\n  tao wt cd [query]               Print/select a worktree path\n  tao wt local                    CD to the local workspace checkout\n  tao wt switch [branch]          CD to worktree for current/local branch\n  tao wt ls                       List git worktrees\n  tao wt rm [query]               Remove a git worktree\n  tao init <zsh|bash|fish>        Print auto-cd and completion setup\n  tao init <shell> --install      Add setup to the shell rc file\n  tao completion <zsh|bash|fish>  Print completion only\n\nALIASES:\n  tao worktree ...                Same as tao wt ...\n\nRun `tao wt help` for worktree details."
     );
 }
