@@ -224,7 +224,7 @@ fn print_zsh_function() {
     println!(
         r#"tao() {{
   case "$1:$2" in
-    wt:new|worktree:new|wt:cd|worktree:cd|wt:local|worktree:local|wt:root|worktree:root|wt:switch|worktree:switch|wt:sw|worktree:sw)
+    wt:new|worktree:new|wt:cd|worktree:cd|wt:switch|worktree:switch|wt:sw|worktree:sw)
       local __tao_path
       __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
       if [[ -n "$__tao_path" ]]; then
@@ -244,7 +244,7 @@ fn print_bash_function() {
     println!(
         r#"tao() {{
   case "$1:$2" in
-    wt:new|worktree:new|wt:cd|worktree:cd|wt:local|worktree:local|wt:root|worktree:root|wt:switch|worktree:switch|wt:sw|worktree:sw)
+    wt:new|worktree:new|wt:cd|worktree:cd|wt:switch|worktree:switch|wt:sw|worktree:sw)
       local __tao_path
       __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
       if [[ -n "$__tao_path" ]]; then
@@ -264,7 +264,7 @@ fn print_fish_function() {
     println!(
         r#"function tao
   switch "$argv[1]:$argv[2]"
-    case wt:new worktree:new wt:cd worktree:cd wt:local worktree:local wt:root worktree:root wt:switch worktree:switch wt:sw worktree:sw
+    case wt:new worktree:new wt:cd worktree:cd wt:switch worktree:switch wt:sw worktree:sw
       set -l __tao_bin tao
       if set -q TAO_BIN
         set __tao_bin $TAO_BIN
@@ -312,11 +312,9 @@ _tao() {{
     'new:Create a taod-managed worktree for a branch'
     'ls:List worktrees'
     'list:List worktrees'
-    'cd:Select a worktree path'
-    'local:Enter the local workspace checkout'
-    'root:Enter the local workspace checkout'
-    'switch:Switch to the worktree for the current branch'
-    'sw:Switch to the worktree for the current branch'
+    'cd:Switch by branch name'
+    'switch:Switch by branch name'
+    'sw:Switch by branch name'
     'path:Print a worktree path'
     'rm:Remove a worktree'
     'remove:Remove a worktree'
@@ -372,7 +370,7 @@ fn print_bash_completion() {
   case "${{COMP_WORDS[1]}}" in
     wt|worktree)
       if [[ $COMP_CWORD -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "new ls list cd local root switch sw path rm remove delete prune help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "new ls list cd switch sw path rm remove delete prune help" -- "$cur") )
         return 0
       fi
       case "${{COMP_WORDS[2]}}" in
@@ -419,7 +417,7 @@ complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init 
 complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a init -d 'Print shell integration'
 complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a completion -d 'Print completion script'
 complete -c tao -n '__fish_seen_subcommand_from init completion' -a 'zsh bash fish'
-complete -c tao -n '__tao_seen_command wt; or __tao_seen_command worktree' -a 'new ls list cd local root switch sw path rm remove delete prune help'
+complete -c tao -n '__tao_seen_command wt; or __tao_seen_command worktree' -a 'new ls list cd switch sw path rm remove delete prune help'
 complete -c tao -n '__tao_seen_command cd; or __tao_seen_command switch; or __tao_seen_command sw; or __tao_seen_command path; or __tao_seen_command rm; or __tao_seen_command remove; or __tao_seen_command delete' -a '(__tao_worktree_names)'
 "#
     );

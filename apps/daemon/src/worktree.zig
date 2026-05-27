@@ -512,15 +512,12 @@ fn generateAvailableNamesAlloc(self: anytype, database: *db.Database, workspace_
     const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
     defer self.allocator.free(parent);
 
-    var suffix_len: usize = 4;
     var attempts: usize = 0;
     while (attempts < 64) : (attempts += 1) {
-        if (attempts == 16) suffix_len = 6;
-        if (attempts == 32) suffix_len = 8;
         const folder = try worktree_name.generatedFolderNameAlloc(self.allocator);
         var keep_folder = false;
         defer if (!keep_folder) self.allocator.free(folder);
-        const branch = try worktree_name.generatedBranchNameAlloc(self.allocator, suffix_len);
+        const branch = try worktree_name.generatedBranchNameAlloc(self.allocator, 0);
         var keep_branch = false;
         defer if (!keep_branch) self.allocator.free(branch);
         const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
