@@ -149,7 +149,7 @@ fn current_exe_shell_quoted() -> Option<String> {
     Some(shell_quote(path.to_string_lossy().as_ref()))
 }
 
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
@@ -226,10 +226,17 @@ fn print_zsh_function() {
   case "$1:$2" in
     new:*|cd:*|local:*|handoff:*)
       local __tao_path
-      __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
-      if [[ -n "$__tao_path" ]]; then
-        builtin cd "$__tao_path"
-      fi
+      case "$2" in
+        help|--help|-h)
+          command "${{TAO_BIN:-tao}}" "$@"
+          ;;
+        *)
+          __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
+          if [[ -n "$__tao_path" ]]; then
+            builtin cd "$__tao_path"
+          fi
+          ;;
+      esac
       ;;
     *)
       command "${{TAO_BIN:-tao}}" "$@"
@@ -246,10 +253,17 @@ fn print_bash_function() {
   case "$1:$2" in
     new:*|cd:*|local:*|handoff:*)
       local __tao_path
-      __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
-      if [[ -n "$__tao_path" ]]; then
-        builtin cd "$__tao_path"
-      fi
+      case "$2" in
+        help|--help|-h)
+          command "${{TAO_BIN:-tao}}" "$@"
+          ;;
+        *)
+          __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
+          if [[ -n "$__tao_path" ]]; then
+            builtin cd "$__tao_path"
+          fi
+          ;;
+      esac
       ;;
     *)
       command "${{TAO_BIN:-tao}}" "$@"
@@ -268,6 +282,10 @@ fn print_fish_function() {
       set -l __tao_bin tao
       if set -q TAO_BIN
         set __tao_bin $TAO_BIN
+      end
+      if test "$argv[2]" = help; or test "$argv[2]" = --help; or test "$argv[2]" = -h
+        command $__tao_bin $argv
+        return $status
       end
       set -l __tao_path (command $__tao_bin __shell-cd $argv)
       set -l __tao_status $status

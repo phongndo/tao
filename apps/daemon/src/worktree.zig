@@ -88,7 +88,6 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
         break :blk current orelse return errorResponse(allocator, request, .invalid_workspace, "workspace default branch not found");
     };
     defer self.allocator.free(base_branch_owned);
-    const target_branch = request.requestTargetBranch() orelse base_branch_owned;
     const start_point = request.requestStartPoint() orelse base_branch_owned;
 
     var folder_name: []u8 = undefined;
@@ -157,6 +156,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
     defer self.allocator.free(worktree_id);
     const order_index = try database.nextWorktreeOrder(workspace_row.id);
+    const target_branch = request.requestTargetBranch() orelse branch_name;
 
     try database.insertWorktree(.{
         .id = worktree_id,
@@ -500,19 +500,24 @@ fn handleWorktreeToLocalHandoffLocked(
     };
     if (dirty) return errorResponse(allocator, request, .worktree_dirty, "current worktree has uncommitted or untracked changes");
 
+    var restore_failed = false;
     (blk: {
         self.unlock();
         defer self.lock();
         gitSwitch(self.allocator, row.path, &.{ "switch", "--detach" }) catch |detach_err| break :blk detach_err;
         gitSwitch(self.allocator, workspace_row.root_path, &.{ "switch", "--no-guess", branch }) catch |switch_err| {
             gitSwitch(self.allocator, row.path, &.{ "switch", "--no-guess", branch }) catch |restore_err| {
+                restore_failed = true;
                 std.log.warn("failed to restore worktree branch {s} at {s}: {t}", .{ branch, row.path, restore_err });
             };
             break :blk switch_err;
         };
         break :blk {};
     }) catch |err| switch (err) {
-        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git handoff failed"),
+        error.GitFailed, error.GitNotFound => {
+            if (restore_failed) return handoffRestoreFailedResponse(allocator, request, row.path, branch);
+            return errorResponse(allocator, request, .git_failed, "git handoff failed");
+        },
         else => return err,
     };
 
@@ -565,19 +570,24 @@ fn handleLocalToWorktreeHandoffLocked(
     };
     if (dirty) return errorResponse(allocator, request, .worktree_dirty, "local workspace has uncommitted or untracked changes");
 
+    var restore_failed = false;
     (blk: {
         self.unlock();
         defer self.lock();
         gitSwitch(self.allocator, workspace_row.root_path, &.{ "switch", "--detach" }) catch |detach_err| break :blk detach_err;
         gitSwitch(self.allocator, row.path, &.{ "switch", "--no-guess", branch }) catch |switch_err| {
             gitSwitch(self.allocator, workspace_row.root_path, &.{ "switch", "--no-guess", branch }) catch |restore_err| {
+                restore_failed = true;
                 std.log.warn("failed to restore local branch {s} at {s}: {t}", .{ branch, workspace_row.root_path, restore_err });
             };
             break :blk switch_err;
         };
         break :blk {};
     }) catch |err| switch (err) {
-        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git handoff failed"),
+        error.GitFailed, error.GitNotFound => {
+            if (restore_failed) return handoffRestoreFailedResponse(allocator, request, workspace_row.root_path, branch);
+            return errorResponse(allocator, request, .git_failed, "git handoff failed");
+        },
         else => return err,
     };
 
@@ -758,10 +768,7 @@ fn findHandoffLocationAlloc(allocator: std.mem.Allocator, database: *db.Database
         if (isPathUnderMaybeReal(allocator, workspace_row.root_path, current_path)) {
             const score = pathComponentScore(workspace_row.root_path);
             if (score > best_score) {
-                if (best_workspace_id) |value| allocator.free(value);
-                if (best_worktree_id) |value| allocator.free(value);
-                best_workspace_id = try allocator.dupe(u8, workspace_row.id);
-                best_worktree_id = null;
+                try replaceHandoffLocation(allocator, &best_workspace_id, &best_worktree_id, workspace_row.id, null);
                 best_score = score;
             }
         }
@@ -775,10 +782,7 @@ fn findHandoffLocationAlloc(allocator: std.mem.Allocator, database: *db.Database
             if (!isPathUnderMaybeReal(allocator, worktree_row.path, current_path)) continue;
             const score = pathComponentScore(worktree_row.path);
             if (score <= best_score) continue;
-            if (best_workspace_id) |value| allocator.free(value);
-            if (best_worktree_id) |value| allocator.free(value);
-            best_workspace_id = try allocator.dupe(u8, workspace_row.id);
-            best_worktree_id = try allocator.dupe(u8, worktree_row.id);
+            try replaceHandoffLocation(allocator, &best_workspace_id, &best_worktree_id, workspace_row.id, worktree_row.id);
             best_score = score;
         }
     }
@@ -787,6 +791,24 @@ fn findHandoffLocationAlloc(allocator: std.mem.Allocator, database: *db.Database
         .workspace_id = best_workspace_id orelse return error.InvalidWorkspace,
         .worktree_id = best_worktree_id,
     };
+}
+
+fn replaceHandoffLocation(
+    allocator: std.mem.Allocator,
+    best_workspace_id: *?[]u8,
+    best_worktree_id: *?[]u8,
+    workspace_id: []const u8,
+    worktree_id: ?[]const u8,
+) !void {
+    const new_workspace_id = try allocator.dupe(u8, workspace_id);
+    errdefer allocator.free(new_workspace_id);
+    const new_worktree_id = if (worktree_id) |id| try allocator.dupe(u8, id) else null;
+    errdefer if (new_worktree_id) |value| allocator.free(value);
+
+    if (best_workspace_id.*) |value| allocator.free(value);
+    if (best_worktree_id.*) |value| allocator.free(value);
+    best_workspace_id.* = new_workspace_id;
+    best_worktree_id.* = new_worktree_id;
 }
 
 fn findHandoffTargetWorktreeAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow, branch: []const u8) !db.WorktreeRow {
@@ -835,6 +857,16 @@ fn findHandoffTargetWorktreeAlloc(self: anytype, database: *db.Database, workspa
 fn gitSwitch(allocator: std.mem.Allocator, path: []const u8, args: []const []const u8) !void {
     const out = try git.runGitAlloc(allocator, path, args);
     allocator.free(out);
+}
+
+fn handoffRestoreFailedResponse(allocator: std.mem.Allocator, request: rpc.ControlRequestJson, source_path: []const u8, branch: []const u8) ![]u8 {
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "git handoff failed and failed to restore the source checkout; {s} may be left detached. Run `git -C {s} switch --no-guess {s}` to recover.",
+        .{ source_path, source_path, branch },
+    );
+    defer allocator.free(message);
+    return errorResponse(allocator, request, .git_failed, message);
 }
 
 fn findGitWorktree(allocator: std.mem.Allocator, entries: []const git.WorktreeListEntry, path: []const u8) ?git.WorktreeListEntry {
@@ -1006,6 +1038,7 @@ test "generated create uses uuid folder and readable branch" {
     try std.testing.expectEqual(@as(u8, '-'), rows[0].folder_name[23]);
     try std.testing.expect(!std.mem.eql(u8, rows[0].folder_name, rows[0].branch));
     try std.testing.expect(worktree_name.isValidGeneratedBranchName(rows[0].branch));
+    try std.testing.expectEqualStrings(rows[0].branch, rows[0].target_branch.?);
     try std.testing.expectEqualStrings(rows[0].folder_name, std.fs.path.basename(rows[0].path));
 }
 

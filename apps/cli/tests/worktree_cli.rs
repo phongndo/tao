@@ -104,7 +104,6 @@ fn handoff_uses_taod_control_api_and_prints_destination() {
 
     let output = Command::new(&bin)
         .arg("handoff")
-        .arg("--yes")
         .arg("--print-path")
         .current_dir(&worktree_path)
         .env("HOME", &home)
@@ -125,7 +124,6 @@ fn handoff_uses_taod_control_api_and_prints_destination() {
 
     let output = Command::new(&bin)
         .arg("handoff")
-        .arg("--yes")
         .arg("--print-path")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -274,12 +272,21 @@ fn spawn_handoff_taod(
                             "destination_path": first_destination.to_string_lossy()
                         })
                     }
-                    "worktree.handoff" if handled == 3 => json!({
-                        "ok": true,
-                        "branch": "feature/test",
-                        "source_path": first_destination.to_string_lossy(),
-                        "destination_path": second_destination.to_string_lossy()
-                    }),
+                    "worktree.handoff" if handled == 3 => {
+                        let request_path = PathBuf::from(request["path"].as_str().expect("path"));
+                        assert_eq!(
+                            request_path,
+                            first_destination
+                                .canonicalize()
+                                .expect("canonical first destination")
+                        );
+                        json!({
+                            "ok": true,
+                            "branch": "feature/test",
+                            "source_path": first_destination.to_string_lossy(),
+                            "destination_path": second_destination.to_string_lossy()
+                        })
+                    }
                     other => panic!("unexpected fake taod request: {other}"),
                 };
                 writeln!(stream, "{response}").expect("write fake taod response");

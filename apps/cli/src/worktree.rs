@@ -1,3 +1,4 @@
+use crate::shell::shell_quote;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
@@ -229,7 +230,8 @@ fn list_command(args: &[String]) -> Result<(), String> {
     } else if json_output {
         print_worktrees_json(&worktrees);
     } else {
-        print_worktree_table(&worktrees);
+        print_worktree_table(&worktrees)
+            .map_err(|error| format!("failed to write worktree table: {error}"))?;
     }
     Ok(())
 }
@@ -311,7 +313,6 @@ fn handoff_command(args: &[String], output_mode: OutputMode) -> Result<(), Strin
     for arg in args {
         match arg.as_str() {
             "--print-path" => print_path = true,
-            "--yes" | "-y" => {}
             "--help" | "-h" => {
                 println!(
                     "USAGE:\n  tao handoff [--print-path]\n\nMoves the current branch between a taod-managed worktree and the local workspace\ncheckout. taod owns the git handoff and refuses a dirty source checkout. Shell\nintegration cds to the destination checkout."
@@ -740,13 +741,14 @@ fn choose_worktree(
 
 fn resolve_worktree(query: &str, worktrees: &[Worktree]) -> Result<Worktree, String> {
     let mut stderr = io::stderr();
-    resolve_worktree_with_diagnostics(query, worktrees, &mut stderr)
+    resolve_worktree_with_diagnostics(query, worktrees, &mut stderr, io::stderr().is_terminal())
 }
 
 fn resolve_worktree_with_diagnostics(
     query: &str,
     worktrees: &[Worktree],
     diagnostics: &mut impl Write,
+    diagnostics_is_tty: bool,
 ) -> Result<Worktree, String> {
     let mut exact_matches = Vec::new();
     let mut partial_matches = Vec::new();
@@ -777,14 +779,14 @@ fn resolve_worktree_with_diagnostics(
         0 => Err(format!("no worktree matches {query:?}")),
         1 => Ok(matches.remove(0)),
         _ => {
-            let style = Style::stderr();
+            let style = Style::new(diagnostics_is_tty);
             let _ = writeln!(
                 diagnostics,
                 "{}",
                 style.yellow(format!("! Query {query:?} matched multiple worktrees"))
             );
             let _ = writeln!(diagnostics);
-            let _ = write_worktree_table(diagnostics, &matches);
+            let _ = write_worktree_table(diagnostics, &matches, diagnostics_is_tty);
             let _ = writeln!(diagnostics, "\nTry an exact branch, folder, id, or path.");
             Err(format!("query {query:?} matched multiple worktrees"))
         }
@@ -868,9 +870,9 @@ fn choose_worktree_with_fzf(worktrees: &[Worktree]) -> Result<Worktree, String> 
         .ok_or_else(|| "fzf selected an unknown worktree".to_string())
 }
 
-fn print_worktree_table(worktrees: &[Worktree]) {
+fn print_worktree_table(worktrees: &[Worktree]) -> io::Result<()> {
     let mut stdout = io::stdout();
-    write_worktree_table(&mut stdout, worktrees).expect("write worktree table");
+    write_worktree_table(&mut stdout, worktrees, io::stdout().is_terminal())
 }
 
 fn print_created_worktree(worktree: &Worktree) {
@@ -1007,11 +1009,15 @@ fn eprint_worktree_summary(worktree: &Worktree, style: &Style) {
 
 fn eprint_worktree_table(worktrees: &[Worktree]) {
     let mut stderr = io::stderr();
-    let _ = write_worktree_table(&mut stderr, worktrees);
+    let _ = write_worktree_table(&mut stderr, worktrees, io::stderr().is_terminal());
 }
 
-fn write_worktree_table(output: &mut impl Write, worktrees: &[Worktree]) -> io::Result<()> {
-    let style = Style::new(io::stdout().is_terminal() || io::stderr().is_terminal());
+fn write_worktree_table(
+    output: &mut impl Write,
+    worktrees: &[Worktree],
+    output_is_tty: bool,
+) -> io::Result<()> {
+    let style = Style::new(output_is_tty);
     let branch_width = worktrees
         .iter()
         .map(|worktree| worktree.branch.len())
@@ -1221,19 +1227,6 @@ fn path_contains(parent: &Path, child: &Path) -> bool {
     child == parent || child.starts_with(parent)
 }
 
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value.chars().all(|character| {
-        character.is_ascii_alphanumeric() || matches!(character, '/' | '.' | '_' | '-' | ':')
-    }) {
-        value.to_string()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1277,6 +1270,7 @@ mod tests {
                 test_worktree("worktree-2", "feature/logout", "/tmp/tao/worktrees/two"),
             ],
             &mut diagnostics,
+            false,
         )
         .expect_err("ambiguous query fails");
 
@@ -1373,7 +1367,7 @@ mod tests {
 
     #[test]
     fn shell_quote_quotes_spaces() {
-        assert_eq!(shell_quote("/tmp/a b"), "'/tmp/a b'");
+        assert_eq!(crate::shell::shell_quote("/tmp/a b"), "'/tmp/a b'");
     }
 
     fn test_worktree(id: &str, branch: &str, path: &str) -> Worktree {
