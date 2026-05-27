@@ -120,7 +120,7 @@ pub fn print_completion(shell: &str) -> Result<(), String> {
 
 fn print_help() {
     println!(
-        "tao shell integration\n\nUSAGE:\n  tao init zsh\n  tao init bash\n  tao init fish\n  tao init <shell> --install\n\nEXAMPLES:\n  eval \"$(tao init zsh)\"\n  eval \"$(tao init bash)\"\n  tao init fish | source\n  tao init zsh --install\n\nShell integration enables auto-cd for `tao wt new` and `tao wt cd`, plus completion.\nInstall writes to the interactive shell rc file (.zshrc, .bashrc, or config.fish)."
+        "tao shell integration\n\nUSAGE:\n  tao init zsh\n  tao init bash\n  tao init fish\n  tao init <shell> --install\n\nEXAMPLES:\n  eval \"$(tao init zsh)\"\n  eval \"$(tao init bash)\"\n  tao init fish | source\n  tao init zsh --install\n\nShell integration enables auto-cd for `tao new`, `tao switch`, and `tao local`, plus completion.\nInstall writes to the interactive shell rc file (.zshrc, .bashrc, or config.fish)."
     );
 }
 
@@ -224,7 +224,7 @@ fn print_zsh_function() {
     println!(
         r#"tao() {{
   case "$1:$2" in
-    wt:new|worktree:new|wt:cd|worktree:cd|wt:switch|worktree:switch|wt:sw|worktree:sw)
+    new:*|switch:*|sw:*|local:*)
       local __tao_path
       __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
       if [[ -n "$__tao_path" ]]; then
@@ -244,7 +244,7 @@ fn print_bash_function() {
     println!(
         r#"tao() {{
   case "$1:$2" in
-    wt:new|worktree:new|wt:cd|worktree:cd|wt:switch|worktree:switch|wt:sw|worktree:sw)
+    new:*|switch:*|sw:*|local:*)
       local __tao_path
       __tao_path="$(command "${{TAO_BIN:-tao}}" __shell-cd "$@")" || return $?
       if [[ -n "$__tao_path" ]]; then
@@ -264,7 +264,7 @@ fn print_fish_function() {
     println!(
         r#"function tao
   switch "$argv[1]:$argv[2]"
-    case wt:new worktree:new wt:cd worktree:cd wt:switch worktree:switch wt:sw worktree:sw
+    case 'new:*' 'switch:*' 'sw:*' 'local:*'
       set -l __tao_bin tao
       if set -q TAO_BIN
         set __tao_bin $TAO_BIN
@@ -298,28 +298,21 @@ if ! (( $+functions[compdef] )); then
 fi
 
 _tao() {{
-  local -a commands wt_commands shells wt_names
+  local -a commands shells wt_names
   commands=(
     'tui:TUI shell for agent/worktree/review workflows'
     'review:Review-diff workflow placeholder'
-    'wt:Worktree workflows'
-    'worktree:Worktree workflows'
+    'new:Create a taod-managed worktree for a branch'
+    'switch:Switch by branch name'
+    'sw:Switch by branch name'
+    'local:Enter the local workspace checkout'
+    'ls:List worktrees'
+    'path:Print a worktree path'
+    'rm:Remove a worktree'
+    'prune:Prune stale worktree metadata'
     'init:Print shell integration'
     'completion:Print completion script'
     'help:Show help'
-  )
-  wt_commands=(
-    'new:Create a taod-managed worktree for a branch'
-    'ls:List worktrees'
-    'list:List worktrees'
-    'cd:Switch by branch name'
-    'switch:Switch by branch name'
-    'sw:Switch by branch name'
-    'path:Print a worktree path'
-    'rm:Remove a worktree'
-    'remove:Remove a worktree'
-    'prune:Prune stale worktree metadata'
-    'help:Show worktree help'
   )
   shells=('zsh:Z shell' 'bash:Bash' 'fish:Fish')
 
@@ -329,20 +322,12 @@ _tao() {{
   fi
 
   case "${{words[2]}}" in
-    wt|worktree)
-      if (( CURRENT == 3 )); then
-        _describe 'worktree command' wt_commands
-        return
-      fi
-      case "${{words[3]}}" in
-        cd|switch|sw|path|rm|remove|delete)
-          wt_names=(${{(f)"$(command "${{TAO_BIN:-tao}}" __complete wt-names 2>/dev/null)"}})
-          _describe 'worktree branch' wt_names
-          ;;
-        new)
-          _arguments '*:branch name:'
-          ;;
-      esac
+    switch|sw|path|rm)
+      wt_names=(${{(f)"$(command "${{TAO_BIN:-tao}}" __complete wt-names 2>/dev/null)"}})
+      _describe 'worktree branch' wt_names
+      ;;
+    new)
+      _arguments '*:branch name:'
       ;;
     init|completion)
       _describe 'shell' shells
@@ -363,25 +348,19 @@ fn print_bash_completion() {
   prev="${{COMP_WORDS[COMP_CWORD-1]}}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "tui review wt worktree init completion help" -- "$cur") )
+    COMPREPLY=( $(compgen -W "tui review new switch sw local ls path rm prune init completion help" -- "$cur") )
     return 0
   fi
 
   case "${{COMP_WORDS[1]}}" in
-    wt|worktree)
+    switch|sw|path|rm)
       if [[ $COMP_CWORD -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "new ls list cd switch sw path rm remove delete prune help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "$(command "${{TAO_BIN:-tao}}" __complete wt-names 2>/dev/null)" -- "$cur") )
         return 0
       fi
-      case "${{COMP_WORDS[2]}}" in
-        cd|switch|sw|path|rm|remove|delete)
-          COMPREPLY=( $(compgen -W "$(command "${{TAO_BIN:-tao}}" __complete wt-names 2>/dev/null)" -- "$cur") )
-          return 0
-          ;;
-        new)
-          return 0
-          ;;
-      esac
+      ;;
+    new)
+      return 0
       ;;
     init|completion)
       COMPREPLY=( $(compgen -W "zsh bash fish" -- "$cur") )
@@ -410,15 +389,20 @@ function __tao_worktree_names
 end
 
 complete -c tao -f
-complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a tui -d 'TUI shell for agent/worktree/review workflows'
-complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a review -d 'Review-diff workflow placeholder'
-complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a wt -d 'Worktree workflows'
-complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a worktree -d 'Worktree workflows'
-complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a init -d 'Print shell integration'
-complete -c tao -n 'not __fish_seen_subcommand_from tui review wt worktree init completion help' -a completion -d 'Print completion script'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a tui -d 'TUI shell for agent/worktree/review workflows'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a review -d 'Review-diff workflow placeholder'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a new -d 'Create a taod-managed worktree for a branch'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a switch -d 'Switch by branch name'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a sw -d 'Switch by branch name'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a local -d 'Enter the local workspace checkout'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a ls -d 'List worktrees'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a path -d 'Print a worktree path'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a rm -d 'Remove a worktree'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a prune -d 'Prune stale worktree metadata'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a init -d 'Print shell integration'
+complete -c tao -n 'not __fish_seen_subcommand_from tui review new switch sw local ls path rm prune init completion help' -a completion -d 'Print completion script'
 complete -c tao -n '__fish_seen_subcommand_from init completion' -a 'zsh bash fish'
-complete -c tao -n '__tao_seen_command wt; or __tao_seen_command worktree' -a 'new ls list cd switch sw path rm remove delete prune help'
-complete -c tao -n '__tao_seen_command cd; or __tao_seen_command switch; or __tao_seen_command sw; or __tao_seen_command path; or __tao_seen_command rm; or __tao_seen_command remove; or __tao_seen_command delete' -a '(__tao_worktree_names)'
+complete -c tao -n '__tao_seen_command switch; or __tao_seen_command sw; or __tao_seen_command path; or __tao_seen_command rm' -a '(__tao_worktree_names)'
 "#
     );
 }

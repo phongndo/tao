@@ -42,7 +42,6 @@ fn wt_new_uses_taod_control_api() {
     );
 
     let output = Command::new(bin)
-        .arg("wt")
         .arg("new")
         .arg("feature/test")
         .arg("--from")
@@ -51,7 +50,7 @@ fn wt_new_uses_taod_control_api() {
         .current_dir(&repo)
         .env("HOME", &home)
         .output()
-        .expect("run tao wt new");
+        .expect("run tao new");
 
     assert!(
         output.status.success(),

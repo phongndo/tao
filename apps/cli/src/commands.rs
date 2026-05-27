@@ -14,7 +14,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> std::process::ExitCode {
             crate::review::print_scaffold();
             std::process::ExitCode::SUCCESS
         }
-        "wt" | "worktree" => crate::worktree::run(args[1..].to_vec()),
+        "new" | "switch" | "sw" | "local" | "ls" | "path" | "rm" | "prune" => {
+            crate::worktree::run(args)
+        }
         "init" => run_shell_init(&args[1..]),
         "completion" | "completions" => run_completion(&args[1..]),
         "__complete" => run_hidden_completion(&args[1..]),
@@ -96,12 +98,12 @@ fn run_completion(args: &[String]) -> std::process::ExitCode {
 
 fn run_shell_cd(args: &[String]) -> std::process::ExitCode {
     let Some(scope) = args.first().map(String::as_str) else {
-        eprintln!("tao: internal shell-cd command requires wt/worktree");
+        eprintln!("tao: internal shell-cd command requires a worktree command");
         return std::process::ExitCode::FAILURE;
     };
 
     match scope {
-        "wt" | "worktree" => crate::worktree::run_for_shell_cd(args[1..].to_vec()),
+        "new" | "switch" | "sw" | "local" => crate::worktree::run_for_shell_cd(args.to_vec()),
         command => {
             eprintln!("tao: internal shell-cd does not support {command}");
             std::process::ExitCode::FAILURE
@@ -111,6 +113,6 @@ fn run_shell_cd(args: &[String]) -> std::process::ExitCode {
 
 fn print_help() {
     println!(
-        "tao CLI\n\nUSAGE:\n  tao tui                         TUI shell for agent/worktree/review workflows\n  tao review                      Review-diff workflow placeholder\n  tao wt new [branch]             Create a git worktree and branch\n  tao wt switch [branch]          CD to worktree by branch name\n  tao wt switch --local           CD to the local workspace checkout\n  tao wt ls                       List git worktrees\n  tao wt rm [query]               Remove a git worktree\n  tao init <zsh|bash|fish>        Print auto-cd and completion setup\n  tao init <shell> --install      Add setup to the shell rc file\n  tao completion <zsh|bash|fish>  Print completion only\n\nALIASES:\n  tao wt sw, tao wt cd            Same as tao wt switch\n  tao worktree ...                Same as tao wt ...\n\nRun `tao wt help` for worktree details."
+        "tao CLI\n\nUSAGE:\n  tao                             Open the TUI\n  tao new [branch]                Create a git worktree and branch\n  tao switch [branch]             CD to worktree by branch name\n  tao local                       CD to the local workspace checkout\n  tao ls                          List git worktrees\n  tao rm [branch]                 Remove a git worktree\n  tao init <zsh|bash|fish>        Print auto-cd and completion setup\n  tao init <shell> --install      Add setup to the shell rc file\n  tao completion <zsh|bash|fish>  Print completion only\n\nALIASES:\n  tao sw                          Same as tao switch\n\nRun `tao help` for details."
     );
 }
