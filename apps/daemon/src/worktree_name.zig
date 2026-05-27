@@ -129,7 +129,7 @@ pub fn generatedFolderNameAlloc(allocator: std.mem.Allocator) ![]u8 {
     return out;
 }
 
-pub fn generatedBranchNameAlloc(allocator: std.mem.Allocator, _: usize) ![]u8 {
+pub fn generatedBranchNameAlloc(allocator: std.mem.Allocator) ![]u8 {
     var random_seed: u64 = undefined;
     std.crypto.random.bytes(std.mem.asBytes(&random_seed));
     random_seed ^= counter.fetchAdd(1, .monotonic) + 1;
@@ -234,7 +234,7 @@ test "generated folder and branch names are valid" {
     try std.testing.expectEqual(@as(u8, '-'), folder[23]);
     try std.testing.expectEqual(@as(u8, '4'), folder[14]);
 
-    const branch = try generatedBranchNameAlloc(std.testing.allocator, 4);
+    const branch = try generatedBranchNameAlloc(std.testing.allocator);
     defer std.testing.allocator.free(branch);
     try std.testing.expect(isValidGeneratedBranchName(branch));
     var dash_count: usize = 0;

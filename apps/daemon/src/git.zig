@@ -143,6 +143,21 @@ pub fn currentBranchAlloc(allocator: std.mem.Allocator, path: []const u8) !?[]u8
     }
 }
 
+pub fn currentNamedBranchAlloc(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
+    const args = [_][]const u8{ "branch", "--show-current" };
+    const branch = try runGitAlloc(allocator, path, &args);
+    if (branch.len == 0) {
+        allocator.free(branch);
+        return null;
+    }
+    return branch;
+}
+
+pub fn revParseAlloc(allocator: std.mem.Allocator, path: []const u8, rev: []const u8) ![]u8 {
+    const args = [_][]const u8{ "rev-parse", "--verify", rev };
+    return runGitAlloc(allocator, path, &args);
+}
+
 pub fn defaultBranchAlloc(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
     const origin_args = [_][]const u8{ "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD" };
     if (runGitAlloc(allocator, path, &origin_args)) |origin_head| {

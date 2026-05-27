@@ -14,7 +14,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> std::process::ExitCode {
             crate::review::print_scaffold();
             std::process::ExitCode::SUCCESS
         }
-        "new" | "switch" | "sw" | "local" | "ls" | "path" | "rm" | "prune" => {
+        "new" | "cd" | "local" | "handoff" | "ls" | "path" | "rm" | "prune" => {
             crate::worktree::run(args)
         }
         "init" => run_shell_init(&args[1..]),
@@ -103,7 +103,7 @@ fn run_shell_cd(args: &[String]) -> std::process::ExitCode {
     };
 
     match scope {
-        "new" | "switch" | "sw" | "local" => crate::worktree::run_for_shell_cd(args.to_vec()),
+        "new" | "cd" | "local" | "handoff" => crate::worktree::run_for_shell_cd(args.to_vec()),
         command => {
             eprintln!("tao: internal shell-cd does not support {command}");
             std::process::ExitCode::FAILURE
@@ -113,6 +113,6 @@ fn run_shell_cd(args: &[String]) -> std::process::ExitCode {
 
 fn print_help() {
     println!(
-        "tao CLI\n\nUSAGE:\n  tao                             Open the TUI\n  tao new [branch]                Create a git worktree and branch\n  tao switch [branch]             CD to worktree by branch name\n  tao local                       CD to the local workspace checkout\n  tao ls                          List git worktrees\n  tao rm [branch]                 Remove a git worktree\n  tao init <zsh|bash|fish>        Print auto-cd and completion setup\n  tao init <shell> --install      Add setup to the shell rc file\n  tao completion <zsh|bash|fish>  Print completion only\n\nALIASES:\n  tao sw                          Same as tao switch\n\nRun `tao help` for details."
+        "tao CLI\n\nUSAGE:\n  tao                             Open the TUI\n  tao new [branch]                Create a git worktree and branch\n  tao cd [branch]                 CD to worktree by branch name\n  tao local                       CD to the local workspace checkout\n  tao handoff                     Move current worktree branch to local checkout\n  tao ls                          List git worktrees\n  tao rm [branch]                 Remove a git worktree\n  tao init <zsh|bash|fish>        Print auto-cd and completion setup\n  tao init <shell> --install      Add setup to the shell rc file\n  tao completion <zsh|bash|fish>  Print completion only\n\nRun `tao help` for details."
     );
 }

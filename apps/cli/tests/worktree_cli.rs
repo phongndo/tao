@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -70,6 +70,84 @@ fn wt_new_uses_taod_control_api() {
     assert_eq!(
         seen.lock().expect("seen lock").as_slice(),
         &["ping", "workspace.list", "workspace.add", "worktree.create"]
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn handoff_uses_taod_control_api_and_prints_destination() {
+    let bin = std::env::var("CARGO_BIN_EXE_tao").expect("cargo exposes tao binary path");
+    let tmp = unique_temp_dir("tao-cli-handoff");
+    let home = tmp.join("home");
+    let repo = tmp.join("repo");
+    let run = home.join(".tao").join("run");
+    std::fs::create_dir_all(&run).expect("create taod run dir");
+    std::fs::create_dir_all(&repo).expect("create repo dir");
+    let socket = run.join("taod.sock");
+    let worktree_path = home
+        .join(".tao")
+        .join("worktrees")
+        .join("repo")
+        .join("generated-folder");
+
+    std::fs::create_dir_all(&worktree_path).expect("create worktree path");
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let server = spawn_handoff_taod(
+        socket.clone(),
+        worktree_path.clone(),
+        repo.clone(),
+        worktree_path.clone(),
+        seen.clone(),
+    );
+    wait_for_socket(&socket);
+
+    let output = Command::new(&bin)
+        .arg("handoff")
+        .arg("--yes")
+        .arg("--print-path")
+        .current_dir(&worktree_path)
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run tao handoff");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        repo.display().to_string()
+    );
+
+    let output = Command::new(&bin)
+        .arg("handoff")
+        .arg("--yes")
+        .arg("--print-path")
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run tao handoff back to worktree");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        worktree_path.display().to_string()
+    );
+
+    server.join().expect("fake taod joins");
+    assert_eq!(
+        seen.lock().expect("seen lock").as_slice(),
+        &["ping", "worktree.handoff", "ping", "worktree.handoff"]
     );
     let _ = std::fs::remove_dir_all(tmp);
 }
@@ -145,6 +223,82 @@ fn spawn_fake_taod(
         }
         assert_eq!(handled, 4, "fake taod handled all expected requests");
     })
+}
+
+fn spawn_handoff_taod(
+    socket: PathBuf,
+    first_source: PathBuf,
+    first_destination: PathBuf,
+    second_destination: PathBuf,
+    seen: Arc<Mutex<Vec<String>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let listener = UnixListener::bind(socket).expect("bind fake taod socket");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut handled = 0;
+        while handled < 4 && Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("accept fake taod request: {error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+            while handled < 4 {
+                let Some(request) = read_json_line(&mut stream) else {
+                    break;
+                };
+                let request_type = request["type"].as_str().expect("request type");
+                seen.lock()
+                    .expect("seen lock")
+                    .push(request_type.to_string());
+                let response = match request_type {
+                    "ping" => json!({ "ok": true, "status": "ok" }),
+                    "worktree.handoff" if handled == 1 => {
+                        let request_path = PathBuf::from(request["path"].as_str().expect("path"));
+                        assert_eq!(
+                            request_path,
+                            first_source.canonicalize().expect("canonical first source")
+                        );
+                        json!({
+                            "ok": true,
+                            "branch": "feature/test",
+                            "source_path": first_source.to_string_lossy(),
+                            "destination_path": first_destination.to_string_lossy()
+                        })
+                    }
+                    "worktree.handoff" if handled == 3 => json!({
+                        "ok": true,
+                        "branch": "feature/test",
+                        "source_path": first_destination.to_string_lossy(),
+                        "destination_path": second_destination.to_string_lossy()
+                    }),
+                    other => panic!("unexpected fake taod request: {other}"),
+                };
+                writeln!(stream, "{response}").expect("write fake taod response");
+                handled += 1;
+            }
+        }
+        assert_eq!(handled, 4, "fake taod handled all expected requests");
+    })
+}
+
+fn wait_for_socket(socket: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        socket.exists(),
+        "fake taod socket should exist before invoking tao"
+    );
 }
 
 fn read_json_line(stream: &mut impl Read) -> Option<Value> {
