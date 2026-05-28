@@ -5,9 +5,7 @@ Tao is a workspace terminal for shells and AI coding agents. It pairs an Electro
 ## What is in this repo
 
 - **Desktop app** (`apps/desktop`): Electron, React, xterm.js WebGL, tabs/splits, workspace sidebar, file tree, and changes view.
-- **CLI** (`apps/cli`): Rust scaffold for headless worktree commands, an agent TUI, and review-diff workflows.
 - **Daemon** (`apps/daemon`): Zig `taod` process for PTY lifecycle, VT parsing via `libghostty-vt`, snapshots, event logs, SQLite metadata, Git/worktree operations, and bundled `pi`/`codex`/`claude` adapters.
-- **Bridge crate** (`crates/tao-bridge`): Rust scaffold for future taod protocol/client code shared by CLI surfaces.
 - **Shared package** (`packages/shared`): typed IPC/session/workspace protocol definitions used by main, preload, renderer, and scripts.
 
 `taod` runs outside the renderer so live sessions can survive window reloads/restarts. The Electron app is mostly a client: it starts or connects to the daemon, opens attach streams over Unix sockets, and renders terminal/workspace state.
@@ -34,10 +32,8 @@ pnpm zig:check       # Zig lint + format check + tests
 ```text
 tao/
 ├── apps/
-│   ├── cli/         # Rust CLI scaffold for headless and TUI workflows
 │   ├── daemon/      # Zig taod daemon and built-in agent adapters
 │   └── desktop/     # Electron main/preload/renderer app and benchmarks
-├── crates/          # Rust crates shared by CLI surfaces
 ├── packages/        # Shared workspace packages
 ├── docs/            # Architecture notes and implementation plans
 ├── scripts/         # Repo-level maintenance and packaging scripts
