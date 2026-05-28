@@ -3680,15 +3680,6 @@ export function App() {
             >
               <FiFolderPlus size={15} />
             </button>
-            <button
-              type="button"
-              className="icon-button sidebar-settings-button"
-              aria-label="Open settings"
-              title="Settings"
-              onClick={() => setIsSettingsOpen(true)}
-            >
-              <FiSettings size={15} />
-            </button>
           </div>
           <div className="sidebar-content">
             {workspaces.length > 0 ? (
@@ -3702,6 +3693,17 @@ export function App() {
                 ))}
               </div>
             ) : null}
+            <div className="sidebar-footer">
+              <button
+                type="button"
+                className="icon-button sidebar-settings-button"
+                aria-label="Open settings"
+                title="Settings"
+                onClick={() => setIsSettingsOpen(true)}
+              >
+                <FiSettings size={15} />
+              </button>
+            </div>
           </div>
         </ResizeShell>
       ) : null}
