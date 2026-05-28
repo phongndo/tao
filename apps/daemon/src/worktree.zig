@@ -45,6 +45,14 @@ const WorktreePayload = struct {
     worktree: workspace.WorktreeResponse,
 };
 
+const WorktreeHandoffPayload = struct {
+    id: ?[]const u8 = null,
+    ok: bool = true,
+    branch: []const u8,
+    source_path: []const u8,
+    destination_path: []const u8,
+};
+
 pub fn handleListLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
     const database = if (self.database) |*database| database else return errorResponse(allocator, request, .state_conflict, "database is unavailable");
     const workspace_id = request.requestWorkspaceId() orelse return errorResponse(allocator, request, .invalid_workspace, "workspace_id is required");
@@ -80,7 +88,6 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
         break :blk current orelse return errorResponse(allocator, request, .invalid_workspace, "workspace default branch not found");
     };
     defer self.allocator.free(base_branch_owned);
-    const target_branch = request.requestTargetBranch() orelse base_branch_owned;
     const start_point = request.requestStartPoint() orelse base_branch_owned;
 
     var folder_name: []u8 = undefined;
@@ -149,6 +156,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
     defer self.allocator.free(worktree_id);
     const order_index = try database.nextWorktreeOrder(workspace_row.id);
+    const target_branch = request.requestTargetBranch() orelse branch_name;
 
     try database.insertWorktree(.{
         .id = worktree_id,
@@ -224,6 +232,35 @@ pub fn handleRefreshLocked(self: anytype, allocator: std.mem.Allocator, request:
         else => return err,
     };
     return handleListLocked(self, allocator, request);
+}
+
+pub fn handleHandoffLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
+    const database = if (self.database) |*database| database else return errorResponse(allocator, request, .state_conflict, "database is unavailable");
+    const raw_path = request.requestRootPath() orelse request.cwd orelse return errorResponse(allocator, request, .invalid_path, "path is required");
+    const current_path = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk workspace.canonicalPathAlloc(self.allocator, raw_path);
+    }) catch return errorResponse(allocator, request, .invalid_path, "invalid handoff path");
+    defer self.allocator.free(current_path);
+
+    const location = findHandoffLocationAlloc(self.allocator, database, current_path) catch |err| switch (err) {
+        error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "handoff must run from inside a taod workspace or worktree"),
+        else => return err,
+    };
+    defer location.deinit(self.allocator);
+
+    var workspace_row = (try database.findWorkspaceById(self.allocator, location.workspace_id)) orelse return errorResponse(allocator, request, .invalid_workspace, "workspace not found");
+    defer workspace_row.deinit(self.allocator);
+    if (workspace_row.git_common_dir == null) return errorResponse(allocator, request, .invalid_workspace, "workspace is not a Git repository");
+
+    if (location.worktree_id) |worktree_id| {
+        var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return errorResponse(allocator, request, .invalid_worktree, "worktree not found");
+        defer row.deinit(self.allocator);
+        return handleWorktreeToLocalHandoffLocked(self, allocator, request, database, &workspace_row, &row);
+    }
+
+    return handleLocalToWorktreeHandoffLocked(self, allocator, request, database, &workspace_row);
 }
 
 pub fn handleRemoveLocked(self: anytype, allocator: std.mem.Allocator, request: rpc.ControlRequestJson) ![]u8 {
@@ -415,6 +452,159 @@ pub fn handleReorderLocked(self: anytype, allocator: std.mem.Allocator, request:
     return rpc.responseJsonAlloc(allocator, .{ .id = request.requestId(), .ok = true });
 }
 
+const HandoffLocation = struct {
+    workspace_id: []u8,
+    worktree_id: ?[]u8 = null,
+
+    fn deinit(self: *const HandoffLocation, allocator: std.mem.Allocator) void {
+        allocator.free(self.workspace_id);
+        if (self.worktree_id) |value| allocator.free(value);
+    }
+};
+
+fn handleWorktreeToLocalHandoffLocked(
+    self: anytype,
+    allocator: std.mem.Allocator,
+    request: rpc.ControlRequestJson,
+    database: *db.Database,
+    workspace_row: *const db.WorkspaceRow,
+    row: *const db.WorktreeRow,
+) ![]u8 {
+    const branch = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.currentNamedBranchAlloc(self.allocator, row.path);
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to read current worktree branch"),
+        else => return err,
+    } orelse return errorResponse(allocator, request, .invalid_worktree, "current worktree checkout is detached");
+    defer self.allocator.free(branch);
+
+    const branch_exists = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.branchExists(self.allocator, workspace_row.root_path, branch);
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to check local branch"),
+        else => return err,
+    };
+    if (!branch_exists) return errorResponse(allocator, request, .invalid_worktree, "local branch does not exist");
+
+    const dirty = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.isDirty(self.allocator, row.path);
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to determine worktree status"),
+        else => return err,
+    };
+    if (dirty) return errorResponse(allocator, request, .worktree_dirty, "current worktree has uncommitted or untracked changes");
+
+    var restore_failed = false;
+    (blk: {
+        self.unlock();
+        defer self.lock();
+        gitSwitch(self.allocator, row.path, &.{ "switch", "--detach" }) catch |detach_err| break :blk detach_err;
+        gitSwitch(self.allocator, workspace_row.root_path, &.{ "switch", "--no-guess", branch }) catch |switch_err| {
+            gitSwitch(self.allocator, row.path, &.{ "switch", "--no-guess", branch }) catch |restore_err| {
+                restore_failed = true;
+                std.log.warn("failed to restore worktree branch {s} at {s}: {t}", .{ branch, row.path, restore_err });
+            };
+            break :blk switch_err;
+        };
+        break :blk {};
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => {
+            if (restore_failed) return handoffRestoreFailedResponse(allocator, request, row.path, branch);
+            return errorResponse(allocator, request, .git_failed, "git handoff failed");
+        },
+        else => return err,
+    };
+
+    refreshWorkspaceWorktrees(self, database, workspace_row.id) catch |err| switch (err) {
+        error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "workspace not found"),
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
+        else => return err,
+    };
+
+    return jsonAlloc(allocator, WorktreeHandoffPayload{
+        .id = request.requestId(),
+        .branch = branch,
+        .source_path = row.path,
+        .destination_path = workspace_row.root_path,
+    });
+}
+
+fn handleLocalToWorktreeHandoffLocked(
+    self: anytype,
+    allocator: std.mem.Allocator,
+    request: rpc.ControlRequestJson,
+    database: *db.Database,
+    workspace_row: *const db.WorkspaceRow,
+) ![]u8 {
+    const branch = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.currentNamedBranchAlloc(self.allocator, workspace_row.root_path);
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to read local workspace branch"),
+        else => return err,
+    } orelse return errorResponse(allocator, request, .invalid_workspace, "local workspace checkout is detached");
+    defer self.allocator.free(branch);
+
+    var row = findHandoffTargetWorktreeAlloc(self, database, workspace_row, branch) catch |err| switch (err) {
+        error.InvalidWorktree => return errorResponse(allocator, request, .invalid_worktree, "no taod-managed worktree can receive the current branch"),
+        error.StateConflict => return errorResponse(allocator, request, .state_conflict, "current branch matched multiple taod-managed worktrees"),
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to resolve worktree handoff target"),
+        else => return err,
+    };
+    defer row.deinit(self.allocator);
+
+    const dirty = (blk: {
+        self.unlock();
+        defer self.lock();
+        break :blk git.isDirty(self.allocator, workspace_row.root_path);
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to determine local workspace status"),
+        else => return err,
+    };
+    if (dirty) return errorResponse(allocator, request, .worktree_dirty, "local workspace has uncommitted or untracked changes");
+
+    var restore_failed = false;
+    (blk: {
+        self.unlock();
+        defer self.lock();
+        gitSwitch(self.allocator, workspace_row.root_path, &.{ "switch", "--detach" }) catch |detach_err| break :blk detach_err;
+        gitSwitch(self.allocator, row.path, &.{ "switch", "--no-guess", branch }) catch |switch_err| {
+            gitSwitch(self.allocator, workspace_row.root_path, &.{ "switch", "--no-guess", branch }) catch |restore_err| {
+                restore_failed = true;
+                std.log.warn("failed to restore local branch {s} at {s}: {t}", .{ branch, workspace_row.root_path, restore_err });
+            };
+            break :blk switch_err;
+        };
+        break :blk {};
+    }) catch |err| switch (err) {
+        error.GitFailed, error.GitNotFound => {
+            if (restore_failed) return handoffRestoreFailedResponse(allocator, request, workspace_row.root_path, branch);
+            return errorResponse(allocator, request, .git_failed, "git handoff failed");
+        },
+        else => return err,
+    };
+
+    refreshWorkspaceWorktrees(self, database, workspace_row.id) catch |err| switch (err) {
+        error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "workspace not found"),
+        error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "git worktree list failed"),
+        else => return err,
+    };
+
+    return jsonAlloc(allocator, WorktreeHandoffPayload{
+        .id = request.requestId(),
+        .branch = branch,
+        .source_path = workspace_row.root_path,
+        .destination_path = row.path,
+    });
+}
+
 fn refreshSingleWorktree(self: anytype, database: *db.Database, worktree_id: []const u8) !void {
     var row = (try database.findWorktreeById(self.allocator, worktree_id)) orelse return error.InvalidWorktree;
     defer row.deinit(self.allocator);
@@ -512,15 +702,12 @@ fn generateAvailableNamesAlloc(self: anytype, database: *db.Database, workspace_
     const parent = try worktreeParentPathAlloc(self.allocator, self.config.root_dir, workspace_row.workspace_slug);
     defer self.allocator.free(parent);
 
-    var suffix_len: usize = 4;
     var attempts: usize = 0;
     while (attempts < 64) : (attempts += 1) {
-        if (attempts == 16) suffix_len = 6;
-        if (attempts == 32) suffix_len = 8;
         const folder = try worktree_name.generatedFolderNameAlloc(self.allocator);
         var keep_folder = false;
         defer if (!keep_folder) self.allocator.free(folder);
-        const branch = try worktree_name.generatedBranchNameAlloc(self.allocator, suffix_len);
+        const branch = try worktree_name.generatedBranchNameAlloc(self.allocator);
         var keep_branch = false;
         defer if (!keep_branch) self.allocator.free(branch);
         const candidate_path = try std.fs.path.join(self.allocator, &.{ parent, folder });
@@ -564,6 +751,124 @@ fn worktreeResponsesAlloc(allocator: std.mem.Allocator, rows: []const db.Worktre
     return responses;
 }
 
+fn findHandoffLocationAlloc(allocator: std.mem.Allocator, database: *db.Database, current_path: []const u8) !HandoffLocation {
+    const workspace_rows = try database.listWorkspaces(allocator);
+    defer {
+        for (workspace_rows) |*row| row.deinit(allocator);
+        allocator.free(workspace_rows);
+    }
+
+    var best_workspace_id: ?[]u8 = null;
+    errdefer if (best_workspace_id) |value| allocator.free(value);
+    var best_worktree_id: ?[]u8 = null;
+    errdefer if (best_worktree_id) |value| allocator.free(value);
+    var best_score: usize = 0;
+
+    for (workspace_rows) |workspace_row| {
+        if (isPathUnderMaybeReal(allocator, workspace_row.root_path, current_path)) {
+            const score = pathComponentScore(workspace_row.root_path);
+            if (score > best_score) {
+                try replaceHandoffLocation(allocator, &best_workspace_id, &best_worktree_id, workspace_row.id, null);
+                best_score = score;
+            }
+        }
+
+        const worktree_rows = try database.listWorktreesForWorkspace(allocator, workspace_row.id);
+        defer {
+            for (worktree_rows) |*row| row.deinit(allocator);
+            allocator.free(worktree_rows);
+        }
+        for (worktree_rows) |worktree_row| {
+            if (!isPathUnderMaybeReal(allocator, worktree_row.path, current_path)) continue;
+            const score = pathComponentScore(worktree_row.path);
+            if (score <= best_score) continue;
+            try replaceHandoffLocation(allocator, &best_workspace_id, &best_worktree_id, workspace_row.id, worktree_row.id);
+            best_score = score;
+        }
+    }
+
+    return .{
+        .workspace_id = best_workspace_id orelse return error.InvalidWorkspace,
+        .worktree_id = best_worktree_id,
+    };
+}
+
+fn replaceHandoffLocation(
+    allocator: std.mem.Allocator,
+    best_workspace_id: *?[]u8,
+    best_worktree_id: *?[]u8,
+    workspace_id: []const u8,
+    worktree_id: ?[]const u8,
+) !void {
+    const new_workspace_id = try allocator.dupe(u8, workspace_id);
+    errdefer allocator.free(new_workspace_id);
+    const new_worktree_id = if (worktree_id) |id| try allocator.dupe(u8, id) else null;
+    errdefer if (new_worktree_id) |value| allocator.free(value);
+
+    if (best_workspace_id.*) |value| allocator.free(value);
+    if (best_worktree_id.*) |value| allocator.free(value);
+    best_workspace_id.* = new_workspace_id;
+    best_worktree_id.* = new_worktree_id;
+}
+
+fn findHandoffTargetWorktreeAlloc(self: anytype, database: *db.Database, workspace_row: *const db.WorkspaceRow, branch: []const u8) !db.WorktreeRow {
+    const rows = try database.listWorktreesForWorkspace(self.allocator, workspace_row.id);
+    defer {
+        for (rows) |*row| row.deinit(self.allocator);
+        self.allocator.free(rows);
+    }
+
+    var match_count: usize = 0;
+    var matched_id: ?[]u8 = null;
+    defer if (matched_id) |value| self.allocator.free(value);
+
+    for (rows) |row| {
+        if (!std.mem.eql(u8, row.branch, branch) and (row.target_branch == null or !std.mem.eql(u8, row.target_branch.?, branch))) continue;
+        match_count += 1;
+        if (match_count == 1) matched_id = try self.allocator.dupe(u8, row.id);
+    }
+    if (match_count == 0) {
+        const branch_head = blk: {
+            self.unlock();
+            defer self.lock();
+            break :blk try git.revParseAlloc(self.allocator, workspace_row.root_path, branch);
+        };
+        defer self.allocator.free(branch_head);
+        for (rows) |row| {
+            const worktree_head = blk: {
+                self.unlock();
+                defer self.lock();
+                break :blk git.revParseAlloc(self.allocator, row.path, "HEAD") catch null;
+            };
+            if (worktree_head) |head| {
+                defer self.allocator.free(head);
+                if (!std.mem.eql(u8, head, branch_head)) continue;
+                match_count += 1;
+                if (match_count == 1) matched_id = try self.allocator.dupe(u8, row.id);
+            }
+        }
+    }
+
+    if (match_count == 0) return error.InvalidWorktree;
+    if (match_count > 1) return error.StateConflict;
+    return (try database.findWorktreeById(self.allocator, matched_id.?)) orelse error.InvalidWorktree;
+}
+
+fn gitSwitch(allocator: std.mem.Allocator, path: []const u8, args: []const []const u8) !void {
+    const out = try git.runGitAlloc(allocator, path, args);
+    allocator.free(out);
+}
+
+fn handoffRestoreFailedResponse(allocator: std.mem.Allocator, request: rpc.ControlRequestJson, source_path: []const u8, branch: []const u8) ![]u8 {
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "git handoff failed and failed to restore the source checkout; {s} may be left detached. Run `git -C {s} switch --no-guess {s}` to recover.",
+        .{ source_path, source_path, branch },
+    );
+    defer allocator.free(message);
+    return errorResponse(allocator, request, .git_failed, message);
+}
+
 fn findGitWorktree(allocator: std.mem.Allocator, entries: []const git.WorktreeListEntry, path: []const u8) ?git.WorktreeListEntry {
     for (entries) |entry| {
         if (std.mem.eql(u8, entry.path, path)) return entry;
@@ -579,6 +884,20 @@ fn findGitWorktree(allocator: std.mem.Allocator, entries: []const git.WorktreeLi
 fn isPathUnder(parent: []const u8, path: []const u8) bool {
     if (!std.mem.startsWith(u8, path, parent)) return false;
     return path.len == parent.len or path[parent.len] == std.fs.path.sep;
+}
+
+fn isPathUnderMaybeReal(allocator: std.mem.Allocator, parent: []const u8, path: []const u8) bool {
+    if (isPathUnder(parent, path)) return true;
+    const real_parent = std.fs.realpathAlloc(allocator, parent) catch return false;
+    defer allocator.free(real_parent);
+    return isPathUnder(real_parent, path);
+}
+
+fn pathComponentScore(path: []const u8) usize {
+    var score: usize = 0;
+    var iterator = std.fs.path.componentIterator(path) catch return path.len;
+    while (iterator.next()) |_| score += 1;
+    return score;
 }
 
 fn pathExists(path: []const u8) bool {
@@ -719,6 +1038,7 @@ test "generated create uses uuid folder and readable branch" {
     try std.testing.expectEqual(@as(u8, '-'), rows[0].folder_name[23]);
     try std.testing.expect(!std.mem.eql(u8, rows[0].folder_name, rows[0].branch));
     try std.testing.expect(worktree_name.isValidGeneratedBranchName(rows[0].branch));
+    try std.testing.expectEqualStrings(rows[0].branch, rows[0].target_branch.?);
     try std.testing.expectEqualStrings(rows[0].folder_name, std.fs.path.basename(rows[0].path));
 }
 

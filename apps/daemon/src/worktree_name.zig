@@ -129,8 +129,7 @@ pub fn generatedFolderNameAlloc(allocator: std.mem.Allocator) ![]u8 {
     return out;
 }
 
-pub fn generatedBranchNameAlloc(allocator: std.mem.Allocator, suffix_hex_len: usize) ![]u8 {
-    const suffix_len = @max(@as(usize, 4), suffix_hex_len);
+pub fn generatedBranchNameAlloc(allocator: std.mem.Allocator) ![]u8 {
     var random_seed: u64 = undefined;
     std.crypto.random.bytes(std.mem.asBytes(&random_seed));
     random_seed ^= counter.fetchAdd(1, .monotonic) + 1;
@@ -140,13 +139,8 @@ pub fn generatedBranchNameAlloc(allocator: std.mem.Allocator, suffix_hex_len: us
 
     const adjective = adjectives[random.uintLessThan(usize, adjectives.len)];
     const name = names[random.uintLessThan(usize, names.len)];
-    const suffix = try allocator.alloc(u8, suffix_len);
-    defer allocator.free(suffix);
-    for (suffix) |*ch| {
-        ch.* = "0123456789abcdef"[random.uintLessThan(usize, 16)];
-    }
 
-    return std.fmt.allocPrint(allocator, "{s}-{s}-{s}", .{ adjective, name, suffix });
+    return std.fmt.allocPrint(allocator, "{s}-{s}", .{ adjective, name });
 }
 
 pub fn branchForFolderAlloc(allocator: std.mem.Allocator, folder_name: []const u8) ![]u8 {
@@ -240,9 +234,14 @@ test "generated folder and branch names are valid" {
     try std.testing.expectEqual(@as(u8, '-'), folder[23]);
     try std.testing.expectEqual(@as(u8, '4'), folder[14]);
 
-    const branch = try generatedBranchNameAlloc(std.testing.allocator, 4);
+    const branch = try generatedBranchNameAlloc(std.testing.allocator);
     defer std.testing.allocator.free(branch);
     try std.testing.expect(isValidGeneratedBranchName(branch));
+    var dash_count: usize = 0;
+    for (branch) |ch| {
+        if (ch == '-') dash_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), dash_count);
     const detached_branch = try detachedBranchForFolderAlloc(std.testing.allocator, folder);
     defer std.testing.allocator.free(detached_branch);
     try std.testing.expect(isSafeBranchName(detached_branch));

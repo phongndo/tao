@@ -32,6 +32,7 @@ pub const RequestType = enum {
     worktree_create,
     worktree_remove,
     worktree_adopt,
+    worktree_handoff,
     worktree_refresh,
     worktree_reorder,
     ping,
@@ -113,6 +114,9 @@ pub const RequestType = enum {
         if (std.mem.eql(u8, text, "worktree.adopt")) return .worktree_adopt;
         if (std.mem.eql(u8, text, "worktree:adopt")) return .worktree_adopt;
         if (std.mem.eql(u8, text, "worktree-adopt")) return .worktree_adopt;
+        if (std.mem.eql(u8, text, "worktree.handoff")) return .worktree_handoff;
+        if (std.mem.eql(u8, text, "worktree:handoff")) return .worktree_handoff;
+        if (std.mem.eql(u8, text, "worktree-handoff")) return .worktree_handoff;
         if (std.mem.eql(u8, text, "worktree.refresh")) return .worktree_refresh;
         if (std.mem.eql(u8, text, "worktree:refresh")) return .worktree_refresh;
         if (std.mem.eql(u8, text, "worktree-refresh")) return .worktree_refresh;

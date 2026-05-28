@@ -183,6 +183,7 @@ pub fn handleControlRequest(self: anytype, allocator: std.mem.Allocator, request
         .worktree_create => self.handleWorktreeCreateLocked(allocator, request),
         .worktree_remove => self.handleWorktreeRemoveLocked(allocator, request),
         .worktree_adopt => self.handleWorktreeAdoptLocked(allocator, request),
+        .worktree_handoff => self.handleWorktreeHandoffLocked(allocator, request),
         .worktree_refresh => self.handleWorktreeRefreshLocked(allocator, request),
         .worktree_reorder => self.handleWorktreeReorderLocked(allocator, request),
         .ping => blk: {
