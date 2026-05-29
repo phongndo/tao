@@ -50,7 +50,8 @@ an initial Zig daemon skeleton/tooling setup while the larger `taud` runtime wor
 
 - **File-backed UI layout**: pane/workspace/tab layout is persisted to `~/.tau/pane-layouts.json`
   through Electron main IPC instead of Zustand `persist` + browser `localStorage`.
-- **One-time localStorage migration**: existing `localStorage['tau-workspaces']` data is read once
+- **One-time localStorage migration**: existing `localStorage['tao-workspaces']` or
+  `localStorage['tau-workspaces']` data is read once
   and then removed after a successful migration path is available.
 - **File-backed settings service**: `~/.tau/settings.json` read/write IPC exists with default
   persistence settings.
@@ -844,7 +845,8 @@ async function ensureTaudRunning() {
 }
 ```
 
-One-time migration from existing `localStorage['tau-workspaces']` on first launch.
+One-time migration from existing `localStorage['tao-workspaces']` or
+`localStorage['tau-workspaces']` on first launch.
 
 ---
 

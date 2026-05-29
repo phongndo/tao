@@ -81,7 +81,7 @@ const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
 const TAB_DRAG_TYPE = 'application/x-tau-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
 const LAYOUT_WRITE_DEBOUNCE_MS = 150
-const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tau-workspaces'
+const LEGACY_LOCAL_STORAGE_LAYOUT_KEYS = ['tao-workspaces', 'tau-workspaces'] as const
 const EMPTY_FILE_TREE: WorkspaceFileTree = { paths: [], gitStatus: [] }
 const DEFAULT_DIFF_COMPARE_BRANCH = 'main'
 const DIFF_FOCUS_FILE_EVENT = 'tau:focus-diff-file'
@@ -159,10 +159,13 @@ const FILE_TREE_UNSAFE_CSS = `
 
 function readLegacyLocalStorageLayout(): unknown | null {
   try {
-    const raw = window.localStorage?.getItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { state?: unknown }
-    return parsed.state ?? parsed
+    for (const key of LEGACY_LOCAL_STORAGE_LAYOUT_KEYS) {
+      const raw = window.localStorage?.getItem(key)
+      if (!raw) continue
+      const parsed = JSON.parse(raw) as { state?: unknown }
+      return parsed.state ?? parsed
+    }
+    return null
   } catch (error) {
     console.warn('[layout] Failed to read legacy localStorage layout:', error)
     return null
@@ -171,7 +174,9 @@ function readLegacyLocalStorageLayout(): unknown | null {
 
 function clearLegacyLocalStorageLayout(): void {
   try {
-    window.localStorage?.removeItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
+    for (const key of LEGACY_LOCAL_STORAGE_LAYOUT_KEYS) {
+      window.localStorage?.removeItem(key)
+    }
   } catch {
     // Best-effort migration cleanup only.
   }

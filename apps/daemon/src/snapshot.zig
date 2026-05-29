@@ -4,7 +4,7 @@ const limits = @import("limits.zig");
 const assert = std.debug.assert;
 
 pub const file_name = "current-screen.state";
-pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x53, 0x4e, 0x50, 0x01, 0x00 }; // TAUSNP\1\0
+pub const file_magic = [_]u8{ 0x54, 0x41, 0x55, 0x53, 0x4e, 0x50, 0x01, 0x00 }; // TAUSNP\1\0
 pub const file_version: u16 = 1;
 pub const file_header_size: usize = 34;
 pub const max_backend_name_bytes: usize = limits.snapshot_backend_name_bytes_max;

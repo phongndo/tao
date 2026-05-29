@@ -5,14 +5,17 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   currentScreenCrc32,
+  CURRENT_SCREEN_SNAPSHOT_MAGIC,
   decodeCurrentScreenSnapshot,
   decodeFallbackCurrentScreenSnapshotPayload,
   decodeGhosttyNativeCurrentScreenSnapshotPayload,
   encodeCurrentScreenSnapshot,
   encodeFallbackCurrentScreenSnapshot,
   encodeGhosttyNativeCurrentScreenSnapshot,
+  FALLBACK_CURRENT_SCREEN_MAGIC,
   fallbackCurrentScreenSnapshotToAnsi,
   fallbackScreenFromText,
+  GHOSTTY_NATIVE_CURRENT_SCREEN_MAGIC,
   ghosttyNativeCurrentScreenSnapshotToAnsi,
   isFallbackCurrentScreenSnapshot,
   isGhosttyNativeCurrentScreenSnapshot,
@@ -250,11 +253,26 @@ test('taud resize and exit payload helpers round-trip', () => {
     cols: 120,
     rows: 40,
   })
+  assert.deepEqual(decodeTaudResizePayload(encodeTaudResizePayload(0xffff, 0xffff)), {
+    cols: 0xffff,
+    rows: 0xffff,
+  })
+  assert.throws(() => encodeTaudResizePayload(0x10000, 24), /Invalid taud resize dimensions/u)
+  assert.throws(() => encodeTaudResizePayload(120, 0x10000), /Invalid taud resize dimensions/u)
 
   const exitPayload = Buffer.alloc(8)
   exitPayload.writeInt32BE(2, 0)
   exitPayload.writeInt32BE(15, 4)
   assert.deepEqual(decodeTaudExitPayload(exitPayload), { exitCode: 2, signal: 15 })
+})
+
+test('current-screen snapshot magic constants encode Tau signatures', () => {
+  assert.equal(Buffer.from(CURRENT_SCREEN_SNAPSHOT_MAGIC).toString('latin1'), 'TAUSNP\x01\x00')
+  assert.equal(Buffer.from(FALLBACK_CURRENT_SCREEN_MAGIC).toString('latin1'), 'TAUVFB\x01\x00')
+  assert.equal(
+    Buffer.from(GHOSTTY_NATIVE_CURRENT_SCREEN_MAGIC).toString('latin1'),
+    'TAUGVT\x01\x00',
+  )
 })
 
 test('current-screen snapshot envelopes and fallback payloads round-trip', () => {

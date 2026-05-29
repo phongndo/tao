@@ -272,7 +272,8 @@ with open('${testfile}', 'w') as f:
 
   # Use Python for the full create+attach+stream+drain measurement
   # This handles binary protocol frames properly
-  python3 -c "
+  local bulk_output
+  bulk_output="$(python3 -c "
 import socket, json, time, os, struct, sys
 
 SOCKET_PATH = os.path.expanduser('${SOCKET_PATH}')
@@ -379,12 +380,11 @@ print(f'TAUD_BULK|duration|{elapsed:.0f}|ms')
 print(f'TAUD_BULK|bytes|{total_bytes}|bytes')
 print(f'TAUD_BULK|throughput|{throughput:.1f}|MB/s')
 print(f'TAUD_BULK|frames|{frame_count}|count')
-" 2>&1
-
-  # Capture the TAUD_BULK lines into results
-  # The python script above prints TAUD_BULK|... lines to stdout
-  # We grep for them in the function output and write to RESULTS_FILE
-  # (This runs inline so the output is captured)
+" 2>&1)"
+  printf '%s\n' "$bulk_output"
+  printf '%s\n' "$bulk_output" \
+    | awk -F'|' '/^TAUD_BULK\|/ { printf "taud_bulk_throughput|%s|%s|%s\n", $2, $3, $4 }' \
+    >> "$RESULTS_FILE"
 
   # Cleanup
   json_request "{\"type\":\"kill\",\"id\":\"k-bulk\",\"sessionId\":\"${sid}\"}" 2 >/dev/null || true

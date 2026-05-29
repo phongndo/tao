@@ -3,7 +3,7 @@ const limits = @import("limits.zig");
 
 const assert = std.debug.assert;
 
-pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAUEV\0\1\0
+pub const file_magic = [_]u8{ 0x54, 0x41, 0x55, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAUEV\0\1\0
 pub const session_id_header_size: usize = 36;
 pub const file_header_size: usize = file_magic.len + session_id_header_size + 8;
 pub const frame_magic: u32 = 0x54414546; // TAEF

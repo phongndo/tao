@@ -4,7 +4,7 @@ const ghostty_vt = @import("ghostty-vt");
 pub const backend_name = "ghostty_native";
 pub const supports_current_screen_snapshots = true;
 
-const current_screen_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x47, 0x56, 0x54, 0x01, 0x00 }; // TAUGVT\1\0
+const current_screen_magic = [_]u8{ 0x54, 0x41, 0x55, 0x47, 0x56, 0x54, 0x01, 0x00 }; // TAUGVT\1\0
 const current_screen_version: u16 = 1;
 const current_screen_header_size: usize = 26;
 const max_current_screen_bytes: usize = 16 * 1024 * 1024;

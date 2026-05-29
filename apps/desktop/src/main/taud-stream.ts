@@ -83,7 +83,14 @@ export function encodeTaudStreamFrame(input: {
 }
 
 export function encodeTaudResizePayload(cols: number, rows: number): Buffer {
-  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0) {
+  if (
+    !Number.isInteger(cols) ||
+    !Number.isInteger(rows) ||
+    cols <= 0 ||
+    rows <= 0 ||
+    cols > 0xffff ||
+    rows > 0xffff
+  ) {
     throw new Error('Invalid taud resize dimensions')
   }
 
