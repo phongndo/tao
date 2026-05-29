@@ -16,14 +16,14 @@ import {
   FiPlusSquare,
   FiRefreshCw,
   FiRotateCcw,
-  FiFolderPlus,
+  FiSearch,
   FiPlus,
   FiSettings,
   FiTerminal,
   FiTrash2,
   FiX,
 } from 'react-icons/fi'
-import { TbLayoutSidebar, TbLayoutSidebarRight } from 'react-icons/tb'
+import { TbLayoutSidebar } from 'react-icons/tb'
 import {
   Component,
   type ErrorInfo,
@@ -62,7 +62,6 @@ import {
 import { sanitizeTerminalTitle } from '../osc-title'
 import { runRendererEffect } from '../runtime'
 import { WorkspaceMetadataCache } from '../workspace-service'
-import { useGitBranch } from '../workspaceQueries'
 import { TerminalPane } from './TerminalPane'
 import { getDiffFileName, type ParsedDiffFile, type ParsedDiffResult } from '../diff-parser'
 import { parseDiffFilesOffThread } from '../diff-parser-client'
@@ -78,7 +77,6 @@ const SIDEBAR_EXPANDED_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
 const RIGHT_SIDEBAR_MAX_WIDTH = SIDEBAR_MAX_WIDTH * 2
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
-const TAB_DRAG_TYPE = 'application/x-tao-tab'
 const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
 const LAYOUT_WRITE_DEBOUNCE_MS = 150
 const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
@@ -89,6 +87,7 @@ const DIFF_AUTO_COLLAPSE_FILE_COUNT = 20
 const DIFF_AUTO_COLLAPSE_PATCH_CHARS = 1024 * 1024
 const DIFF_MAX_EXPANDED_FILE_BODIES = 12
 const TAOD_DIAGNOSTICS_POLL_MS = 5000
+const RIGHT_SIDEBAR_ENABLED = false
 const FILE_TREE_ICONS = { set: 'complete', colored: true } as const
 const FILE_TREE_ICON_SPRITE = getBuiltInSpriteSheet(FILE_TREE_ICONS.set)
 const FILE_TREE_ICON_RESOLVER = createFileTreeIconResolver(FILE_TREE_ICONS)
@@ -239,6 +238,13 @@ type DaemonRecoveryPanelRow = {
   label: string
   value: string
   tone?: 'error'
+}
+
+type ThreadSearchEntry = {
+  id: string
+  title: string
+  projectName: string
+  index: number
 }
 
 type DiffPanelErrorBoundaryProps = {
@@ -468,17 +474,6 @@ function getActivePaneBorderLines(
 
 function workspaceNameFromPath(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
-}
-
-function workspaceInitials(name: string): string {
-  const words = name.match(/[\p{L}\p{N}]+/gu) ?? []
-  const initials = words
-    .slice(0, 2)
-    .map((word) => word.at(0))
-    .join('')
-    .toUpperCase()
-
-  return initials || name.slice(0, 2).toUpperCase() || '•'
 }
 
 function workspaceFromRecord(record: WorkspaceRecord): Workspace {
@@ -827,11 +822,25 @@ function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean 
   return Array.from(dataTransfer.types).includes(type)
 }
 
-function WorkspaceItem({
+function ProjectItem({
   workspace,
+  threads,
+  activeThreadId,
+  tabLabelsById,
+  archivedTabIds,
+  onSelectThread,
+  onNewThread,
+  onCloseThread,
   onReorderWorkspace,
 }: {
   workspace: Workspace
+  threads: Tab[]
+  activeThreadId: string | null
+  tabLabelsById: ReadonlyMap<string, string>
+  archivedTabIds: ReadonlySet<string>
+  onSelectThread(tabId: string): void
+  onNewThread(workspaceId: string): void
+  onCloseThread(tabId: string): void
   onReorderWorkspace(
     workspaceId: string,
     targetWorkspaceId: string,
@@ -840,102 +849,39 @@ function WorkspaceItem({
 }) {
   const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
   const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
-  const selectWorktree = useTaoStore((state) => state.selectWorktree)
-  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
-  const upsertWorktree = useTaoStore((state) => state.upsertWorktree)
-  const removeWorktree = useTaoStore((state) => state.removeWorktree)
   const removeWorkspace = useTaoStore((state) => state.removeWorkspace)
-  const [isCreatingWorktree, setIsCreatingWorktree] = useState(false)
   const [isExpanded, setIsExpanded] = useState(true)
-  const [worktreeError, setWorktreeError] = useState<string | null>(null)
-  const isActive = activeWorkspaceId === workspace.id
-  const hasActiveWorktree = (workspace.worktrees ?? []).some(
-    (worktree) => activeWorkspaceId === worktreeContextId(worktree.id),
-  )
-  const branch = useGitBranch(workspace.projectPath, isExpanded || isActive || hasActiveWorktree)
-  const branchLabel = branch.isError
-    ? 'git error'
-    : (branch.data ?? (branch.isLoading ? 'loading' : 'no git branch'))
-  const label = `${workspace.name} — local branch ${branchLabel}`
-
-  async function handleCreateWorktree() {
-    if (isCreatingWorktree) return
-    setIsCreatingWorktree(true)
-    setWorktreeError(null)
-    setIsExpanded(true)
-    try {
-      const workspaceResponse = await window.electronAPI.addWorkspace({
-        rootPath: workspace.projectPath,
-        workspaceId: workspace.id,
-        name: workspace.name,
-        orderIndex: workspace.order,
-      })
-      if (!workspaceResponse.ok) {
-        setWorktreeError(workspaceResponse.error.message)
-        console.warn('[worktree] Failed to register workspace:', workspaceResponse.error.message)
-        return
-      }
-
-      upsertWorkspace(workspaceFromRecord(workspaceResponse.value))
-
-      const response = await window.electronAPI.createWorktree({
-        workspaceId: workspaceResponse.value.id,
-      })
-      if (!response.ok) {
-        setWorktreeError(response.error.message)
-        console.warn('[worktree] Failed to create worktree:', response.error.message)
-        return
-      }
-      setIsExpanded(true)
-      upsertWorktree(workspaceResponse.value.id, response.value)
-      selectWorktree(response.value.id)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setWorktreeError(message)
-      console.warn('[worktree] Failed to create worktree:', error)
-    } finally {
-      setIsCreatingWorktree(false)
-    }
-  }
-
-  async function handleRemoveWorktree(worktreeId: string) {
-    try {
-      const response = await window.electronAPI.removeWorktree({ worktreeId })
-      if (!response.ok) {
-        setWorktreeError(response.error.message)
-        console.warn('[worktree] Failed to remove worktree:', response.error.message)
-        return
-      }
-      removeWorktree(workspace.id, worktreeId)
-      setWorktreeError(null)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setWorktreeError(message)
-      console.warn('[worktree] Failed to remove worktree:', error)
-    }
-  }
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const sortedThreads = useMemo(() => [...threads].sort((a, b) => a.order - b.order), [threads])
+  const isActiveProject =
+    activeWorkspaceId === workspace.id ||
+    sortedThreads.some((thread) => thread.id === activeThreadId) ||
+    (workspace.worktrees ?? []).some(
+      (worktree) => activeWorkspaceId === worktreeContextId(worktree.id),
+    )
+  const label = `${workspace.name} project`
 
   async function handleRemoveWorkspace() {
     try {
       const response = await window.electronAPI.removeWorkspace(workspace.id)
       if (!response.ok) {
-        setWorktreeError(response.error.message)
+        setProjectError(response.error.message)
         console.warn('[workspace] Failed to remove workspace:', response.error.message)
         return
       }
       removeWorkspace(workspace.id)
-      setWorktreeError(null)
+      setProjectError(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      setWorktreeError(message)
+      setProjectError(message)
       console.warn('[workspace] Failed to remove workspace:', error)
     }
   }
 
   return (
-    <div className="workspace-group">
+    <div className="project-group">
       <div
-        className="workspace-item"
+        className={isActiveProject ? 'project-item project-item-active' : 'project-item'}
         draggable
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = 'move'
@@ -956,43 +902,51 @@ function WorkspaceItem({
       >
         <button
           type="button"
-          className="workspace-select-button workspace-dropdown-button"
-          onClick={() => setIsExpanded((expanded) => !expanded)}
+          className="project-select-button"
+          onClick={() => {
+            if (sortedThreads.length > 0) {
+              onSelectThread(sortedThreads[0]!.id)
+              return
+            }
+            selectWorkspace(workspace.id)
+          }}
           aria-expanded={isExpanded}
           aria-label={label}
           title={label}
         >
-          <span className="workspace-avatar" aria-hidden="true">
-            {workspaceInitials(workspace.name)}
-          </span>
-          <span className="workspace-details">
-            <span className="workspace-title">{workspace.name}</span>
+          <FiFolder size={14} className="project-icon" aria-hidden="true" />
+          <span className="project-details">
+            <span className="project-title">{workspace.name}</span>
             <FiChevronRight
               className={
-                isExpanded ? 'workspace-chevron workspace-chevron-expanded' : 'workspace-chevron'
+                isExpanded ? 'project-chevron project-chevron-expanded' : 'project-chevron'
               }
               size={13}
+              onClick={(event) => {
+                event.stopPropagation()
+                setIsExpanded((expanded) => !expanded)
+              }}
             />
           </span>
         </button>
         <button
           type="button"
-          className="icon-button workspace-worktree-button"
-          aria-label={`New worktree for ${workspace.name}`}
-          title="New Worktree"
-          disabled={isCreatingWorktree}
+          className="icon-button project-new-thread-button"
+          aria-label={`New thread for ${workspace.name}`}
+          title="New thread"
           onClick={(event) => {
             event.stopPropagation()
-            void handleCreateWorktree()
+            setIsExpanded(true)
+            onNewThread(workspace.id)
           }}
         >
           <FiPlus size={13} />
         </button>
         <button
           type="button"
-          className="icon-button workspace-danger-button"
+          className="icon-button project-danger-button"
           aria-label={`Remove ${workspace.name}`}
-          title="Remove workspace"
+          title="Remove project"
           onClick={(event) => {
             event.stopPropagation()
             void handleRemoveWorkspace()
@@ -1002,50 +956,62 @@ function WorkspaceItem({
         </button>
       </div>
       {isExpanded ? (
-        <div className="workspace-branch-list">
-          <button
-            type="button"
-            className={isActive ? 'local-branch-row local-branch-row-active' : 'local-branch-row'}
-            aria-pressed={isActive}
-            title={`Local checkout — ${branchLabel}`}
-            onClick={() => selectWorkspace(workspace.id)}
-          >
-            <span className="worktree-details">
-              <span className="worktree-title">{branchLabel}</span>
-            </span>
-          </button>
-          {(workspace.worktrees ?? []).map((worktree) => {
-            const isWorktreeActive = activeWorkspaceId === worktreeContextId(worktree.id)
-            const title = worktree.branch
+        <div className="project-thread-list">
+          {sortedThreads.map((thread, index) => {
+            const isThreadActive = thread.id === activeThreadId
+            const title = tabLabelsById.get(thread.id) ?? thread.name
+            const isArchived = archivedTabIds.has(thread.id)
             return (
               <div
-                key={worktree.id}
-                className={isWorktreeActive ? 'worktree-row worktree-row-active' : 'worktree-row'}
+                key={thread.id}
+                className={
+                  isThreadActive
+                    ? 'project-thread-row project-thread-row-active'
+                    : 'project-thread-row'
+                }
               >
                 <button
                   type="button"
-                  className="worktree-item"
-                  aria-pressed={isWorktreeActive}
-                  title={`${title} — ${worktree.branch}`}
-                  onClick={() => selectWorktree(worktree.id)}
+                  className="project-thread-button"
+                  aria-pressed={isThreadActive}
+                  title={title}
+                  onClick={() => onSelectThread(thread.id)}
                 >
-                  <span className="worktree-details">
-                    <span className="worktree-title">{title}</span>
-                  </span>
+                  <span className="project-thread-title">{title}</span>
+                  {isArchived ? (
+                    <span className="project-thread-archive" aria-label="Read-only archive">
+                      <FiArchive size={10} />
+                    </span>
+                  ) : (
+                    <span className="project-thread-index">#{index + 1}</span>
+                  )}
                 </button>
                 <button
                   type="button"
-                  className="icon-button worktree-danger-button"
+                  className="icon-button project-thread-close-button"
                   aria-label={`Remove ${title}`}
-                  title="Remove worktree"
-                  onClick={() => void handleRemoveWorktree(worktree.id)}
+                  title="Close thread"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onCloseThread(thread.id)
+                  }}
                 >
-                  <FiTrash2 size={11} />
+                  <FiX size={11} />
                 </button>
               </div>
             )
           })}
-          {worktreeError ? <div className="worktree-error">{worktreeError}</div> : null}
+          {sortedThreads.length === 0 ? (
+            <button
+              type="button"
+              className="project-thread-empty-button"
+              onClick={() => onNewThread(workspace.id)}
+            >
+              <FiPlus size={12} />
+              <span>New thread</span>
+            </button>
+          ) : null}
+          {projectError ? <div className="project-error">{projectError}</div> : null}
         </div>
       ) : null}
     </div>
@@ -1057,7 +1023,7 @@ function ResizeShell({
   width,
   side = 'left',
   className = 'tao-sidebar',
-  ariaLabel = 'Workspaces',
+  ariaLabel = 'Projects',
   onResize,
   onResizePreview,
 }: {
@@ -1222,9 +1188,9 @@ function ResizeShell({
   )
 }
 
-const TabBar = memo(function TabBar({
-  tabs,
-  activeTabId,
+const TabBar = memo(function ThreadTitleBar({
+  activeThreadId,
+  activeProjectName,
   showHeaderNavigation,
   isSidebarVisible,
   canGoPreviousWorkspace,
@@ -1233,13 +1199,10 @@ const TabBar = memo(function TabBar({
   onToggleSidebar,
   onPreviousWorkspace,
   onNextWorkspace,
-  onSelectTab,
-  onCloseTab,
-  onReorderTab,
   archivedTabIds,
 }: {
-  tabs: Tab[]
-  activeTabId: string | null
+  activeThreadId: string | null
+  activeProjectName: string | null
   showHeaderNavigation: boolean
   isSidebarVisible: boolean
   canGoPreviousWorkspace: boolean
@@ -1248,13 +1211,13 @@ const TabBar = memo(function TabBar({
   onToggleSidebar(): void
   onPreviousWorkspace(): void
   onNextWorkspace(): void
-  onSelectTab(tabId: string): void
-  onCloseTab(tabId: string): void
-  onReorderTab(tabId: string, targetTabId: string, placement: ReorderPlacement): void
   archivedTabIds: ReadonlySet<string>
 }) {
+  const titleLabel = activeThreadId ? (tabLabelsById.get(activeThreadId) ?? 'Thread') : 'Tau'
+  const isArchived = activeThreadId ? archivedTabIds.has(activeThreadId) : false
+
   return (
-    <div className="tab-bar">
+    <div className="thread-titlebar">
       {showHeaderNavigation ? (
         <HeaderNavigation
           isSidebarVisible={isSidebarVisible}
@@ -1265,71 +1228,166 @@ const TabBar = memo(function TabBar({
           onNextWorkspace={onNextWorkspace}
         />
       ) : null}
-      <div className="tab-list" role="tablist" aria-label="Terminal tabs">
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId
-          const isArchived = archivedTabIds.has(tab.id)
-          const tabLabel = tabLabelsById.get(tab.id) ?? tab.name
-          const className = [
-            'tab-item',
-            isActive ? 'tab-item-active' : null,
-            isArchived ? 'tab-item-archived' : null,
-          ]
-            .filter(Boolean)
-            .join(' ')
-          return (
-            <div
-              className={className}
-              key={tab.id}
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id)
-                event.dataTransfer.setData('text/plain', tab.id)
-              }}
-              onDragOver={(event) => {
-                if (!dataTransferHasType(event.dataTransfer, TAB_DRAG_TYPE)) return
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'move'
-              }}
-              onDrop={(event) => {
-                const tabId = event.dataTransfer.getData(TAB_DRAG_TYPE)
-                if (!tabId || tabId === tab.id) return
-                event.preventDefault()
-                onReorderTab(tabId, tab.id, getDropPlacement(event, 'horizontal'))
-              }}
-            >
-              <button
-                type="button"
-                className="tab-select-button"
-                role="tab"
-                aria-selected={isActive}
-                title={
-                  isArchived ? `${tabLabel} — contains a read-only archived session` : tabLabel
-                }
-                onClick={() => onSelectTab(tab.id)}
-              >
-                <span>{tabLabel}</span>
-                {isArchived ? (
-                  <span className="tab-archive-pill" aria-label="Read-only archive">
-                    <FiArchive size={10} />
-                    Archive
-                  </span>
-                ) : null}
-              </button>
-              <button
-                type="button"
-                className="tab-close-button"
-                aria-label={`Close ${tabLabel}`}
-                title="Close tab"
-                onClick={() => onCloseTab(tab.id)}
-              >
-                <FiX size={12} />
-              </button>
-            </div>
-          )
-        })}
+      <div className="thread-titlebar-label">
+        <span className="thread-titlebar-thread">{titleLabel}</span>
+        {activeThreadId && activeProjectName ? (
+          <span className="thread-titlebar-project">{activeProjectName}</span>
+        ) : null}
+        {isArchived ? (
+          <span className="tab-archive-pill" aria-label="Read-only archive">
+            <FiArchive size={10} />
+            Archive
+          </span>
+        ) : null}
       </div>
+    </div>
+  )
+})
+
+const SearchDialog = memo(function SearchDialog({
+  isOpen,
+  query,
+  projects,
+  threadsByProjectId,
+  tabLabelsById,
+  onQueryChange,
+  onClose,
+  onSelectProject,
+  onSelectThread,
+}: {
+  isOpen: boolean
+  query: string
+  projects: Workspace[]
+  threadsByProjectId: ReadonlyMap<string, Tab[]>
+  tabLabelsById: ReadonlyMap<string, string>
+  onQueryChange(query: string): void
+  onClose(): void
+  onSelectProject(workspaceId: string): void
+  onSelectThread(tabId: string): void
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const normalizedQuery = query.trim().toLowerCase()
+  const threadEntries = useMemo((): ThreadSearchEntry[] => {
+    return projects.flatMap((project) =>
+      (threadsByProjectId.get(project.id) ?? []).map((thread, index) => ({
+        id: thread.id,
+        title: tabLabelsById.get(thread.id) ?? thread.name,
+        projectName: project.name,
+        index: index + 1,
+      })),
+    )
+  }, [projects, tabLabelsById, threadsByProjectId])
+  const projectMatches = useMemo(() => {
+    if (!normalizedQuery) return []
+    return projects.filter(
+      (project) =>
+        project.name.toLowerCase().includes(normalizedQuery) ||
+        project.projectPath.toLowerCase().includes(normalizedQuery),
+    )
+  }, [normalizedQuery, projects])
+  const threadMatches = useMemo(() => {
+    const source = normalizedQuery
+      ? threadEntries.filter(
+          (thread) =>
+            thread.title.toLowerCase().includes(normalizedQuery) ||
+            thread.projectName.toLowerCase().includes(normalizedQuery),
+        )
+      : threadEntries
+    return source.slice(0, 9)
+  }, [normalizedQuery, threadEntries])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, onClose])
+
+  if (!isOpen) return null
+  const hasResults = projectMatches.length > 0 || threadMatches.length > 0
+
+  return (
+    <div className="search-dialog-host" role="presentation" onMouseDown={onClose}>
+      <dialog
+        open
+        className="search-dialog"
+        aria-label="Search projects and threads"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="search-dialog-input-row">
+          <FiSearch size={16} aria-hidden="true" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => onQueryChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return
+              const thread = threadMatches[0]
+              if (thread) {
+                event.preventDefault()
+                onSelectThread(thread.id)
+                return
+              }
+              const project = projectMatches[0]
+              if (project) {
+                event.preventDefault()
+                onSelectProject(project.id)
+              }
+            }}
+            placeholder="Search projects and threads"
+            aria-label="Search projects and threads"
+          />
+        </div>
+        <div className="search-dialog-section-label">
+          {normalizedQuery ? 'Results' : 'Recent threads'}
+        </div>
+        {threadMatches.length > 0 ? (
+          <div className="search-dialog-results">
+            {threadMatches.map((thread) => (
+              <button
+                type="button"
+                key={thread.id}
+                className="search-dialog-row"
+                onClick={() => onSelectThread(thread.id)}
+              >
+                <span className="search-dialog-row-title">{thread.title}</span>
+                <span className="search-dialog-row-meta">{thread.projectName}</span>
+                <span className="search-dialog-shortcut">#{thread.index}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {projectMatches.length > 0 ? (
+          <>
+            <div className="search-dialog-section-label">Projects</div>
+            <div className="search-dialog-results">
+              {projectMatches.map((project) => (
+                <button
+                  type="button"
+                  key={project.id}
+                  className="search-dialog-row"
+                  onClick={() => onSelectProject(project.id)}
+                >
+                  <span className="search-dialog-row-title">{project.name}</span>
+                  <span className="search-dialog-row-meta">{project.projectPath}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {!hasResults ? <div className="search-dialog-empty">No matches</div> : null}
+      </dialog>
     </div>
   )
 })
@@ -1363,8 +1421,8 @@ const HeaderNavigation = memo(function HeaderNavigation({
       <button
         type="button"
         className="icon-button titlebar-button"
-        aria-label="Previous workspace"
-        title="Previous workspace"
+        aria-label="Previous project"
+        title="Previous project"
         disabled={!canGoPreviousWorkspace}
         onClick={onPreviousWorkspace}
       >
@@ -1373,8 +1431,8 @@ const HeaderNavigation = memo(function HeaderNavigation({
       <button
         type="button"
         className="icon-button titlebar-button"
-        aria-label="Next workspace"
-        title="Next workspace"
+        aria-label="Next project"
+        title="Next project"
         disabled={!canGoNextWorkspace}
         onClick={onNextWorkspace}
       >
@@ -3113,7 +3171,6 @@ export function App() {
   const closeActiveTab = useTaoStore((state) => state.closeActiveTab)
   const selectTab = useTaoStore((state) => state.selectTab)
   const selectTabByIndex = useTaoStore((state) => state.selectTabByIndex)
-  const reorderTab = useTaoStore((state) => state.reorderTab)
   const setTabLayout = useTaoStore((state) => state.setTabLayout)
   const selectPane = useTaoStore((state) => state.selectPane)
   const selectPaneByDirection = useTaoStore((state) => state.selectPaneByDirection)
@@ -3125,7 +3182,6 @@ export function App() {
   const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
   const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
   const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
-  const toggleRightSidebar = useTaoStore((state) => state.toggleRightSidebar)
   const setRightSidebarExpanded = useTaoStore((state) => state.setRightSidebarExpanded)
   const setRightSidebarWidth = useTaoStore((state) => state.setRightSidebarWidth)
   const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
@@ -3141,6 +3197,8 @@ export function App() {
   const [rightSidebarView, setRightSidebarView] = useState<RightSidebarView>('files')
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [taodDiagnostics, setTaodDiagnostics] = useState<TaodLifecycleDiagnostics | null>(null)
   const [taodDiagnosticsError, setTaodDiagnosticsError] = useState<string | null>(null)
   const [daemonDiagnosticsOpen, setDaemonDiagnosticsOpen] = useState(false)
@@ -3254,6 +3312,19 @@ export function App() {
     () => new Set(panes.filter((pane) => pane.status === 'archived').map((pane) => pane.tabId)),
     [panes],
   )
+  const projectThreadsById = useMemo(() => {
+    const entries = sortedWorkspaces.map((workspace): [string, Tab[]] => [workspace.id, []])
+    const threadsByProject = new Map(entries)
+    const orderedTabs = [...tabs].sort((a, b) => a.order - b.order)
+
+    for (const tab of orderedTabs) {
+      const workspace = workspaceForContext(sortedWorkspaces, tab.workspaceId)
+      if (!workspace) continue
+      threadsByProject.get(workspace.id)?.push(tab)
+    }
+
+    return threadsByProject
+  }, [sortedWorkspaces, tabs])
   const terminalFocusTokens = useMemo(
     () => new Map(Object.entries(terminalFocusCounts)),
     [terminalFocusCounts],
@@ -3470,7 +3541,6 @@ export function App() {
           toggleSidebar()
           break
         case 'toggle-right-sidebar':
-          toggleRightSidebar()
           break
         case 'new-tab':
           setIsSettingsOpen(false)
@@ -3517,8 +3587,6 @@ export function App() {
     selectPaneByDirection,
     selectTabByIndex,
     selectWorkspaceByIndex,
-    setRightSidebarExpanded,
-    toggleRightSidebar,
     splitActivePane,
     toggleSidebar,
   ])
@@ -3652,66 +3720,115 @@ export function App() {
           onResize={handleResizeSidebar}
           onResizePreview={handleSidebarResizePreview}
         >
-          <HeaderNavigation
-            isSidebarVisible={sidebarExpanded}
-            canGoPreviousWorkspace={canGoPreviousWorkspace}
-            canGoNextWorkspace={canGoNextWorkspace}
-            onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
-            onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
-            onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-          />
-          <div className="sidebar-top-actions">
-            <DaemonRecoveryIndicator
-              notice={daemonNotice}
-              diagnostics={taodDiagnostics}
-              diagnosticsError={taodDiagnosticsError}
-              recoveryError={daemonRecoveryError}
-              isRecovering={daemonRecoveryInFlight}
-              isOpen={daemonDiagnosticsOpen}
-              onToggle={handleToggleDaemonDiagnostics}
-              onRecover={handleApplyDaemonRecovery}
+          <div className="project-sidebar-titlebar">
+            <HeaderNavigation
+              isSidebarVisible={sidebarExpanded}
+              canGoPreviousWorkspace={canGoPreviousWorkspace}
+              canGoNextWorkspace={canGoNextWorkspace}
+              onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
+              onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
+              onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
             />
-            <button
-              type="button"
-              className="icon-button add-workspace-button"
-              aria-label="Add workspace"
-              title="Add workspace"
-              onClick={handleAddWorkspace}
-            >
-              <FiFolderPlus size={15} />
-            </button>
+            <div className="project-sidebar-actions">
+              <button
+                type="button"
+                className="icon-button project-titlebar-button"
+                aria-label="Search"
+                title="Search"
+                onClick={() => setIsSearchOpen(true)}
+              >
+                <FiSearch size={14} />
+              </button>
+              <DaemonRecoveryIndicator
+                notice={daemonNotice}
+                diagnostics={taodDiagnostics}
+                diagnosticsError={taodDiagnosticsError}
+                recoveryError={daemonRecoveryError}
+                isRecovering={daemonRecoveryInFlight}
+                isOpen={daemonDiagnosticsOpen}
+                onToggle={handleToggleDaemonDiagnostics}
+                onRecover={handleApplyDaemonRecovery}
+              />
+            </div>
           </div>
           <div className="sidebar-content">
+            <div className="project-section-header">
+              <span>Projects</span>
+              <button
+                type="button"
+                className="icon-button project-header-button"
+                aria-label="Add project"
+                title="Add project"
+                onClick={handleAddWorkspace}
+              >
+                <FiPlus size={13} />
+              </button>
+            </div>
             {workspaces.length > 0 ? (
-              <div className="workspace-list">
+              <div className="project-list">
                 {sortedWorkspaces.map((workspace) => (
-                  <WorkspaceItem
+                  <ProjectItem
                     key={workspace.id}
                     workspace={workspace}
+                    threads={projectThreadsById.get(workspace.id) ?? []}
+                    activeThreadId={activeTab?.id ?? null}
+                    tabLabelsById={tabLabelsById}
+                    archivedTabIds={archivedTabIds}
+                    onSelectThread={(tabId) => {
+                      setIsSettingsOpen(false)
+                      selectTab(tabId)
+                    }}
+                    onNewThread={(workspaceId) => {
+                      setIsSettingsOpen(false)
+                      newTab(workspaceId)
+                    }}
+                    onCloseThread={closeTab}
                     onReorderWorkspace={reorderWorkspace}
                   />
                 ))}
               </div>
-            ) : null}
+            ) : (
+              <div className="project-list-empty">No projects</div>
+            )}
             <div className="sidebar-footer">
               <button
                 type="button"
-                className="icon-button sidebar-settings-button"
+                className="sidebar-settings-button"
                 aria-label="Open settings"
                 title="Settings"
                 onClick={() => setIsSettingsOpen(true)}
               >
                 <FiSettings size={15} />
+                <span>Settings</span>
               </button>
             </div>
           </div>
         </ResizeShell>
       ) : null}
+      <SearchDialog
+        isOpen={isSearchOpen}
+        query={searchQuery}
+        projects={sortedWorkspaces}
+        threadsByProjectId={projectThreadsById}
+        tabLabelsById={tabLabelsById}
+        onQueryChange={setSearchQuery}
+        onClose={() => setIsSearchOpen(false)}
+        onSelectProject={(workspaceId) => {
+          setIsSearchOpen(false)
+          setIsSettingsOpen(false)
+          useTaoStore.getState().selectWorkspace(workspaceId)
+        }}
+        onSelectThread={(tabId) => {
+          setIsSearchOpen(false)
+          setIsSettingsOpen(false)
+          selectTab(tabId)
+        }}
+      />
       <section className="tao-main">
         <main className="main-content">
           <TabBar
-            tabs={workspaceTabs}
-            activeTabId={activeTab?.id ?? null}
+            activeThreadId={activeTab?.id ?? null}
+            activeProjectName={activeWorkspace?.name ?? null}
             showHeaderNavigation={!sidebarExpanded}
             isSidebarVisible={sidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
@@ -3720,12 +3837,6 @@ export function App() {
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            onSelectTab={(tabId) => {
-              setIsSettingsOpen(false)
-              selectTab(tabId)
-            }}
-            onCloseTab={closeTab}
-            onReorderTab={reorderTab}
             archivedTabIds={archivedTabIds}
           />
           {!sidebarExpanded && daemonNotice ? (
@@ -3797,7 +3908,7 @@ export function App() {
           </div>
         </main>
       </section>
-      {rightSidebarExpanded ? (
+      {RIGHT_SIDEBAR_ENABLED && rightSidebarExpanded ? (
         <ResizeShell
           width={rightSidebarResizePreviewWidth ?? rightSidebarSize}
           side="right"
@@ -3816,15 +3927,6 @@ export function App() {
           />
         </ResizeShell>
       ) : null}
-      <button
-        type="button"
-        className="icon-button titlebar-button right-sidebar-toggle-button"
-        aria-label={rightSidebarExpanded ? 'Hide right sidebar' : 'Show right sidebar'}
-        title={rightSidebarExpanded ? 'Hide right sidebar' : 'Show right sidebar'}
-        onClick={() => setRightSidebarExpanded(!rightSidebarExpanded)}
-      >
-        <TbLayoutSidebarRight size={16} />
-      </button>
     </div>
   )
 }
