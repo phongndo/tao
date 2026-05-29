@@ -150,10 +150,8 @@ function appIconFileName(): string {
 function resolveAppIconPath(): string | null {
   const fileName = appIconFileName()
   const candidates = [
-    join(__dirname, '../renderer/icons', fileName),
-    join(__dirname, '../../public/icons', fileName),
-    resolve(process.cwd(), 'apps/desktop/public/icons', fileName),
-    resolve(process.cwd(), 'public/icons', fileName),
+    join(__dirname, '../renderer/nightly', fileName),
+    resolve(process.cwd(), 'assets/nightly', fileName),
   ]
 
   return candidates.find((candidate) => existsSync(candidate)) ?? null

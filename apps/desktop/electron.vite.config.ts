@@ -1,6 +1,7 @@
 import {
   chmodSync,
   copyFileSync,
+  createReadStream,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -60,6 +61,48 @@ function copyTaudBinary() {
   }
 }
 
+function exposeNightlyAssets() {
+  let outDir = ''
+  const nightlyAssetsSource = resolve(__dirname, '../../assets/nightly')
+
+  return {
+    name: 'expose-nightly-assets',
+    configResolved(config: any) {
+      outDir = config.build.outDir
+    },
+    configureServer(server: any) {
+      server.middlewares.use('/nightly', (request: any, response: any, next: () => void) => {
+        const requestPath = decodeURIComponent(String(request.url ?? '').split('?')[0] ?? '')
+          .replace(/^\/+/u, '')
+          .trim()
+        if (!requestPath || requestPath.includes('/') || requestPath.includes('\\')) {
+          next()
+          return
+        }
+
+        const assetPath = resolve(nightlyAssetsSource, requestPath)
+        if (!existsSync(assetPath) || !statSync(assetPath).isFile()) {
+          next()
+          return
+        }
+
+        if (requestPath.endsWith('.png')) response.setHeader('Content-Type', 'image/png')
+        createReadStream(assetPath).pipe(response)
+      })
+    },
+    closeBundle() {
+      if (!existsSync(nightlyAssetsSource)) {
+        throw new Error(`[expose-nightly-assets] nightly assets not found: ${nightlyAssetsSource}`)
+      }
+
+      const nightlyAssetsDest = resolve(outDir, 'nightly')
+      rmSync(nightlyAssetsDest, { recursive: true, force: true })
+      copyDirectory(nightlyAssetsSource, nightlyAssetsDest)
+      console.log('[expose-nightly-assets] Copied nightly assets to', nightlyAssetsDest)
+    },
+  }
+}
+
 function copyDirectory(source: string, destination: string) {
   mkdirSync(destination, { recursive: true })
   for (const entry of readdirSync(source)) {
@@ -87,7 +130,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
   },
   renderer: {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), exposeNightlyAssets()],
     publicDir: resolve(__dirname, 'public'),
     build: {
       rollupOptions: {
