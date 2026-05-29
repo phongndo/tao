@@ -719,7 +719,7 @@ test "control response trace wrapper preserves one-line JSON" {
 fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     const path = try std.fmt.allocPrint(
         allocator,
-        "../../packages/shared/fixtures/taod-protocol/{s}",
+        "../../packages/shared/fixtures/taud-protocol/{s}",
         .{name},
     );
     defer allocator.free(path);
@@ -844,7 +844,7 @@ test "control attach and error responses match shared golden fixtures" {
         .stream_id = "session-1",
         .pid = 123,
         .status = "live",
-        .cwd = "/tmp/tao",
+        .cwd = "/tmp/tau",
         .cols = 80,
         .rows = 24,
         .last_seq = 4,
@@ -953,7 +953,7 @@ test "workspace control request fixtures decode to stable request types" {
         defer parsed.deinit();
 
         try std.testing.expectEqual(case.request_type, parsed.value.requestType());
-        try std.testing.expectEqualStrings("/tmp/tao-workspace", parsed.value.requestRootPath().?);
+        try std.testing.expectEqualStrings("/tmp/tau-workspace", parsed.value.requestRootPath().?);
         if (case.request_type == .workspace_stage_path or case.request_type == .workspace_unstage_path or case.request_type == .workspace_revert_path) {
             const paths = parsed.value.requestGitPaths().?;
             try std.testing.expectEqual(@as(usize, 2), paths.len);
@@ -975,7 +975,7 @@ fn responseJsonForAllocationFailure(allocator: std.mem.Allocator) !void {
         .stream_id = "session-oom",
         .pid = 123,
         .status = "live",
-        .cwd = "/tmp/tao-rpc-oom",
+        .cwd = "/tmp/tau-rpc-oom",
         .cols = 80,
         .rows = 24,
         .last_seq = 9,

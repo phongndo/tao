@@ -23,12 +23,12 @@ import {
   ghosttyNativeCurrentScreenSnapshotToAnsi,
   isGhosttyNativeCurrentScreenSnapshot,
   isFallbackCurrentScreenSnapshot,
-} from '@tao/shared/current-screen-snapshot'
+} from '@tau/shared/current-screen-snapshot'
 import type {
   AttachSessionResult,
   CurrentScreenSnapshotFrame,
   OutputFrame,
-} from '@tao/shared/taod-protocol'
+} from '@tau/shared/taud-protocol'
 import {
   createBatchedTerminalWriter,
   type TerminalOutputWriterDiagnostics,
@@ -46,7 +46,7 @@ type CreateTerminalOptions = {
 }
 
 /**
- * Tao Default — based on Mellow by @kvparik (shipped with Ghostty).
+ * Tau Default — based on Mellow by @kvparik (shipped with Ghostty).
  * https://github.com/ghostty-org/ghostty
  */
 const THEME = {
@@ -75,12 +75,12 @@ const THEME = {
 }
 
 const terminalFontFamily =
-  '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tao Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
+  '"SF Mono", Menlo, Monaco, "JetBrains Mono", "JetBrainsMono Nerd Font Mono", "Tau Symbols Nerd Font Mono", "Symbols Nerd Font Mono", monospace'
 
 const SIDEBAR_RESIZE_FIT_DELAY_MS = 80
 const STARTUP_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024
-const taoSymbolsFontFamily = 'Tao Symbols Nerd Font Mono'
-const taoSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
+const tauSymbolsFontFamily = 'Tau Symbols Nerd Font Mono'
+const tauSymbolsFontProbe = '\ue0a0\uf07b\ue7a8'
 const warnedSnapshotBackends = new Set<string>()
 
 const MIN_TERMINAL_COLS = 2
@@ -89,7 +89,7 @@ const MIN_TERMINAL_ROWS = 1
 type TerminalDiagnosticsRegistry = Map<string, () => TerminalOutputWriterDiagnostics>
 
 type DiagnosticWindow = Window & {
-  __TAO_TERMINAL_DIAGNOSTICS__?: TerminalDiagnosticsRegistry
+  __TAU_TERMINAL_DIAGNOSTICS__?: TerminalDiagnosticsRegistry
 }
 
 let terminalFontsLoad: Promise<void> | null = null
@@ -110,26 +110,26 @@ async function loadTerminalFonts(): Promise<void> {
   terminalFontsLoad ??= (async () => {
     const source = new URL('fonts/nerd-fonts/SymbolsNerdFontMono-Regular.ttf', window.location.href)
       .href
-    const descriptor = `14px "${taoSymbolsFontFamily}"`
-    let taoSymbolsFontFace = Array.from(document.fonts).find(
-      (fontFace) => fontFace.family === taoSymbolsFontFamily,
+    const descriptor = `14px "${tauSymbolsFontFamily}"`
+    let tauSymbolsFontFace = Array.from(document.fonts).find(
+      (fontFace) => fontFace.family === tauSymbolsFontFamily,
     )
 
-    if (!taoSymbolsFontFace) {
-      taoSymbolsFontFace = new FontFace(taoSymbolsFontFamily, `url(${source})`, {
+    if (!tauSymbolsFontFace) {
+      tauSymbolsFontFace = new FontFace(tauSymbolsFontFamily, `url(${source})`, {
         style: 'normal',
         weight: '400',
         display: 'block',
       })
 
-      document.fonts.add(taoSymbolsFontFace)
+      document.fonts.add(tauSymbolsFontFace)
     }
 
-    await taoSymbolsFontFace.load()
-    await document.fonts.load(descriptor, taoSymbolsFontProbe)
+    await tauSymbolsFontFace.load()
+    await document.fonts.load(descriptor, tauSymbolsFontProbe)
 
-    if (taoSymbolsFontFace.status !== 'loaded') {
-      console.warn(`[terminal] bundled Nerd Font status: ${taoSymbolsFontFace.status}`)
+    if (tauSymbolsFontFace.status !== 'loaded') {
+      console.warn(`[terminal] bundled Nerd Font status: ${tauSymbolsFontFace.status}`)
     }
   })().catch((error) => {
     terminalFontsLoad = null
@@ -151,8 +151,8 @@ function renderTerminalError(container: HTMLElement, err: unknown) {
 
 function terminalDiagnosticsRegistry(): TerminalDiagnosticsRegistry {
   const diagnosticWindow = window as DiagnosticWindow
-  diagnosticWindow.__TAO_TERMINAL_DIAGNOSTICS__ ??= new Map()
-  return diagnosticWindow.__TAO_TERMINAL_DIAGNOSTICS__
+  diagnosticWindow.__TAU_TERMINAL_DIAGNOSTICS__ ??= new Map()
+  return diagnosticWindow.__TAU_TERMINAL_DIAGNOSTICS__
 }
 
 function nextAnimationFrame(): Promise<void> {
@@ -367,7 +367,7 @@ function installWebglRenderer(term: Terminal): void {
   }
 }
 
-class TaoClipboardProvider implements IClipboardProvider {
+class TauClipboardProvider implements IClipboardProvider {
   readText(selection: ClipboardSelectionType): string {
     if (selection !== 'c') return ''
     return ''
@@ -397,7 +397,7 @@ function installTerminalAddons(term: Terminal): void {
     }),
   )
   term.loadAddon(new ImageAddon())
-  term.loadAddon(new ClipboardAddon(undefined, new TaoClipboardProvider()))
+  term.loadAddon(new ClipboardAddon(undefined, new TauClipboardProvider()))
 }
 
 const searchDecorationOptions: NonNullable<ISearchOptions['decorations']> = {

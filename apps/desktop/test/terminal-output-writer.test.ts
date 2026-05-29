@@ -161,7 +161,7 @@ test('terminal output writer bounds backlog when xterm stops draining', async ()
     assert.equal(drainedDiagnostics.writeQueueChunks, 0)
     assert.equal(drainedDiagnostics.writing, false)
     assert.equal(drainedDiagnostics.dropNoticeCount, 1)
-    const noticeWrite = writes.find((data) => data.includes('Tao dropped terminal output'))
+    const noticeWrite = writes.find((data) => data.includes('Tau dropped terminal output'))
     assert.ok(noticeWrite)
     assert.equal(
       drainedDiagnostics.totalWrittenChars + drainedDiagnostics.droppedWriteQueueCharsTotal,

@@ -1,4 +1,4 @@
-# Contributing to Tao
+# Contributing to Tau
 
 Thanks for your interest in contributing!
 
@@ -9,8 +9,8 @@ Thanks for your interest in contributing!
 Install [Nix](https://nixos.org/download) — if using the standard installer, enable flakes by adding `experimental-features = nix-command flakes` to `~/.config/nix/nix.conf`. The [Determinate Nix Installer](https://github.com/DeterminateSystems/nix-installer) enables flakes by default. Then:
 
 ```bash
-git clone https://github.com/phongndo/tao.git
-cd tao
+git clone https://github.com/phongndo/tau.git
+cd tau
 nix develop          # Enter the reproducible dev shell
 pnpm install
 pnpm dev             # Start terminal with HMR
@@ -24,7 +24,7 @@ pnpm dev             # Start terminal with HMR
 4. **Run checks:**
    ```bash
    pnpm check      # TypeScript + Zig lint/format/type/test checks
-   pnpm build      # Production build, including taod
+   pnpm build      # Production build, including taud
    pnpm bench      # Verify no performance regressions
    ```
 5. **Commit** using [Conventional Commits](https://www.conventionalcommits.org/):
@@ -39,9 +39,9 @@ pnpm dev             # Start terminal with HMR
 ## Project Structure
 
 ```
-tao/
+tau/
 ├── apps/
-│   ├── daemon/        # Zig taod persistence daemon
+│   ├── daemon/        # Zig taud persistence daemon
 │   └── desktop/
 │       ├── src/
 │       │   ├── main/       # Electron main process (window, PTY, IPC)
@@ -77,7 +77,7 @@ Fast local checks:
 pnpm zig:fmt:check
 pnpm zig:test
 pnpm zig:check
-pnpm --filter @tao/daemon check
+pnpm --filter @tau/daemon check
 ```
 
 Leak smoke check:
@@ -86,7 +86,7 @@ Leak smoke check:
 pnpm zig:leak-check
 ```
 
-`pnpm zig:leak-check` runs `taod --check` with `TAOD_DEBUG_ALLOC=1` and a temporary `HOME`, so it does not mutate your real `~/.tao`. `TAOD_DEBUG_ALLOC=1` keeps production behavior unchanged except that `main.zig` uses Zig's `std.heap.DebugAllocator`; if the debug allocator reports a leak, `taod` exits nonzero.
+`pnpm zig:leak-check` runs `taud --check` with `TAUD_DEBUG_ALLOC=1` and a temporary `HOME`, so it does not mutate your real `~/.tau`. `TAUD_DEBUG_ALLOC=1` keeps production behavior unchanged except that `main.zig` uses Zig's `std.heap.DebugAllocator`; if the debug allocator reports a leak, `taud` exits nonzero.
 
 When adding Zig code:
 
@@ -100,4 +100,4 @@ There is also a manual/nightly GitHub Actions Valgrind workflow (`Memory Tools`)
 
 ## License
 
-Tao is licensed under MIT. All contributions are accepted under the same terms.
+Tau is licensed under MIT. All contributions are accepted under the same terms.

@@ -1533,7 +1533,7 @@ fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
 }
 
 fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    const path = try std.fs.path.join(allocator, &.{ "../../packages/shared/fixtures/taod-protocol", name });
+    const path = try std.fs.path.join(allocator, &.{ "../../packages/shared/fixtures/taud-protocol", name });
     defer allocator.free(path);
     return std.fs.cwd().readFileAlloc(allocator, path, 8192);
 }
@@ -1547,15 +1547,15 @@ test "workspace response json includes nested worktrees" {
         .branch = "luminous-galileo-a13f",
         .state = "active",
         .order_index = 0,
-        .created_by = "tao",
+        .created_by = "tau",
         .created_at = "now",
         .updated_at = "now",
     }};
     const response = try jsonAlloc(std.testing.allocator, WorkspaceListPayload{ .workspaces = &[_]WorkspaceResponse{.{
         .id = "ws1",
-        .name = "tao",
+        .name = "tau",
         .root_path = "/repo",
-        .workspace_slug = "tao",
+        .workspace_slug = "tau",
         .order_index = 0,
         .created_at = "now",
         .updated_at = "now",
@@ -1573,24 +1573,24 @@ test "workspace list and record responses match shared golden fixtures" {
         .workspace_id = "workspace-fixture",
         .title = "Feature Worktree",
         .folder_name = "feature-worktree",
-        .path = "/tmp/tao-workspace/feature-worktree",
+        .path = "/tmp/tau-workspace/feature-worktree",
         .branch = "feature/demo",
         .base_branch = "main",
         .target_branch = "feature/demo",
         .state = "active",
         .order_index = 2,
         .last_active_tab_id = "tab-2",
-        .created_by = "tao",
+        .created_by = "tau",
         .created_at = "2026-05-22T00:00:02Z",
         .updated_at = "2026-05-22T00:00:03Z",
         .git_status = .{ .changed = 3, .staged = 1 },
     }};
     const workspace_response = WorkspaceResponse{
         .id = "workspace-fixture",
-        .name = "Tao",
-        .root_path = "/tmp/tao-workspace",
+        .name = "Tau",
+        .root_path = "/tmp/tau-workspace",
         .git_common_dir = ".git",
-        .workspace_slug = "tao-workspace",
+        .workspace_slug = "tau-workspace",
         .default_branch = "main",
         .branch = "feature",
         .order_index = 1,
@@ -1644,7 +1644,7 @@ test "workspace metadata response json matches shared golden fixtures" {
     const git_worktrees_json = try jsonAlloc(allocator, WorkspaceGitWorktreesPayload{
         .id = "workspace-git-worktrees-fixture",
         .worktrees = &[_]GitWorktreeInfoResponse{.{
-            .path = "/tmp/tao-workspace",
+            .path = "/tmp/tau-workspace",
             .branch = "main",
             .hash = "abc123",
             .is_bare = false,
@@ -1681,7 +1681,7 @@ test "workspace metadata response json matches shared golden fixtures" {
 
     const diff_json = try jsonAlloc(allocator, WorkspaceDiffPayload{
         .id = "workspace-diff-fixture",
-        .diff_patch = "diff --git a/src/app.ts b/src/app.ts\n+console.log(\"tao\")\n",
+        .diff_patch = "diff --git a/src/app.ts b/src/app.ts\n+console.log(\"tau\")\n",
     });
     defer allocator.free(diff_json);
     const diff_golden = try readProtocolFixtureAlloc(allocator, "control-workspace-diff-response.ndjson");
@@ -1701,7 +1701,7 @@ test "workspace metadata response json matches shared golden fixtures" {
         .id = "workspace-pull-request-fixture",
         .pull_request = .{
             .number = 32,
-            .title = "Review Tao",
+            .title = "Review Tau",
             .url = "https://example.invalid/pr/32",
             .state = "OPEN",
             .head_ref_name = "best-operation",
@@ -1848,7 +1848,7 @@ test "workspace git worktrees response is served by daemon git path" {
     const add_args = [_][]const u8{ "add", "tracked.txt" };
     out = try git.runGitAlloc(allocator, repo_path, &add_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
@@ -1902,7 +1902,7 @@ test "workspace file tree response includes paths and git status" {
     const add_args = [_][]const u8{ "add", "tracked.txt" };
     out = try git.runGitAlloc(allocator, repo_path, &add_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
@@ -1956,7 +1956,7 @@ test "workspace diff response returns staged patch" {
     const add_args = [_][]const u8{ "add", "tracked.txt" };
     out = try git.runGitAlloc(allocator, repo_path, &add_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
@@ -2010,7 +2010,7 @@ test "workspace git path actions are served by daemon git path" {
     const add_args = [_][]const u8{ "add", "tracked.txt" };
     out = try git.runGitAlloc(allocator, repo_path, &add_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
@@ -2090,7 +2090,7 @@ test "workspace git path actions reject option-shaped paths" {
 test "workspace port parser deduplicates listening process ports" {
     const output =
         \\p101
-        \\ctao-dev
+        \\ctau-dev
         \\n*:3000 (LISTEN)
         \\n127.0.0.1:3000 (LISTEN)
         \\p102
@@ -2106,7 +2106,7 @@ test "workspace port parser deduplicates listening process ports" {
     try std.testing.expectEqual(@as(usize, 2), ports.len);
     try std.testing.expectEqual(@as(u32, 101), ports[0].pid);
     try std.testing.expectEqual(@as(u16, 3000), ports[0].port);
-    try std.testing.expectEqualStrings("tao-dev", ports[0].process_name.?);
+    try std.testing.expectEqualStrings("tau-dev", ports[0].process_name.?);
     try std.testing.expectEqual(@as(u32, 102), ports[1].pid);
     try std.testing.expectEqual(@as(u16, 5173), ports[1].port);
     try std.testing.expectEqualStrings("node", ports[1].process_name.?);
@@ -2114,17 +2114,17 @@ test "workspace port parser deduplicates listening process ports" {
 
 test "workspace pull request json parser maps gh fields" {
     const output =
-        \\{"number":42,"title":"Add Tao","url":"https://example.invalid/pull/42","state":"OPEN","headRefName":"feature/tao"}
+        \\{"number":42,"title":"Add Tau","url":"https://example.invalid/pull/42","state":"OPEN","headRefName":"feature/tau"}
     ;
 
     var pull_request = (try pullRequestInfoFromJsonAlloc(std.testing.allocator, output));
     defer freePullRequestInfo(std.testing.allocator, &pull_request);
 
     try std.testing.expectEqual(@as(u32, 42), pull_request.number);
-    try std.testing.expectEqualStrings("Add Tao", pull_request.title);
+    try std.testing.expectEqualStrings("Add Tau", pull_request.title);
     try std.testing.expectEqualStrings("https://example.invalid/pull/42", pull_request.url);
     try std.testing.expectEqualStrings("OPEN", pull_request.state);
-    try std.testing.expectEqualStrings("feature/tao", pull_request.head_ref_name.?);
+    try std.testing.expectEqualStrings("feature/tau", pull_request.head_ref_name.?);
 }
 
 test "workspace reconciliation keeps archived external worktree hidden" {
@@ -2147,7 +2147,7 @@ test "workspace reconciliation keeps archived external worktree hidden" {
     const init_args = [_][]const u8{"init"};
     var out = try git.runGitAlloc(allocator, repo_path, &init_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
     try git.worktreeAddNewBranch(allocator, repo_path, "external-branch", external_path, "HEAD");
@@ -2216,10 +2216,10 @@ fn mutableTestSlice(value: []const u8) []u8 {
 fn testWorkspaceRow() db.WorkspaceRow {
     return .{
         .id = mutableTestSlice("workspace-oom"),
-        .name = mutableTestSlice("Tao OOM"),
-        .root_path = mutableTestSlice("/tmp/tao-workspace-oom"),
-        .git_common_dir = mutableTestSlice("/tmp/tao-workspace-oom/.git"),
-        .workspace_slug = mutableTestSlice("tao-oom"),
+        .name = mutableTestSlice("Tau OOM"),
+        .root_path = mutableTestSlice("/tmp/tau-workspace-oom"),
+        .git_common_dir = mutableTestSlice("/tmp/tau-workspace-oom/.git"),
+        .workspace_slug = mutableTestSlice("tau-oom"),
         .default_branch = mutableTestSlice("main"),
         .order_index = 7,
         .last_active_tab_id = mutableTestSlice("tab-oom"),
@@ -2235,7 +2235,7 @@ fn testWorktreeRow() db.WorktreeRow {
         .workspace_id = mutableTestSlice("workspace-oom"),
         .title = mutableTestSlice("OOM Worktree"),
         .folder_name = mutableTestSlice("luminous-oom"),
-        .path = mutableTestSlice("/tmp/tao-worktree-oom"),
+        .path = mutableTestSlice("/tmp/tau-worktree-oom"),
         .branch = mutableTestSlice("luminous-oom"),
         .base_branch = mutableTestSlice("main"),
         .target_branch = mutableTestSlice("main"),
@@ -2243,7 +2243,7 @@ fn testWorktreeRow() db.WorktreeRow {
         .order_index = 3,
         .last_active_tab_id = mutableTestSlice("tab-oom"),
         .last_error = mutableTestSlice("previous failure"),
-        .created_by = mutableTestSlice("tao"),
+        .created_by = mutableTestSlice("tau"),
         .created_at = mutableTestSlice("2026-05-20T00:00:00Z"),
         .updated_at = mutableTestSlice("2026-05-20T00:00:01Z"),
         .archived_at = null,

@@ -1,5 +1,5 @@
 .{
-    .name = .taod,
+    .name = .taud,
     .version = "0.1.0",
     .fingerprint = 0x24b69be944f5f41c, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",

@@ -10,9 +10,9 @@ pub const Config = struct {
     pid_path: []const u8,
 
     pub fn fromHome(allocator: std.mem.Allocator, home: []const u8) !Config {
-        const root_dir = try std.fs.path.join(allocator, &.{ home, ".tao" });
+        const root_dir = try std.fs.path.join(allocator, &.{ home, ".tau" });
         errdefer allocator.free(root_dir);
-        const database_path = try std.fs.path.join(allocator, &.{ root_dir, "tao.db" });
+        const database_path = try std.fs.path.join(allocator, &.{ root_dir, "tau.db" });
         errdefer allocator.free(database_path);
         const run_dir = try std.fs.path.join(allocator, &.{ root_dir, "run" });
         errdefer allocator.free(run_dir);
@@ -20,9 +20,9 @@ pub const Config = struct {
         errdefer allocator.free(sessions_dir);
         const adapters_dir = try adapterDirFromEnvOrDefault(allocator, root_dir);
         errdefer allocator.free(adapters_dir);
-        const socket_path = try std.fs.path.join(allocator, &.{ run_dir, "taod.sock" });
+        const socket_path = try std.fs.path.join(allocator, &.{ run_dir, "taud.sock" });
         errdefer allocator.free(socket_path);
-        const pid_path = try std.fs.path.join(allocator, &.{ run_dir, "taod.pid" });
+        const pid_path = try std.fs.path.join(allocator, &.{ run_dir, "taud.pid" });
 
         return .{
             .root_dir = root_dir,
@@ -48,7 +48,7 @@ pub const Config = struct {
 };
 
 fn adapterDirFromEnvOrDefault(allocator: std.mem.Allocator, root_dir: []const u8) ![]u8 {
-    const env_value = std.process.getEnvVarOwned(allocator, "TAOD_ADAPTER_DIR") catch |err| switch (err) {
+    const env_value = std.process.getEnvVarOwned(allocator, "TAUD_ADAPTER_DIR") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
@@ -59,17 +59,17 @@ fn adapterDirFromEnvOrDefault(allocator: std.mem.Allocator, root_dir: []const u8
     return try std.fs.path.join(allocator, &.{ root_dir, "adapters" });
 }
 
-test "config derives tao paths from home" {
+test "config derives tau paths from home" {
     var config = try Config.fromHome(std.testing.allocator, "/tmp/example-home");
     defer config.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualStrings("/tmp/example-home/.tao", config.root_dir);
-    try std.testing.expectEqualStrings("/tmp/example-home/.tao/adapters", config.adapters_dir);
-    try std.testing.expectEqualStrings("/tmp/example-home/.tao/run/taod.sock", config.socket_path);
+    try std.testing.expectEqualStrings("/tmp/example-home/.tau", config.root_dir);
+    try std.testing.expectEqualStrings("/tmp/example-home/.tau/adapters", config.adapters_dir);
+    try std.testing.expectEqualStrings("/tmp/example-home/.tau/run/taud.sock", config.socket_path);
 }
 
 fn configFromHomeForAllocationFailure(allocator: std.mem.Allocator) !void {
-    var config = try Config.fromHome(allocator, "/tmp/tao-oom-home");
+    var config = try Config.fromHome(allocator, "/tmp/tau-oom-home");
     defer config.deinit(allocator);
 }
 

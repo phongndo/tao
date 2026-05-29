@@ -48,14 +48,14 @@ import {
   prepareFileTreeInput,
 } from '@pierre/trees'
 import type { FileTreeDirectoryHandle, GitStatusEntry } from '@pierre/trees'
-import type { AppCommand } from '@tao/shared/app-command'
-import type { PaneLayoutData } from '@tao/shared/session'
+import type { AppCommand } from '@tau/shared/app-command'
+import type { PaneLayoutData } from '@tau/shared/session'
 import {
   type Pane,
   type ReorderPlacement,
   selectPaneLayoutData,
   type Tab,
-  useTaoStore,
+  useTauStore,
   type Workspace,
   worktreeContextId,
 } from '../state/store'
@@ -67,28 +67,28 @@ import { TerminalPane } from './TerminalPane'
 import { getDiffFileName, type ParsedDiffFile, type ParsedDiffResult } from '../diff-parser'
 import { parseDiffFilesOffThread } from '../diff-parser-client'
 import { markRendererEvent } from '../trace'
-import type { WorkspaceFileTree, WorkspaceRecord } from '@tao/shared/workspace'
+import type { WorkspaceFileTree, WorkspaceRecord } from '@tau/shared/workspace'
 import type {
-  TaodLifecycleDiagnostics,
-  TaodLifecycleRecoveryAction,
-} from '@tao/shared/taod-protocol'
+  TaudLifecycleDiagnostics,
+  TaudLifecycleRecoveryAction,
+} from '@tau/shared/taud-protocol'
 
 const SIDEBAR_DEFAULT_WIDTH = 240
 const SIDEBAR_EXPANDED_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 360
 const RIGHT_SIDEBAR_MAX_WIDTH = SIDEBAR_MAX_WIDTH * 2
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
-const TAB_DRAG_TYPE = 'application/x-tao-tab'
-const WORKSPACE_DRAG_TYPE = 'application/x-tao-workspace'
+const TAB_DRAG_TYPE = 'application/x-tau-tab'
+const WORKSPACE_DRAG_TYPE = 'application/x-tau-workspace'
 const LAYOUT_WRITE_DEBOUNCE_MS = 150
-const LEGACY_LOCAL_STORAGE_LAYOUT_KEY = 'tao-workspaces'
+const LEGACY_LOCAL_STORAGE_LAYOUT_KEYS = ['tao-workspaces', 'tau-workspaces'] as const
 const EMPTY_FILE_TREE: WorkspaceFileTree = { paths: [], gitStatus: [] }
 const DEFAULT_DIFF_COMPARE_BRANCH = 'main'
-const DIFF_FOCUS_FILE_EVENT = 'tao:focus-diff-file'
+const DIFF_FOCUS_FILE_EVENT = 'tau:focus-diff-file'
 const DIFF_AUTO_COLLAPSE_FILE_COUNT = 20
 const DIFF_AUTO_COLLAPSE_PATCH_CHARS = 1024 * 1024
 const DIFF_MAX_EXPANDED_FILE_BODIES = 12
-const TAOD_DIAGNOSTICS_POLL_MS = 5000
+const TAUD_DIAGNOSTICS_POLL_MS = 5000
 const FILE_TREE_ICONS = { set: 'complete', colored: true } as const
 const FILE_TREE_ICON_SPRITE = getBuiltInSpriteSheet(FILE_TREE_ICONS.set)
 const FILE_TREE_ICON_RESOLVER = createFileTreeIconResolver(FILE_TREE_ICONS)
@@ -159,10 +159,13 @@ const FILE_TREE_UNSAFE_CSS = `
 
 function readLegacyLocalStorageLayout(): unknown | null {
   try {
-    const raw = window.localStorage?.getItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { state?: unknown }
-    return parsed.state ?? parsed
+    for (const key of LEGACY_LOCAL_STORAGE_LAYOUT_KEYS) {
+      const raw = window.localStorage?.getItem(key)
+      if (!raw) continue
+      const parsed = JSON.parse(raw) as { state?: unknown }
+      return parsed.state ?? parsed
+    }
+    return null
   } catch (error) {
     console.warn('[layout] Failed to read legacy localStorage layout:', error)
     return null
@@ -171,7 +174,9 @@ function readLegacyLocalStorageLayout(): unknown | null {
 
 function clearLegacyLocalStorageLayout(): void {
   try {
-    window.localStorage?.removeItem(LEGACY_LOCAL_STORAGE_LAYOUT_KEY)
+    for (const key of LEGACY_LOCAL_STORAGE_LAYOUT_KEYS) {
+      window.localStorage?.removeItem(key)
+    }
   } catch {
     // Best-effort migration cleanup only.
   }
@@ -539,7 +544,7 @@ function activeContextBranchName(
 }
 
 function daemonRecoveryNotice(
-  diagnostics: TaodLifecycleDiagnostics | null,
+  diagnostics: TaudLifecycleDiagnostics | null,
   error: string | null,
 ): DaemonRecoveryNotice | null {
   if (error) {
@@ -597,7 +602,7 @@ function formatDiagnosticsMs(value: number | undefined): string {
   return typeof value === 'number' ? `${Math.round(value)} ms` : 'none'
 }
 
-function formatDiagnosticsPid(diagnostics: TaodLifecycleDiagnostics | null): string {
+function formatDiagnosticsPid(diagnostics: TaudLifecycleDiagnostics | null): string {
   if (!diagnostics) return 'none'
   if (typeof diagnostics.spawnedPid === 'number') return String(diagnostics.spawnedPid)
   if (typeof diagnostics.releasedDetachedPid === 'number') {
@@ -607,7 +612,7 @@ function formatDiagnosticsPid(diagnostics: TaodLifecycleDiagnostics | null): str
 }
 
 function daemonRecoveryRows(
-  diagnostics: TaodLifecycleDiagnostics | null,
+  diagnostics: TaudLifecycleDiagnostics | null,
   error: string | null,
   recoveryError: string | null,
 ): DaemonRecoveryPanelRow[] {
@@ -646,7 +651,7 @@ function daemonRecoveryRows(
   return rows
 }
 
-function daemonRecoveryActionLabel(action: TaodLifecycleRecoveryAction): string | null {
+function daemonRecoveryActionLabel(action: TaudLifecycleRecoveryAction): string | null {
   switch (action) {
     case 'start-daemon':
       return 'Start daemon'
@@ -838,13 +843,13 @@ function WorkspaceItem({
     placement: ReorderPlacement,
   ): void
 }) {
-  const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
-  const selectWorkspace = useTaoStore((state) => state.selectWorkspace)
-  const selectWorktree = useTaoStore((state) => state.selectWorktree)
-  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
-  const upsertWorktree = useTaoStore((state) => state.upsertWorktree)
-  const removeWorktree = useTaoStore((state) => state.removeWorktree)
-  const removeWorkspace = useTaoStore((state) => state.removeWorkspace)
+  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
+  const selectWorkspace = useTauStore((state) => state.selectWorkspace)
+  const selectWorktree = useTauStore((state) => state.selectWorktree)
+  const upsertWorkspace = useTauStore((state) => state.upsertWorkspace)
+  const upsertWorktree = useTauStore((state) => state.upsertWorktree)
+  const removeWorktree = useTauStore((state) => state.removeWorktree)
+  const removeWorkspace = useTauStore((state) => state.removeWorkspace)
   const [isCreatingWorktree, setIsCreatingWorktree] = useState(false)
   const [isExpanded, setIsExpanded] = useState(true)
   const [worktreeError, setWorktreeError] = useState<string | null>(null)
@@ -1056,7 +1061,7 @@ function ResizeShell({
   children,
   width,
   side = 'left',
-  className = 'tao-sidebar',
+  className = 'tau-sidebar',
   ariaLabel = 'Workspaces',
   onResize,
   onResizePreview,
@@ -1395,13 +1400,13 @@ const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
   onRecover,
 }: {
   notice: DaemonRecoveryNotice | null
-  diagnostics: TaodLifecycleDiagnostics | null
+  diagnostics: TaudLifecycleDiagnostics | null
   diagnosticsError: string | null
   recoveryError: string | null
   isRecovering: boolean
   isOpen: boolean
   onToggle(): void
-  onRecover(action: TaodLifecycleRecoveryAction): void
+  onRecover(action: TaudLifecycleRecoveryAction): void
 }) {
   if (!notice) return null
   const rows = daemonRecoveryRows(diagnostics, diagnosticsError, recoveryError)
@@ -3079,7 +3084,7 @@ const PaneGrid = memo(function PaneGrid({
         onChange={handleLayoutChange}
         onRelease={handleLayoutRelease}
         renderTile={renderTile}
-        className="tao-mosaic"
+        className="tau-mosaic"
         resize={{ minimumPaneSizePercentage: 18 }}
         zeroStateView={<div className="pane-grid-empty" />}
       />
@@ -3095,43 +3100,43 @@ const PaneGrid = memo(function PaneGrid({
 })
 
 export function App() {
-  const workspaces = useTaoStore((state) => state.workspaces)
-  const tabs = useTaoStore((state) => state.tabs)
-  const panes = useTaoStore((state) => state.panes)
-  const activeTabId = useTaoStore((state) => state.activeTabId)
-  const activePaneId = useTaoStore((state) => state.activePaneId)
-  const activeWorkspaceId = useTaoStore((state) => state.activeWorkspaceId)
-  const sidebarExpanded = useTaoStore((state) => state.sidebarExpanded)
-  const sidebarWidth = useTaoStore((state) => state.sidebarWidth)
-  const rightSidebarExpanded = useTaoStore((state) => state.rightSidebarExpanded)
-  const rightSidebarWidth = useTaoStore((state) => state.rightSidebarWidth)
-  const addWorkspace = useTaoStore((state) => state.addWorkspace)
-  const selectWorkspaceByIndex = useTaoStore((state) => state.selectWorkspaceByIndex)
-  const newTab = useTaoStore((state) => state.newTab)
-  const openChangesTab = useTaoStore((state) => state.openChangesTab)
-  const closeTab = useTaoStore((state) => state.closeTab)
-  const closeActiveTab = useTaoStore((state) => state.closeActiveTab)
-  const selectTab = useTaoStore((state) => state.selectTab)
-  const selectTabByIndex = useTaoStore((state) => state.selectTabByIndex)
-  const reorderTab = useTaoStore((state) => state.reorderTab)
-  const setTabLayout = useTaoStore((state) => state.setTabLayout)
-  const selectPane = useTaoStore((state) => state.selectPane)
-  const selectPaneByDirection = useTaoStore((state) => state.selectPaneByDirection)
-  const restartPaneSession = useTaoStore((state) => state.restartPaneSession)
-  const setPaneTitle = useTaoStore((state) => state.setPaneTitle)
-  const setPaneStatus = useTaoStore((state) => state.setPaneStatus)
-  const splitActivePane = useTaoStore((state) => state.splitActivePane)
-  const closeActivePane = useTaoStore((state) => state.closeActivePane)
-  const setSidebarWidth = useTaoStore((state) => state.setSidebarWidth)
-  const setSidebarExpanded = useTaoStore((state) => state.setSidebarExpanded)
-  const toggleSidebar = useTaoStore((state) => state.toggleSidebar)
-  const toggleRightSidebar = useTaoStore((state) => state.toggleRightSidebar)
-  const setRightSidebarExpanded = useTaoStore((state) => state.setRightSidebarExpanded)
-  const setRightSidebarWidth = useTaoStore((state) => state.setRightSidebarWidth)
-  const reorderWorkspace = useTaoStore((state) => state.reorderWorkspace)
-  const upsertWorkspace = useTaoStore((state) => state.upsertWorkspace)
-  const removeWorktree = useTaoStore((state) => state.removeWorktree)
-  const hydrateLayout = useTaoStore((state) => state.hydrateLayout)
+  const workspaces = useTauStore((state) => state.workspaces)
+  const tabs = useTauStore((state) => state.tabs)
+  const panes = useTauStore((state) => state.panes)
+  const activeTabId = useTauStore((state) => state.activeTabId)
+  const activePaneId = useTauStore((state) => state.activePaneId)
+  const activeWorkspaceId = useTauStore((state) => state.activeWorkspaceId)
+  const sidebarExpanded = useTauStore((state) => state.sidebarExpanded)
+  const sidebarWidth = useTauStore((state) => state.sidebarWidth)
+  const rightSidebarExpanded = useTauStore((state) => state.rightSidebarExpanded)
+  const rightSidebarWidth = useTauStore((state) => state.rightSidebarWidth)
+  const addWorkspace = useTauStore((state) => state.addWorkspace)
+  const selectWorkspaceByIndex = useTauStore((state) => state.selectWorkspaceByIndex)
+  const newTab = useTauStore((state) => state.newTab)
+  const openChangesTab = useTauStore((state) => state.openChangesTab)
+  const closeTab = useTauStore((state) => state.closeTab)
+  const closeActiveTab = useTauStore((state) => state.closeActiveTab)
+  const selectTab = useTauStore((state) => state.selectTab)
+  const selectTabByIndex = useTauStore((state) => state.selectTabByIndex)
+  const reorderTab = useTauStore((state) => state.reorderTab)
+  const setTabLayout = useTauStore((state) => state.setTabLayout)
+  const selectPane = useTauStore((state) => state.selectPane)
+  const selectPaneByDirection = useTauStore((state) => state.selectPaneByDirection)
+  const restartPaneSession = useTauStore((state) => state.restartPaneSession)
+  const setPaneTitle = useTauStore((state) => state.setPaneTitle)
+  const setPaneStatus = useTauStore((state) => state.setPaneStatus)
+  const splitActivePane = useTauStore((state) => state.splitActivePane)
+  const closeActivePane = useTauStore((state) => state.closeActivePane)
+  const setSidebarWidth = useTauStore((state) => state.setSidebarWidth)
+  const setSidebarExpanded = useTauStore((state) => state.setSidebarExpanded)
+  const toggleSidebar = useTauStore((state) => state.toggleSidebar)
+  const toggleRightSidebar = useTauStore((state) => state.toggleRightSidebar)
+  const setRightSidebarExpanded = useTauStore((state) => state.setRightSidebarExpanded)
+  const setRightSidebarWidth = useTauStore((state) => state.setRightSidebarWidth)
+  const reorderWorkspace = useTauStore((state) => state.reorderWorkspace)
+  const upsertWorkspace = useTauStore((state) => state.upsertWorkspace)
+  const removeWorktree = useTauStore((state) => state.removeWorktree)
+  const hydrateLayout = useTauStore((state) => state.hydrateLayout)
   const [terminalFocusCounts, setTerminalFocusCounts] = useState<Record<string, number>>({})
   const [terminalSearchCounts, setTerminalSearchCounts] = useState<Record<string, number>>({})
   const [sidebarResizePreviewWidth, setSidebarResizePreviewWidth] = useState<number | null>(null)
@@ -3141,8 +3146,8 @@ export function App() {
   const [rightSidebarView, setRightSidebarView] = useState<RightSidebarView>('files')
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [taodDiagnostics, setTaodDiagnostics] = useState<TaodLifecycleDiagnostics | null>(null)
-  const [taodDiagnosticsError, setTaodDiagnosticsError] = useState<string | null>(null)
+  const [taudDiagnostics, setTaudDiagnostics] = useState<TaudLifecycleDiagnostics | null>(null)
+  const [taudDiagnosticsError, setTaudDiagnosticsError] = useState<string | null>(null)
   const [daemonDiagnosticsOpen, setDaemonDiagnosticsOpen] = useState(false)
   const [daemonRecoveryInFlight, setDaemonRecoveryInFlight] = useState(false)
   const [daemonRecoveryError, setDaemonRecoveryError] = useState<string | null>(null)
@@ -3268,7 +3273,7 @@ export function App() {
   const applyWorkspaceRecord = useCallback(
     (record: WorkspaceRecord) => {
       const nextWorkspace = workspaceFromRecord(record)
-      const previousWorkspace = useTaoStore
+      const previousWorkspace = useTauStore
         .getState()
         .workspaces.find(
           (workspace) =>
@@ -3316,23 +3321,23 @@ export function App() {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
 
-    const refreshTaodDiagnostics = async () => {
+    const refreshTaudDiagnostics = async () => {
       try {
-        const diagnostics = await window.electronAPI.getTaodDiagnostics()
+        const diagnostics = await window.electronAPI.getTaudDiagnostics()
         if (cancelled) return
-        setTaodDiagnostics(diagnostics)
-        setTaodDiagnosticsError(null)
+        setTaudDiagnostics(diagnostics)
+        setTaudDiagnosticsError(null)
         if (diagnostics?.recoveryAction === 'none') setDaemonRecoveryError(null)
       } catch (error) {
         if (cancelled) return
-        setTaodDiagnostics(null)
-        setTaodDiagnosticsError(error instanceof Error ? error.message : String(error))
+        setTaudDiagnostics(null)
+        setTaudDiagnosticsError(error instanceof Error ? error.message : String(error))
       } finally {
-        if (!cancelled) timer = setTimeout(refreshTaodDiagnostics, TAOD_DIAGNOSTICS_POLL_MS)
+        if (!cancelled) timer = setTimeout(refreshTaudDiagnostics, TAUD_DIAGNOSTICS_POLL_MS)
       }
     }
 
-    void refreshTaodDiagnostics()
+    void refreshTaudDiagnostics()
 
     return () => {
       cancelled = true
@@ -3346,7 +3351,7 @@ export function App() {
     let cancelled = false
 
     async function syncDaemonWorkspaces() {
-      const currentWorkspaces = useTaoStore.getState().workspaces
+      const currentWorkspaces = useTauStore.getState().workspaces
       if (currentWorkspaces.length === 0) return
 
       for (const workspace of currentWorkspaces) {
@@ -3359,7 +3364,7 @@ export function App() {
           })
           if (!cancelled && response.ok) applyWorkspaceRecord(response.value)
         } catch (error) {
-          console.warn('[workspace] Failed to import workspace into taod:', error)
+          console.warn('[workspace] Failed to import workspace into taud:', error)
         }
       }
 
@@ -3395,7 +3400,7 @@ export function App() {
     if (!layoutLoaded) return
 
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsubscribe = useTaoStore.subscribe((state) => {
+    const unsubscribe = useTauStore.subscribe((state) => {
       if (timer !== null) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
@@ -3405,7 +3410,7 @@ export function App() {
       }, LAYOUT_WRITE_DEBOUNCE_MS)
     })
 
-    window.electronAPI.writeLayout(selectPaneLayoutData(useTaoStore.getState())).catch((error) => {
+    window.electronAPI.writeLayout(selectPaneLayoutData(useTauStore.getState())).catch((error) => {
       console.warn('[layout] Failed to write initial pane layout:', error)
     })
 
@@ -3426,7 +3431,7 @@ export function App() {
   }, [activePaneId, layoutLoaded, panes])
 
   useEffect(() => {
-    document.title = activeTab ? `${activeTab.name} — Tao` : 'Tao'
+    document.title = activeTab ? `${activeTab.name} — Tau` : 'Tau'
   }, [activeTab])
 
   useEffect(() => {
@@ -3445,7 +3450,7 @@ export function App() {
 
   useEffect(() => {
     const focusActiveTerminal = () => {
-      const paneId = useTaoStore.getState().activePaneId
+      const paneId = useTauStore.getState().activePaneId
       if (!paneId) return
 
       setTerminalFocusCounts((counts) => ({
@@ -3455,7 +3460,7 @@ export function App() {
     }
 
     const searchActiveTerminal = () => {
-      const paneId = useTaoStore.getState().activePaneId
+      const paneId = useTauStore.getState().activePaneId
       if (!paneId) return
 
       setTerminalSearchCounts((counts) => ({
@@ -3558,7 +3563,7 @@ export function App() {
     const workspace = sortedWorkspaces[index]
     if (!workspace) return
     setIsSettingsOpen(false)
-    useTaoStore.getState().selectWorkspace(workspace.id)
+    useTauStore.getState().selectWorkspace(workspace.id)
   }
 
   const handlePaneArchiveState = useCallback(
@@ -3568,7 +3573,7 @@ export function App() {
         return
       }
 
-      const pane = useTaoStore.getState().panes.find((candidate) => candidate.id === paneId)
+      const pane = useTauStore.getState().panes.find((candidate) => candidate.id === paneId)
       if (pane?.status === 'archived') setPaneStatus(paneId, 'idle')
     },
     [setPaneStatus],
@@ -3600,14 +3605,14 @@ export function App() {
     openChangesTab(activeWorkspaceKey ?? undefined)
   }, [activeWorkspaceKey, openChangesTab])
   const shellStyle = {
-    '--tao-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
-  } as CSSProperties & Record<'--tao-sidebar-width', string>
-  const shellClassName = ['tao-shell', sidebarExpanded ? null : 'tao-shell-sidebar-hidden']
+    '--tau-sidebar-width': `${sidebarExpanded ? (sidebarResizePreviewWidth ?? sidebarSize) : 0}px`,
+  } as CSSProperties & Record<'--tau-sidebar-width', string>
+  const shellClassName = ['tau-shell', sidebarExpanded ? null : 'tau-shell-sidebar-hidden']
     .filter(Boolean)
     .join(' ')
   const daemonNotice = useMemo(
-    () => daemonRecoveryNotice(taodDiagnostics, taodDiagnosticsError),
-    [taodDiagnostics, taodDiagnosticsError],
+    () => daemonRecoveryNotice(taudDiagnostics, taudDiagnosticsError),
+    [taudDiagnostics, taudDiagnosticsError],
   )
 
   useEffect(() => {
@@ -3618,13 +3623,13 @@ export function App() {
     setDaemonDiagnosticsOpen((open) => !open)
   }, [])
 
-  const handleApplyDaemonRecovery = useCallback(async (action: TaodLifecycleRecoveryAction) => {
+  const handleApplyDaemonRecovery = useCallback(async (action: TaudLifecycleRecoveryAction) => {
     setDaemonRecoveryInFlight(true)
     setDaemonRecoveryError(null)
     try {
-      const diagnostics = await window.electronAPI.recoverTaod(action)
-      setTaodDiagnostics(diagnostics)
-      setTaodDiagnosticsError(null)
+      const diagnostics = await window.electronAPI.recoverTaud(action)
+      setTaudDiagnostics(diagnostics)
+      setTaudDiagnosticsError(null)
     } catch (error) {
       setDaemonRecoveryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -3633,12 +3638,12 @@ export function App() {
   }, [])
 
   if (!layoutLoaded) {
-    return <div className="tao-shell" />
+    return <div className="tau-shell" />
   }
 
   if (isSettingsOpen) {
     return (
-      <div className="tao-shell tao-settings-shell">
+      <div className="tau-shell tau-settings-shell">
         <SettingsPage onBack={() => setIsSettingsOpen(false)} />
       </div>
     )
@@ -3663,8 +3668,8 @@ export function App() {
           <div className="sidebar-top-actions">
             <DaemonRecoveryIndicator
               notice={daemonNotice}
-              diagnostics={taodDiagnostics}
-              diagnosticsError={taodDiagnosticsError}
+              diagnostics={taudDiagnostics}
+              diagnosticsError={taudDiagnosticsError}
               recoveryError={daemonRecoveryError}
               isRecovering={daemonRecoveryInFlight}
               isOpen={daemonDiagnosticsOpen}
@@ -3707,7 +3712,7 @@ export function App() {
           </div>
         </ResizeShell>
       ) : null}
-      <section className="tao-main">
+      <section className="tau-main">
         <main className="main-content">
           <TabBar
             tabs={workspaceTabs}
@@ -3732,8 +3737,8 @@ export function App() {
             <div className="titlebar-status-actions">
               <DaemonRecoveryIndicator
                 notice={daemonNotice}
-                diagnostics={taodDiagnostics}
-                diagnosticsError={taodDiagnosticsError}
+                diagnostics={taudDiagnostics}
+                diagnosticsError={taudDiagnosticsError}
                 recoveryError={daemonRecoveryError}
                 isRecovering={daemonRecoveryInFlight}
                 isOpen={daemonDiagnosticsOpen}
@@ -3801,7 +3806,7 @@ export function App() {
         <ResizeShell
           width={rightSidebarResizePreviewWidth ?? rightSidebarSize}
           side="right"
-          className="tao-right-sidebar"
+          className="tau-right-sidebar"
           ariaLabel="Workspace files"
           onResize={handleResizeRightSidebar}
           onResizePreview={handleRightSidebarResizePreview}

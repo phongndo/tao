@@ -3,9 +3,9 @@
  * These types describe the API exposed by the preload script via contextBridge.
  */
 
-import type { AppCommand } from '@tao/shared/app-command'
-import type { TaodPtyBridgeDiagnostics } from '../main/pty-protocol'
-import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
+import type { AppCommand } from '@tau/shared/app-command'
+import type { TaudPtyBridgeDiagnostics } from '../main/pty-protocol'
+import type { PaneLayoutData, SettingsData } from '@tau/shared/session'
 import type {
   AttachSessionInput,
   AttachSessionResult,
@@ -15,9 +15,9 @@ import type {
   CurrentScreenSnapshotFrame,
   ExitInfo,
   OutputFrame,
-  TaodLifecycleDiagnostics,
-  TaodLifecycleRecoveryInput,
-} from '@tao/shared/taod-protocol'
+  TaudLifecycleDiagnostics,
+  TaudLifecycleRecoveryInput,
+} from '@tau/shared/taud-protocol'
 import type {
   WorkspaceDiffPatchResponse,
   WorkspaceDiffPatchInput,
@@ -42,7 +42,7 @@ import type {
   WorktreeRefreshInput,
   WorktreeRemoveInput,
   WorkspaceWorktreeResponse,
-} from '@tao/shared/workspace'
+} from '@tau/shared/workspace'
 
 type TerminalPreloadDiagnostics = {
   pendingClientMessages: number
@@ -101,9 +101,9 @@ export interface ElectronAPI {
   onAppCommand(callback: (command: AppCommand) => void): () => void
   onWorkspaceChanged(callback: (workspace: WorkspaceRecord) => void): () => void
   getTerminalPreloadDiagnostics(): TerminalPreloadDiagnostics
-  getTaodDiagnostics(): Promise<TaodLifecycleDiagnostics | null>
-  getTaodPtyBridgeDiagnostics(): Promise<TaodPtyBridgeDiagnostics | null>
-  recoverTaod(action: TaodLifecycleRecoveryInput): Promise<TaodLifecycleDiagnostics | null>
+  getTaudDiagnostics(): Promise<TaudLifecycleDiagnostics | null>
+  getTaudPtyBridgeDiagnostics(): Promise<TaudPtyBridgeDiagnostics | null>
+  recoverTaud(action: TaudLifecycleRecoveryInput): Promise<TaudLifecycleDiagnostics | null>
   getWorkspaceWatcherDiagnostics(): Promise<WorkspaceWatcherDiagnostics | null>
   pickWorkspaceDirectory(): Promise<string | null>
   getGitBranch(workspacePath: string): Promise<WorkspaceGitBranchResponse>

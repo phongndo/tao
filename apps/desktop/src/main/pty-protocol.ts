@@ -1,5 +1,5 @@
 import { Schema } from 'effect'
-import { AgentStatusSchema, AttachSessionModeSchema } from '@tao/shared/taod-protocol'
+import { AgentStatusSchema, AttachSessionModeSchema } from '@tau/shared/taud-protocol'
 
 export const PtySizeSchema = Schema.Struct({
   cols: Schema.Number,
@@ -111,7 +111,7 @@ export const PtyServiceMessageSchema = Schema.Union([
   }),
 ])
 
-export const TaodPtyBridgeDiagnosticsSchema = Schema.Struct({
+export const TaudPtyBridgeDiagnosticsSchema = Schema.Struct({
   portConnected: Schema.Boolean,
   activeSessions: Schema.Number,
   activeStreams: Schema.Number,
@@ -133,4 +133,4 @@ export type PtySize = Schema.Schema.Type<typeof PtySizeSchema>
 export type PtyExitInfo = Schema.Schema.Type<typeof PtyExitInfoSchema>
 export type PtyClientMessage = Schema.Schema.Type<typeof PtyClientMessageSchema>
 export type PtyServiceMessage = Schema.Schema.Type<typeof PtyServiceMessageSchema>
-export type TaodPtyBridgeDiagnostics = Schema.Schema.Type<typeof TaodPtyBridgeDiagnosticsSchema>
+export type TaudPtyBridgeDiagnostics = Schema.Schema.Type<typeof TaudPtyBridgeDiagnosticsSchema>

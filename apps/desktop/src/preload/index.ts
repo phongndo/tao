@@ -4,19 +4,19 @@ import type {
   PtyClientMessage,
   PtyExitInfo,
   PtySize,
-  TaodPtyBridgeDiagnostics,
+  TaudPtyBridgeDiagnostics,
 } from '../main/pty-protocol'
 import {
   type PtyServiceMessage,
   PtyServiceMessageSchema,
-  TaodPtyBridgeDiagnosticsSchema,
+  TaudPtyBridgeDiagnosticsSchema,
 } from '../main/pty-protocol'
-import type { AppCommand } from '@tao/shared/app-command'
-import type { PaneLayoutData, SettingsData } from '@tao/shared/session'
+import type { AppCommand } from '@tau/shared/app-command'
+import type { PaneLayoutData, SettingsData } from '@tau/shared/session'
 import {
-  TaodLifecycleDiagnosticsSchema,
-  TaodLifecycleRecoveryInputSchema,
-} from '@tao/shared/taod-protocol'
+  TaudLifecycleDiagnosticsSchema,
+  TaudLifecycleRecoveryInputSchema,
+} from '@tau/shared/taud-protocol'
 import type {
   AttachSessionInput,
   AttachSessionMode,
@@ -27,9 +27,9 @@ import type {
   CurrentScreenSnapshotFrame,
   ExitInfo,
   OutputFrame,
-  TaodLifecycleDiagnostics,
-  TaodLifecycleRecoveryInput,
-} from '@tao/shared/taod-protocol'
+  TaudLifecycleDiagnostics,
+  TaudLifecycleRecoveryInput,
+} from '@tau/shared/taud-protocol'
 import {
   WorkspaceError,
   WorkspaceAddInputSchema,
@@ -67,7 +67,7 @@ import {
   type WorktreeRefreshInput,
   type WorktreeRemoveInput,
   type WorkspaceWorktreeResponse,
-} from '@tao/shared/workspace'
+} from '@tau/shared/workspace'
 import { PreloadWorkspaceIpc, runPreloadEffect } from './runtime'
 
 type PtyDataCallback = (data: string) => void
@@ -948,29 +948,29 @@ const electronAPI = {
     return getTerminalPreloadDiagnostics()
   },
 
-  async getTaodDiagnostics(): Promise<TaodLifecycleDiagnostics | null> {
-    const payload = await ipcRenderer.invoke('taod:getDiagnostics')
+  async getTaudDiagnostics(): Promise<TaudLifecycleDiagnostics | null> {
+    const payload = await ipcRenderer.invoke('taud:getDiagnostics')
     if (payload === null) return null
-    const decoded = Schema.decodeUnknownOption(TaodLifecycleDiagnosticsSchema)(payload)
-    if (decoded._tag === 'None') throw new Error('Invalid taod diagnostics payload')
+    const decoded = Schema.decodeUnknownOption(TaudLifecycleDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid taud diagnostics payload')
     return decoded.value
   },
 
-  async getTaodPtyBridgeDiagnostics(): Promise<TaodPtyBridgeDiagnostics | null> {
-    const payload = await ipcRenderer.invoke('taod:getPtyBridgeDiagnostics')
+  async getTaudPtyBridgeDiagnostics(): Promise<TaudPtyBridgeDiagnostics | null> {
+    const payload = await ipcRenderer.invoke('taud:getPtyBridgeDiagnostics')
     if (payload === null) return null
-    const decoded = Schema.decodeUnknownOption(TaodPtyBridgeDiagnosticsSchema)(payload)
-    if (decoded._tag === 'None') throw new Error('Invalid taod bridge diagnostics payload')
+    const decoded = Schema.decodeUnknownOption(TaudPtyBridgeDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid taud bridge diagnostics payload')
     return decoded.value
   },
 
-  async recoverTaod(action: TaodLifecycleRecoveryInput): Promise<TaodLifecycleDiagnostics | null> {
-    const decodedInput = Schema.decodeUnknownOption(TaodLifecycleRecoveryInputSchema)(action)
-    if (decodedInput._tag === 'None') throw new Error('Invalid taod recovery action')
-    const payload = await ipcRenderer.invoke('taod:recover', decodedInput.value)
+  async recoverTaud(action: TaudLifecycleRecoveryInput): Promise<TaudLifecycleDiagnostics | null> {
+    const decodedInput = Schema.decodeUnknownOption(TaudLifecycleRecoveryInputSchema)(action)
+    if (decodedInput._tag === 'None') throw new Error('Invalid taud recovery action')
+    const payload = await ipcRenderer.invoke('taud:recover', decodedInput.value)
     if (payload === null) return null
-    const decoded = Schema.decodeUnknownOption(TaodLifecycleDiagnosticsSchema)(payload)
-    if (decoded._tag === 'None') throw new Error('Invalid taod diagnostics payload')
+    const decoded = Schema.decodeUnknownOption(TaudLifecycleDiagnosticsSchema)(payload)
+    if (decoded._tag === 'None') throw new Error('Invalid taud diagnostics payload')
     return decoded.value
   },
 

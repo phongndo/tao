@@ -1,10 +1,10 @@
 import { homedir } from 'node:os'
 import { Schema } from 'effect'
-import { PaneLayoutDataSchema, type PaneLayoutData } from '@tao/shared/session'
-import { resolveTaoStoragePaths } from '@tao/shared/storage-path'
+import { PaneLayoutDataSchema, type PaneLayoutData } from '@tau/shared/session'
+import { resolveTauStoragePaths } from '@tau/shared/storage-path'
 import { readJsonFile, writeJsonFile } from './file-store'
 
-const layoutPath = resolveTaoStoragePaths(homedir()).paneLayouts
+const layoutPath = resolveTauStoragePaths(homedir()).paneLayouts
 
 export async function readLayout(): Promise<PaneLayoutData | null> {
   const data = await readJsonFile<unknown>(layoutPath)

@@ -1,9 +1,9 @@
 /**
- * Tao - direct taod input-priority benchmark under a slow output subscriber.
+ * Tau - direct taud input-priority benchmark under a slow output subscriber.
  *
- * Launches managed taod, creates one PTY session, attaches a fast stream and an
+ * Launches managed taud, creates one PTY session, attaches a fast stream and an
  * intentionally unread slow stream, floods terminal output, then measures input
- * echo latency through the fast stream while taod drops the slow subscriber.
+ * echo latency through the fast stream while taud drops the slow subscriber.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -12,13 +12,13 @@ import net from 'node:net'
 import { homedir, platform, tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveTaoStoragePaths } from '@tao/shared/storage-path'
-import { TaodStreamFrameKind } from '@tao/shared/taod-protocol'
-import { encodeTaodStreamFrame, TaodStreamFrameParser } from '../src/main/taod-stream'
+import { resolveTauStoragePaths } from '@tau/shared/storage-path'
+import { TaudStreamFrameKind } from '@tau/shared/taud-protocol'
+import { encodeTaudStreamFrame, TaudStreamFrameParser } from '../src/main/taud-stream'
 
 type ControlResponse = Record<string, unknown>
 
-type ManagedTaod = {
+type ManagedTaud = {
   readonly home: string
   readonly socketPath: string
   readonly child: ChildProcess
@@ -29,20 +29,20 @@ const benchDir = dirname(fileURLToPath(import.meta.url))
 const desktopRoot = resolve(benchDir, '..')
 const repoRoot = resolve(desktopRoot, '../..')
 
-const SAMPLES = positiveInt(process.env.TAO_INPUT_PRIORITY_SAMPLES, 20)
-const FLOOD_BYTES = positiveInt(process.env.TAO_INPUT_PRIORITY_FLOOD_BYTES, 8 * 1024 * 1024)
+const SAMPLES = positiveInt(process.env.TAU_INPUT_PRIORITY_SAMPLES, 20)
+const FLOOD_BYTES = positiveInt(process.env.TAU_INPUT_PRIORITY_FLOOD_BYTES, 8 * 1024 * 1024)
 const MIN_OUTPUT_BYTES = positiveInt(
-  process.env.TAO_INPUT_PRIORITY_MIN_OUTPUT_BYTES,
+  process.env.TAU_INPUT_PRIORITY_MIN_OUTPUT_BYTES,
   Math.min(FLOOD_BYTES, 1024 * 1024),
 )
-const ENFORCE = process.env.TAO_INPUT_PRIORITY_ENFORCE === '1'
-const MAX_P50_MS = nonNegativeInt(process.env.TAO_INPUT_PRIORITY_MAX_P50_MS, 0)
-const MAX_P95_MS = nonNegativeInt(process.env.TAO_INPUT_PRIORITY_MAX_P95_MS, 500)
-const MAX_MAX_MS = nonNegativeInt(process.env.TAO_INPUT_PRIORITY_MAX_MAX_MS, 1000)
-const MIN_SLOW_DROPS = nonNegativeInt(process.env.TAO_INPUT_PRIORITY_MIN_SLOW_DROPS, 1)
+const ENFORCE = process.env.TAU_INPUT_PRIORITY_ENFORCE === '1'
+const MAX_P50_MS = nonNegativeInt(process.env.TAU_INPUT_PRIORITY_MAX_P50_MS, 0)
+const MAX_P95_MS = nonNegativeInt(process.env.TAU_INPUT_PRIORITY_MAX_P95_MS, 500)
+const MAX_MAX_MS = nonNegativeInt(process.env.TAU_INPUT_PRIORITY_MAX_MAX_MS, 1000)
+const MIN_SLOW_DROPS = nonNegativeInt(process.env.TAU_INPUT_PRIORITY_MIN_SLOW_DROPS, 1)
 
 let socketPath =
-  process.env.TAOD_SOCKET_PATH || resolveTaoStoragePaths(process.env.HOME || homedir()).socket
+  process.env.TAUD_SOCKET_PATH || resolveTauStoragePaths(process.env.HOME || homedir()).socket
 
 function positiveInt(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback
@@ -64,10 +64,10 @@ function now(): number {
   return performance.now()
 }
 
-function findTaodBinary(): string | null {
-  const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
+function findTaudBinary(): string | null {
+  const exeName = process.platform === 'win32' ? 'taud.exe' : 'taud'
   const candidates = [
-    process.env.TAOD_PATH,
+    process.env.TAUD_PATH,
     resolve(desktopRoot, 'out/bin', exeName),
     resolve(repoRoot, 'apps/daemon/zig-out/bin', exeName),
   ].filter(Boolean) as string[]
@@ -83,7 +83,7 @@ function connectSocket(timeoutMs = 3000): Promise<net.Socket> {
     const socket = net.createConnection(socketPath)
     const timer = setTimeout(() => {
       socket.destroy()
-      rejectSocket(new Error(`Timed out connecting to taod at ${socketPath}`))
+      rejectSocket(new Error(`Timed out connecting to taud at ${socketPath}`))
     }, timeoutMs)
     socket.once('connect', () => {
       clearTimeout(timer)
@@ -112,7 +112,7 @@ async function writeAll(
     }
     const onClose = () => {
       cleanup()
-      rejectWrite(new Error(`taod closed socket while writing ${context}`))
+      rejectWrite(new Error(`taud closed socket while writing ${context}`))
     }
     socket.once('error', onError)
     socket.once('close', onClose)
@@ -132,7 +132,7 @@ function sendJson(
     let buffered = Buffer.alloc(0)
     const timer = setTimeout(() => {
       cleanup()
-      rejectResponse(new Error('Timeout waiting for taod response'))
+      rejectResponse(new Error('Timeout waiting for taud response'))
     }, 5000)
 
     const cleanup = () => {
@@ -147,7 +147,7 @@ function sendJson(
     }
     const onClose = () => {
       cleanup()
-      rejectResponse(new Error('taod closed socket before responding'))
+      rejectResponse(new Error('taud closed socket before responding'))
     }
     const onData = (chunk: Buffer) => {
       buffered = buffered.length === 0 ? Buffer.from(chunk) : Buffer.concat([buffered, chunk])
@@ -158,7 +158,7 @@ function sendJson(
         const response = JSON.parse(buffered.subarray(0, newline).toString('utf8'))
         resolveResponse({ response, tail: buffered.subarray(newline + 1) })
       } catch {
-        rejectResponse(new Error('Failed to parse taod response'))
+        rejectResponse(new Error('Failed to parse taud response'))
       }
     }
 
@@ -177,24 +177,24 @@ async function closeSocket(socket: net.Socket): Promise<void> {
   socket.destroy()
 }
 
-async function startManagedTaod(): Promise<ManagedTaod> {
-  const binaryPath = findTaodBinary()
-  if (!binaryPath) throw new Error('taod binary not found; run pnpm --filter @tao/desktop build')
+async function startManagedTaud(): Promise<ManagedTaud> {
+  const binaryPath = findTaudBinary()
+  if (!binaryPath) throw new Error('taud binary not found; run pnpm --filter @tau/desktop build')
 
-  const home = mkdtempSync(resolve(tmpdir(), 'tao-input-priority-bench-'))
-  socketPath = resolveTaoStoragePaths(home).socket
+  const home = mkdtempSync(resolve(tmpdir(), 'tau-input-priority-bench-'))
+  socketPath = resolveTauStoragePaths(home).socket
   const adapters = resolve(desktopRoot, 'out/adapters')
   const child = spawn(binaryPath, [], {
     cwd: dirname(binaryPath),
     env: {
       ...process.env,
       HOME: home,
-      TAOD_ADAPTER_DIR: adapters,
+      TAUD_ADAPTER_DIR: adapters,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   child.stderr?.on('data', (chunk: Buffer) => {
-    process.stderr.write(`[taod stderr] ${chunk.toString('utf8')}`)
+    process.stderr.write(`[taud stderr] ${chunk.toString('utf8')}`)
   })
 
   for (let attempt = 0; attempt < 80; attempt++) {
@@ -221,7 +221,7 @@ async function startManagedTaod(): Promise<ManagedTaod> {
     } catch {
       if (child.exitCode !== null) {
         rmSync(home, { recursive: true, force: true })
-        throw new Error(`managed taod exited before socket became ready: ${child.exitCode}`)
+        throw new Error(`managed taud exited before socket became ready: ${child.exitCode}`)
       }
       await sleep(50)
     }
@@ -229,7 +229,7 @@ async function startManagedTaod(): Promise<ManagedTaod> {
 
   child.kill('SIGKILL')
   rmSync(home, { recursive: true, force: true })
-  throw new Error('managed taod failed to start')
+  throw new Error('managed taud failed to start')
 }
 
 async function control(request: Record<string, unknown>): Promise<ControlResponse> {
@@ -262,7 +262,7 @@ async function killSession(sessionId: string): Promise<void> {
   try {
     await control({ type: 'kill', id: `input-priority-kill-${sessionId}`, sessionId })
   } catch {
-    // Best-effort cleanup. Managed taod teardown is the final safety net.
+    // Best-effort cleanup. Managed taud teardown is the final safety net.
   }
 }
 
@@ -317,13 +317,13 @@ async function attachStream(
 }
 
 async function runInputPriorityBenchmark(): Promise<void> {
-  const managed = await startManagedTaod()
+  const managed = await startManagedTaud()
   const sessionId = `input-priority-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   let fastSocket: net.Socket | null = null
   let slowSocket: net.Socket | null = null
 
   try {
-    console.log('Tao input-priority benchmark under slow subscriber')
+    console.log('Tau input-priority benchmark under slow subscriber')
     console.log('')
     console.log(`  Samples:     ${SAMPLES}`)
     console.log(`  Flood bytes: ${FLOOD_BYTES}`)
@@ -364,7 +364,7 @@ async function runInputPriorityBenchmark(): Promise<void> {
     const fastAttach = await attachStream(sessionId, 'input-priority-fast-attach')
     fastSocket = fastAttach.socket
 
-    const parser = new TaodStreamFrameParser()
+    const parser = new TaudStreamFrameParser()
     const latencies: number[] = []
     let seq = 0n
     let receivedTail = ''
@@ -379,7 +379,7 @@ async function runInputPriorityBenchmark(): Promise<void> {
 
     const handleChunk = (chunk: Buffer) => {
       for (const frame of parser.push(chunk)) {
-        if (frame.sessionId !== sessionId || frame.kind !== TaodStreamFrameKind.Output) continue
+        if (frame.sessionId !== sessionId || frame.kind !== TaudStreamFrameKind.Output) continue
         outputBytes += frame.payload.length
         const text = frame.payload.toString('utf8')
         const combined = receivedTail + text
@@ -422,8 +422,8 @@ async function runInputPriorityBenchmark(): Promise<void> {
       seq++
       void writeAll(
         fastSocket!,
-        encodeTaodStreamFrame({
-          kind: TaodStreamFrameKind.Input,
+        encodeTaudStreamFrame({
+          kind: TaudStreamFrameKind.Input,
           sessionId,
           seq,
           payload: 'GO\n',
@@ -475,8 +475,8 @@ async function runInputPriorityBenchmark(): Promise<void> {
         }
         seq++
         fastSocket!.write(
-          encodeTaodStreamFrame({
-            kind: TaodStreamFrameKind.Input,
+          encodeTaudStreamFrame({
+            kind: TaudStreamFrameKind.Input,
             sessionId,
             seq,
             payload: `${token}\n`,

@@ -20,7 +20,7 @@ export class BrowserStorage extends Context.Service<
     readonly setItem: (key: string, value: string) => Effect.Effect<void, StorageError>
     readonly removeItem: (key: string) => Effect.Effect<void, StorageError>
   }
->()('Tao/BrowserStorage') {}
+>()('Tau/BrowserStorage') {}
 
 function storageUnavailable(): StorageError {
   return new StorageError('unavailable', 'localStorage is unavailable')

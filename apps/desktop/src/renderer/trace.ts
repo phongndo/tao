@@ -1,4 +1,4 @@
-const TRACE_PREFIX = 'tao:'
+const TRACE_PREFIX = 'tau:'
 const MAX_TRACE_ENTRIES = 128
 
 export type RendererTraceEntry = {
@@ -14,7 +14,7 @@ type RendererTraceApi = {
 
 declare global {
   interface Window {
-    __TAO_RENDERER_TRACE__?: RendererTraceApi
+    __TAU_RENDERER_TRACE__?: RendererTraceApi
   }
 }
 
@@ -65,7 +65,7 @@ export function rendererTraceEntries(): RendererTraceEntry[] {
 }
 
 if (typeof window !== 'undefined') {
-  window.__TAO_RENDERER_TRACE__ = {
+  window.__TAU_RENDERER_TRACE__ = {
     entries: rendererTraceEntries,
   }
 }

@@ -2,10 +2,10 @@
 
 **Status**: first implementation slice in progress
 
-Tao ships one user-facing desktop product backed by the `taod` daemon:
+Tau ships one user-facing desktop product backed by the `taud` daemon:
 
-- `Tao.app`: the Electron desktop app.
-- `taod`: the per-user runtime bundled with the app.
+- `Tau.app`: the Electron desktop app.
+- `taud`: the per-user runtime bundled with the app.
 
 Installer design should make the daemon boundary explicit without treating it
 as a separately installed command-line product.
@@ -16,8 +16,8 @@ Use Homebrew Cask as the first-class desktop app installer on macOS.
 
 The app bundle should include:
 
-- `Tao.app`
-- a bundled `taod`
+- `Tau.app`
+- a bundled `taud`
 - built-in daemon adapters
 
 The app should start by connecting to an existing compatible daemon. If none is
@@ -28,8 +28,8 @@ of replacing it blindly.
 Use separate casks for install-time channel selection:
 
 ```bash
-brew install --cask tao
-brew install --cask tao-nightly
+brew install --cask tau
+brew install --cask tau-nightly
 ```
 
 If the app is managed by Homebrew, in-app updates should not silently mutate
@@ -39,14 +39,14 @@ that this install is Homebrew-managed.
 
 ## Shared Daemon Contract
 
-`taod` is a shared per-user runtime owned by the Tao app installation.
+`taud` is a shared per-user runtime owned by the Tau app installation.
 
 The canonical runtime paths are:
 
-- socket: `~/.tao/run/taod.sock`
-- pid file: `~/.tao/run/taod.pid`
-- metadata database: `~/.tao/tao.db`
-- session data: `~/.tao/sessions/`
+- socket: `~/.tau/run/taud.sock`
+- pid file: `~/.tau/run/taud.pid`
+- metadata database: `~/.tau/tau.db`
+- session data: `~/.tau/sessions/`
 
 The app must use the daemon handshake before reusing or replacing a daemon.
 The handshake contract is:
@@ -107,7 +107,7 @@ For a Homebrew-managed install, this setting should not directly patch the app
 bundle. It should either:
 
 - explain the matching cask switch, or
-- trigger a package-manager-aware update path if Tao owns one later.
+- trigger a package-manager-aware update path if Tau owns one later.
 
 The setting can still be useful before direct in-app updates exist because it
 defines which channel the app expects when checking compatibility, diagnostics,
@@ -120,8 +120,8 @@ default.
 
 1. Document the daemon runtime contract, channel rules, and installer
    ownership boundaries. **Done.**
-2. Publish reusable `taod` artifacts for the channels Tao supports.
-3. Add Homebrew Casks for `tao` and `tao-nightly`.
+2. Publish reusable `taud` artifacts for the channels Tau supports.
+3. Add Homebrew Casks for `tau` and `tau-nightly`.
 4. Add launch smoke coverage for no-daemon, compatible-daemon, and
    incompatible-daemon cases.
 5. Add desktop channel preference UI once update/check plumbing exists.
