@@ -71,24 +71,41 @@ function exposeNightlyAssets() {
       outDir = config.build.outDir
     },
     configureServer(server: any) {
-      server.middlewares.use('/nightly', (request: any, response: any, next: () => void) => {
-        const requestPath = decodeURIComponent(String(request.url ?? '').split('?')[0] ?? '')
-          .replace(/^\/+/u, '')
-          .trim()
-        if (!requestPath || requestPath.includes('/') || requestPath.includes('\\')) {
-          next()
-          return
-        }
+      server.middlewares.use(
+        '/nightly',
+        (request: any, response: any, next: (error?: unknown) => void) => {
+          let requestPath = ''
+          try {
+            requestPath = decodeURIComponent(String(request.url ?? '').split('?')[0] ?? '')
+              .replace(/^\/+/u, '')
+              .trim()
+          } catch {
+            next()
+            return
+          }
+          if (!requestPath || requestPath.includes('/') || requestPath.includes('\\')) {
+            next()
+            return
+          }
 
-        const assetPath = resolve(nightlyAssetsSource, requestPath)
-        if (!existsSync(assetPath) || !statSync(assetPath).isFile()) {
-          next()
-          return
-        }
+          const assetPath = resolve(nightlyAssetsSource, requestPath)
+          if (!existsSync(assetPath) || !statSync(assetPath).isFile()) {
+            next()
+            return
+          }
 
-        if (requestPath.endsWith('.png')) response.setHeader('Content-Type', 'image/png')
-        createReadStream(assetPath).pipe(response)
-      })
+          if (requestPath.endsWith('.png')) response.setHeader('Content-Type', 'image/png')
+          const stream = createReadStream(assetPath)
+          stream.on('error', (error) => {
+            if (response.headersSent) {
+              response.destroy(error)
+              return
+            }
+            next(error)
+          })
+          stream.pipe(response)
+        },
+      )
     },
     closeBundle() {
       if (!existsSync(nightlyAssetsSource)) {
