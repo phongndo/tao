@@ -3,7 +3,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 /// Central resource budgets for the Zig daemon. These are deliberately high
-/// enough to avoid changing normal Tao behavior, but explicit so accidental
+/// enough to avoid changing normal Tau behavior, but explicit so accidental
 /// unbounded growth is reviewed in one place.
 pub const sessions_max = 16 * 1024;
 pub const subscribers_per_session_max = 1024;

@@ -1,5 +1,5 @@
 {
-  description = "Tao Terminal — A super-performant terminal emulator with Ghostty WASM";
+  description = "Tau Terminal — A super-performant terminal emulator with Ghostty WASM";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -46,13 +46,13 @@
       {
         # ── Dev shell (nix develop) ──
         devShells.default = pkgs.mkShell {
-          name = "tao";
+          name = "tau";
 
           # Build-time dependencies
           nativeBuildInputs = (with pkgs; [
             nodejs_22 # LTS (matches CI)
             pnpm_10 # Package manager
-            zig_0_15 # taod daemon + Ghostty/Zig tooling
+            zig_0_15 # taud daemon + Ghostty/Zig tooling
             zls_0_15 # Zig language server matching Zig 0.15.x
             nixpkgs-fmt # nix fmt / CI format check
           ]) ++ pkgs.lib.optionals pkgs.stdenv.isLinux (with pkgs; [
@@ -107,7 +107,7 @@
               export LIBGL_DRIVERS_PATH="${linuxElectronMesa}/lib/dri''${LIBGL_DRIVERS_PATH:+:$LIBGL_DRIVERS_PATH}"
             fi
 
-            echo "🖥  Tao Terminal dev shell"
+            echo "🖥  Tau Terminal dev shell"
             echo "   node:  $(node --version)"
             echo "   pnpm:  $(pnpm --version)"
             echo "   zig:   $(zig version)"

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Effect } from 'effect'
-import { WorkspaceError } from '@tao/shared/workspace'
+import { WorkspaceError } from '@tau/shared/workspace'
 import {
   WorkspaceIpcClient,
   createWorkspaceMetadataCache,
@@ -58,7 +58,7 @@ async function snapshot(
 test('WorkspaceMetadataCache forced refresh supersedes stale in-flight results', async () => {
   const cache = createWorkspaceMetadataCache()
   const pendingBranches: PendingBranch[] = []
-  const workspacePath = '/tmp/tao-workspace-service-test'
+  const workspacePath = '/tmp/tau-workspace-service-test'
 
   const firstRefresh = Effect.runPromise(
     provideWorkspaceClient(cache.refreshGitBranch(workspacePath), pendingBranches),

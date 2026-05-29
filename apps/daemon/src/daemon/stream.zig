@@ -115,7 +115,7 @@ pub fn Context(comptime Daemon: type) type {
                 if (item.pending_output.items.len != 0) continue;
 
                 setNonBlockingFd(socket_fd) catch |err| {
-                    std.log.warn("failed to set taod subscriber non-blocking for {s}: {t}", .{ session_id, err });
+                    std.log.warn("failed to set taud subscriber non-blocking for {s}: {t}", .{ session_id, err });
                     return false;
                 };
                 if (!try daemon.sessions.addSubscriber(session_id, socket_fd)) return false;
@@ -239,7 +239,7 @@ pub fn Context(comptime Daemon: type) type {
             while (index < item.subscribers.items.len) {
                 const fd = item.subscribers.items[index];
                 writeAllFdNonBlocking(fd, encoded) catch |err| {
-                    std.log.warn("dropping slow taod subscriber for {s}: {t}", .{ item.id, err });
+                    std.log.warn("dropping slow taud subscriber for {s}: {t}", .{ item.id, err });
                     daemon.recordSlowSubscriberDrop();
                     self.removeSubscriberAtLocked(item, index);
                     if (item.subscribers.items.len == 0) {
@@ -288,7 +288,7 @@ pub fn Context(comptime Daemon: type) type {
         fn appendPendingClientBytes(self: Self, pending: *std.ArrayList(u8), bytes: []const u8) !bool {
             assert(pending.items.len <= max_pending_client_bytes);
             if (bytes.len > max_pending_client_bytes or pending.items.len > max_pending_client_bytes - bytes.len) {
-                std.log.warn("closing taod stream with oversized pending client frame buffer", .{});
+                std.log.warn("closing taud stream with oversized pending client frame buffer", .{});
                 return false;
             }
             try pending.appendSlice(self.daemon.allocator, bytes);

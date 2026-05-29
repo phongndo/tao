@@ -996,7 +996,7 @@ test "daemon falls back to saved command when agent resume metadata is corrupt" 
             .status = "exited",
             .cols = 80,
             .rows = 24,
-            .event_log_path = "/tmp/tao-resume-session/events.taoev",
+            .event_log_path = "/tmp/tau-resume-session/events.tauev",
             .last_seq = 0,
         });
         try database.recordAgentSession(.{
@@ -1051,7 +1051,7 @@ test "daemon requires workspace to restore legacy persisted sessions" {
             .status = "exited",
             .cols = 80,
             .rows = 24,
-            .event_log_path = "/tmp/tao-legacy-session/events.taoev",
+            .event_log_path = "/tmp/tau-legacy-session/events.tauev",
             .last_seq = 0,
         });
     } else unreachable;

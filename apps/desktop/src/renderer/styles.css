@@ -34,12 +34,12 @@ body {
 #root {
   width: 100%;
   height: 100%;
-  --tao-titlebar-height: 42px;
-  --tao-titlebar-control-spacer: 92px;
-  --tao-sidebar-width: 0px;
+  --tau-titlebar-height: 42px;
+  --tau-titlebar-control-spacer: 92px;
+  --tau-sidebar-width: 0px;
 }
 
-.tao-shell {
+.tau-shell {
   position: relative;
   display: flex;
   width: 100%;
@@ -48,20 +48,20 @@ body {
   overflow: hidden;
 }
 
-.tao-shell-sidebar-hidden::before {
+.tau-shell-sidebar-hidden::before {
   position: absolute;
   top: 0;
   right: 0;
   left: 0;
   z-index: 2;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   border-bottom: 1px solid #242428;
   background: #151516;
   content: '';
   pointer-events: none;
 }
 
-.tao-sidebar {
+.tau-sidebar {
   position: relative;
   z-index: 5;
   height: 100%;
@@ -71,7 +71,7 @@ body {
   background: #242426;
 }
 
-.tao-sidebar::before {
+.tau-sidebar::before {
   position: absolute;
   top: 0;
   right: 0;
@@ -83,7 +83,7 @@ body {
   pointer-events: none;
 }
 
-.tao-right-sidebar {
+.tau-right-sidebar {
   position: relative;
   z-index: 5;
   height: 100%;
@@ -98,7 +98,7 @@ body {
 .right-sidebar-header {
   position: relative;
   z-index: 6;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -181,7 +181,7 @@ body {
 
 .right-sidebar-toggle-button {
   position: absolute;
-  top: calc((var(--tao-titlebar-height) - 24px) / 2);
+  top: calc((var(--tau-titlebar-height) - 24px) / 2);
   right: 8px;
   z-index: 20;
   flex: 0 0 auto;
@@ -189,7 +189,7 @@ body {
 }
 
 .right-sidebar-content {
-  height: calc(100% - var(--tao-titlebar-height));
+  height: calc(100% - var(--tau-titlebar-height));
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -852,7 +852,7 @@ body {
 .sidebar-content {
   position: relative;
   z-index: 3;
-  height: calc(100% - var(--tao-titlebar-height));
+  height: calc(100% - var(--tau-titlebar-height));
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -862,12 +862,12 @@ body {
 .project-sidebar-titlebar {
   position: relative;
   z-index: 6;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 10px 0 var(--tao-titlebar-control-spacer);
+  padding: 0 10px 0 var(--tau-titlebar-control-spacer);
   border-bottom: 1px solid #242428;
   -webkit-app-region: drag;
 }
@@ -891,7 +891,7 @@ body {
 
 .titlebar-status-actions {
   position: absolute;
-  top: calc((var(--tao-titlebar-height) - 24px) / 2);
+  top: calc((var(--tau-titlebar-height) - 24px) / 2);
   right: 42px;
   z-index: 7;
   height: 24px;
@@ -1143,8 +1143,14 @@ body {
   text-align: left;
 }
 
+.project-item:focus-within {
+  background: #2a2a2d;
+}
+
 .project-select-button:focus-visible {
-  outline: none;
+  border-radius: 5px;
+  outline: 1px solid #5b5b62;
+  outline-offset: -1px;
 }
 
 .project-icon {
@@ -1174,6 +1180,31 @@ body {
   flex: 0 0 auto;
   color: #747783;
   transition: transform 120ms ease;
+}
+
+.project-expander-button {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #747783;
+  cursor: pointer;
+}
+
+.project-expander-button:hover,
+.project-expander-button:focus-visible {
+  background: #303036;
+  color: #c9c7cd;
+  outline: none;
+}
+
+.project-expander-button:focus-visible {
+  box-shadow: 0 0 0 1px #5b5b62;
 }
 
 .project-chevron-expanded {
@@ -1248,7 +1279,9 @@ body {
 }
 
 .project-thread-row:hover .project-thread-close-button,
-.project-thread-row-active .project-thread-close-button {
+.project-thread-row-active .project-thread-close-button,
+.project-thread-row:focus-within .project-thread-close-button,
+.project-thread-close-button:focus-visible {
   opacity: 1;
 }
 
@@ -1738,10 +1771,10 @@ body {
 
 .resize-handle::after {
   position: absolute;
-  top: var(--tao-titlebar-height);
+  top: var(--tau-titlebar-height);
   left: 7px;
   width: 1px;
-  height: calc(100% - var(--tao-titlebar-height));
+  height: calc(100% - var(--tau-titlebar-height));
   background: transparent;
   content: '';
 }
@@ -1761,7 +1794,7 @@ body {
   user-select: none;
 }
 
-.tao-main,
+.tau-main,
 .main-content {
   position: relative;
   z-index: 3;
@@ -1782,7 +1815,7 @@ body {
 .tab-bar {
   position: relative;
   z-index: 4;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -1795,7 +1828,7 @@ body {
 .thread-titlebar {
   position: relative;
   z-index: 4;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -1806,12 +1839,12 @@ body {
   -webkit-app-region: drag;
 }
 
-.tao-shell:not(.tao-shell-sidebar-hidden) .thread-titlebar {
+.tau-shell:not(.tau-shell-sidebar-hidden) .thread-titlebar {
   margin-left: -1px;
 }
 
-.tao-shell-sidebar-hidden .thread-titlebar {
-  padding-left: var(--tao-titlebar-control-spacer);
+.tau-shell-sidebar-hidden .thread-titlebar {
+  padding-left: var(--tau-titlebar-control-spacer);
 }
 
 .thread-titlebar-label {
@@ -1858,18 +1891,18 @@ body {
   pointer-events: none;
 }
 
-.tao-shell:not(.tao-shell-sidebar-hidden) .tab-bar {
+.tau-shell:not(.tau-shell-sidebar-hidden) .tab-bar {
   margin-left: -1px;
   padding-left: 0;
 }
 
-.tao-shell-sidebar-hidden .tab-bar {
-  padding-left: var(--tao-titlebar-control-spacer);
+.tau-shell-sidebar-hidden .tab-bar {
+  padding-left: var(--tau-titlebar-control-spacer);
 }
 
 .titlebar-navigation {
   flex: 0 0 auto;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1877,13 +1910,13 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.tao-sidebar > .titlebar-navigation {
+.tau-sidebar > .titlebar-navigation {
   position: relative;
   z-index: 6;
-  padding-left: var(--tao-titlebar-control-spacer);
+  padding-left: var(--tau-titlebar-control-spacer);
 }
 
-.tao-sidebar > .titlebar-navigation::after {
+.tau-sidebar > .titlebar-navigation::after {
   position: absolute;
   right: 0;
   bottom: 0;
@@ -2049,7 +2082,7 @@ body {
   pointer-events: auto;
 }
 
-.tao-mosaic {
+.tau-mosaic {
   position: absolute;
   inset: 0;
   padding: 0;
@@ -2063,32 +2096,32 @@ body {
   overflow: hidden;
 }
 
-.tao-mosaic .mosaic-root {
+.tau-mosaic .mosaic-root {
   inset: 0;
 }
 
-.tao-mosaic .mosaic-tile {
+.tau-mosaic .mosaic-tile {
   margin: 0;
 }
 
-.tao-mosaic .mosaic-split,
-.tao-mosaic .mosaic-split:hover {
+.tau-mosaic .mosaic-split,
+.tau-mosaic .mosaic-split:hover {
   background: transparent;
 }
 
-.tao-mosaic .mosaic-split.-row {
+.tau-mosaic .mosaic-split.-row {
   margin-left: -4px;
   width: 8px;
   cursor: ew-resize;
 }
 
-.tao-mosaic .mosaic-split.-column {
+.tau-mosaic .mosaic-split.-column {
   margin-top: -4px;
   height: 8px;
   cursor: ns-resize;
 }
 
-.tao-mosaic .mosaic-split.-row .mosaic-split-line {
+.tau-mosaic .mosaic-split.-row .mosaic-split-line {
   top: 0;
   right: auto;
   bottom: 0;
@@ -2097,7 +2130,7 @@ body {
   background: var(--pane-divider);
 }
 
-.tao-mosaic .mosaic-split.-column .mosaic-split-line {
+.tau-mosaic .mosaic-split.-column .mosaic-split-line {
   top: 4px;
   right: 0;
   bottom: auto;
@@ -2106,7 +2139,7 @@ body {
   background: var(--pane-divider);
 }
 
-.tao-mosaic .mosaic-split:hover .mosaic-split-line {
+.tau-mosaic .mosaic-split:hover .mosaic-split-line {
   background: var(--pane-divider-hover);
 }
 
@@ -2253,14 +2286,14 @@ body {
   right: 0;
   left: 0;
   z-index: 3;
-  height: var(--tao-titlebar-height);
+  height: var(--tau-titlebar-height);
   -webkit-app-region: drag;
 }
 
 .settings-nav {
   width: 240px;
   flex: 0 0 auto;
-  padding: var(--tao-titlebar-height) 0 12px;
+  padding: var(--tau-titlebar-height) 0 12px;
   border-right: 1px solid #3a3b44;
   background: #191919;
   overflow: hidden;
@@ -2339,7 +2372,7 @@ body {
 .settings-main {
   min-width: 0;
   flex: 1 1 auto;
-  padding-top: var(--tao-titlebar-height);
+  padding-top: var(--tau-titlebar-height);
   overflow: auto;
 }
 

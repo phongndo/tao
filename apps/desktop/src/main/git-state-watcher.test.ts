@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import type { WorkspaceRecord } from '@tao/shared/workspace'
+import type { WorkspaceRecord } from '@tau/shared/workspace'
 import { GitStateWatcher } from './git-state-watcher'
-import type { TaodClient } from './taod-client'
+import type { TaudClient } from './taud-client'
 
 function workspace(rootPath: string, branch: string): WorkspaceRecord {
   return {
@@ -31,7 +31,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 function createGitRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), 'tao-git-state-watcher-'))
+  const root = mkdtempSync(join(tmpdir(), 'tau-git-state-watcher-'))
   mkdirSync(join(root, '.git', 'refs', 'heads'), { recursive: true })
   mkdirSync(join(root, '.git', 'worktrees'), { recursive: true })
   return root
@@ -53,7 +53,7 @@ test('GitStateWatcher diagnostics report queued refreshes and notifications', as
       assert.equal(workspaceId, initial.id)
       return refreshed
     },
-  } as unknown as TaodClient
+  } as unknown as TaudClient
   const watcher = new GitStateWatcher(
     () => client,
     (workspace) => notifications.push(workspace),
@@ -101,7 +101,7 @@ test('GitStateWatcher diagnostics record refresh failures', async () => {
     refreshWorkspace: async () => {
       throw new Error('refresh exploded')
     },
-  } as unknown as TaodClient
+  } as unknown as TaudClient
   const watcher = new GitStateWatcher(
     () => client,
     () => {},

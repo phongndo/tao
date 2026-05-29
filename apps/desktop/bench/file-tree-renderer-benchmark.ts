@@ -41,12 +41,12 @@ function readNonNegativeNumberEnv(name: string, fallback: number, max: number): 
 }
 
 const budget: FileTreeBudget = {
-  pathCount: readPositiveNumberEnv('TAO_FILE_TREE_BENCH_FILES', 50_000, 1_000_000),
-  gitStatusCount: readNonNegativeNumberEnv('TAO_FILE_TREE_BENCH_GIT_STATUS', 1000, 1_000_000),
-  maxResetMs: readPositiveNumberEnv('TAO_FILE_TREE_MAX_RESET_MS', 1000, 60_000),
-  maxFrameMs: readPositiveNumberEnv('TAO_FILE_TREE_MAX_FRAME_MS', 1000, 60_000),
-  maxDomNodes: readPositiveNumberEnv('TAO_FILE_TREE_MAX_DOM_NODES', 750, 1_000_000),
-  enforce: process.env.TAO_FILE_TREE_BENCH_ENFORCE === '1',
+  pathCount: readPositiveNumberEnv('TAU_FILE_TREE_BENCH_FILES', 50_000, 1_000_000),
+  gitStatusCount: readNonNegativeNumberEnv('TAU_FILE_TREE_BENCH_GIT_STATUS', 1000, 1_000_000),
+  maxResetMs: readPositiveNumberEnv('TAU_FILE_TREE_MAX_RESET_MS', 1000, 60_000),
+  maxFrameMs: readPositiveNumberEnv('TAU_FILE_TREE_MAX_FRAME_MS', 1000, 60_000),
+  maxDomNodes: readPositiveNumberEnv('TAU_FILE_TREE_MAX_DOM_NODES', 750, 1_000_000),
+  enforce: process.env.TAU_FILE_TREE_BENCH_ENFORCE === '1',
 }
 
 function rendererHtml(): string {
@@ -206,7 +206,7 @@ function waitForResults(timeoutMs = 90_000): Promise<FileTreeSample[]> {
 }
 
 function printResults(samples: readonly FileTreeSample[]): void {
-  console.log('Tao file-tree renderer benchmark')
+  console.log('Tau file-tree renderer benchmark')
   console.log(`paths: ${budget.pathCount}, git status entries: ${budget.gitStatusCount}`)
   console.log('')
   console.log('workload              duration ms  max frame ms  >50ms  DOM nodes')
@@ -253,7 +253,7 @@ function assertBudget(samples: readonly FileTreeSample[]): void {
 async function main(): Promise<void> {
   await app.whenReady()
 
-  const tempDir = mkdtempSync(resolve(tmpdir(), 'tao-file-tree-bench-'))
+  const tempDir = mkdtempSync(resolve(tmpdir(), 'tau-file-tree-bench-'))
   const htmlPath = resolve(tempDir, 'index.html')
   const rendererPath = resolve(tempDir, 'renderer.js')
   writeFileSync(htmlPath, rendererHtml())

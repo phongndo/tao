@@ -1,5 +1,5 @@
 {
-  "name": "@tao/shared",
+  "name": "@tau/shared",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "./current-screen-snapshot": "./src/current-screen-snapshot.ts",
     "./session": "./src/session.ts",
     "./storage-path": "./src/storage-path.ts",
-    "./taod-protocol": "./src/taod-protocol.ts",
+    "./taud-protocol": "./src/taud-protocol.ts",
     "./workspace": "./src/workspace.ts"
   },
   "scripts": {

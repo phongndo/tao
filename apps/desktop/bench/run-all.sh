@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── Tao — Master Benchmark Runner ───
+# ─── Tau — Master Benchmark Runner ───
 #
 # Runs all benchmarks and prints a comparison summary.
 #
@@ -14,18 +14,18 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║            Tao — Complete Benchmark Suite               ║${NC}"
+echo -e "${BOLD}║            Tau — Complete Benchmark Suite               ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# 1. taod daemon benchmark (Zig vs node-pty comparison)
-echo -e "${CYAN}▶ Bench 1/7: taod daemon vs node-pty${NC}"
-bash "$SCRIPT_DIR/taod-vs-node-pty.sh" || echo "  (taod benchmark skipped)"
+# 1. taud daemon benchmark (Zig vs node-pty comparison)
+echo -e "${CYAN}▶ Bench 1/7: taud daemon vs node-pty${NC}"
+bash "$SCRIPT_DIR/taud-vs-node-pty.sh" || echo "  (taud benchmark skipped)"
 
-# 2. Latency benchmark (via taod)
+# 2. Latency benchmark (via taud)
 echo ""
-echo -e "${CYAN}▶ Bench 2/7: Input Latency (taod)${NC}"
-npx tsx "$SCRIPT_DIR/latency-taod.ts" || echo "  (latency benchmark skipped)"
+echo -e "${CYAN}▶ Bench 2/7: Input Latency (taud)${NC}"
+npx tsx "$SCRIPT_DIR/latency-taud.ts" || echo "  (latency benchmark skipped)"
 
 # 3. VT Parser benchmark (Node.js, headless)
 echo ""

@@ -1,5 +1,5 @@
 name: ✨ Feature Request
-description: Suggest an idea for Tao Terminal.
+description: Suggest an idea for Tau Terminal.
 labels: [enhancement, triage]
 body:
   - type: markdown

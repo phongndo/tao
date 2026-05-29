@@ -306,14 +306,14 @@ fn runAdapterCommandAlloc(
         return null;
     }
 
-    const runner = std.process.getEnvVarOwned(allocator, "TAOD_ADAPTER_RUNNER") catch |err| switch (err) {
+    const runner = std.process.getEnvVarOwned(allocator, "TAUD_ADAPTER_RUNNER") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
     defer if (runner) |value| allocator.free(value);
     const default_runner = if (std.mem.endsWith(u8, script_path, ".ts")) "tsx" else "node";
     const runner_exe = adapterRunnerOrDefault(runner, default_runner) orelse {
-        std.log.warn("ignoring unsafe TAOD_ADAPTER_RUNNER value for {s}", .{provider.text()});
+        std.log.warn("ignoring unsafe TAUD_ADAPTER_RUNNER value for {s}", .{provider.text()});
         return null;
     };
 
@@ -637,7 +637,7 @@ test "agent adapter request and response JSON are stable" {
     const request = try adapterRequestJsonAlloc(std.testing.allocator, "detect", .pi, .{
         .terminal_session_id = "session-1",
         .session_dir = "/tmp/session-1",
-        .event_log_path = "/tmp/session-1/events.taoev",
+        .event_log_path = "/tmp/session-1/events.tauev",
         .excerpt_path = "/tmp/session-1/excerpt.txt",
         .cwd = "/project",
         .argv = &.{ "pi", "--session", "native-1" },
@@ -742,7 +742,7 @@ fn adapterRequestForAllocationFailure(allocator: std.mem.Allocator) !void {
     const request = adapterRequestJsonAlloc(allocator, "resume-command", .pi, .{
         .terminal_session_id = "session-oom",
         .session_dir = "/tmp/session-oom",
-        .event_log_path = "/tmp/session-oom/events.taoev",
+        .event_log_path = "/tmp/session-oom/events.tauev",
         .excerpt_path = "/tmp/session-oom/excerpt.txt",
         .cwd = "/project",
         .argv = &.{ "pi", "--session", "native-oom" },

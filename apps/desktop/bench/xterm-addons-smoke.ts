@@ -200,7 +200,7 @@ function waitForResults(timeoutMs = 20_000): Promise<SmokeResult[]> {
 }
 
 function printResults(results: readonly SmokeResult[]): void {
-  console.log('Tao xterm addon smoke')
+  console.log('Tau xterm addon smoke')
   for (const result of results) {
     console.log(
       `${result.ok ? 'PASS' : 'FAIL'} ${result.name}${result.detail ? ` (${result.detail})` : ''}`,

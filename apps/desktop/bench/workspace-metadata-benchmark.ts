@@ -1,7 +1,7 @@
 /**
- * Tao - workspace metadata benchmark through taod.
+ * Tau - workspace metadata benchmark through taud.
  *
- * Builds a synthetic Git workspace, launches managed taod, then times the
+ * Builds a synthetic Git workspace, launches managed taud, then times the
  * daemon-backed workspace metadata RPCs that used to risk blocking Electron main.
  */
 
@@ -12,11 +12,11 @@ import { homedir, platform, tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { resolveTaoStoragePaths } from '@tao/shared/storage-path'
+import { resolveTauStoragePaths } from '@tau/shared/storage-path'
 
 type ControlResponse = Record<string, unknown>
 
-type ManagedTaod = {
+type ManagedTaud = {
   readonly home: string
   readonly child: ChildProcess
   readonly cleanup: () => Promise<void>
@@ -35,18 +35,18 @@ const benchDir = dirname(fileURLToPath(import.meta.url))
 const desktopRoot = resolve(benchDir, '..')
 const repoRoot = resolve(desktopRoot, '../..')
 
-const FILE_COUNT = positiveInt(process.env.TAO_WORKSPACE_BENCH_FILES, 5000)
-const ENFORCE = process.env.TAO_WORKSPACE_BENCH_ENFORCE === '1'
-const MAX_BRANCHES_MS = nonNegativeInt(process.env.TAO_WORKSPACE_MAX_BRANCHES_MS, 500)
-const MAX_STATUS_MS = nonNegativeInt(process.env.TAO_WORKSPACE_MAX_STATUS_MS, 1000)
-const MAX_FILE_TREE_MS = nonNegativeInt(process.env.TAO_WORKSPACE_MAX_FILE_TREE_MS, 2500)
-const MAX_DIFF_MS = nonNegativeInt(process.env.TAO_WORKSPACE_MAX_DIFF_MS, 1000)
-const MAX_PORTS_MS = nonNegativeInt(process.env.TAO_WORKSPACE_MAX_PORTS_MS, 1000)
-const MAX_PR_MS = nonNegativeInt(process.env.TAO_WORKSPACE_MAX_PR_MS, 2000)
-const GIT_TIMEOUT_MS = positiveInt(process.env.TAO_WORKSPACE_BENCH_GIT_TIMEOUT_MS, 30_000)
+const FILE_COUNT = positiveInt(process.env.TAU_WORKSPACE_BENCH_FILES, 5000)
+const ENFORCE = process.env.TAU_WORKSPACE_BENCH_ENFORCE === '1'
+const MAX_BRANCHES_MS = nonNegativeInt(process.env.TAU_WORKSPACE_MAX_BRANCHES_MS, 500)
+const MAX_STATUS_MS = nonNegativeInt(process.env.TAU_WORKSPACE_MAX_STATUS_MS, 1000)
+const MAX_FILE_TREE_MS = nonNegativeInt(process.env.TAU_WORKSPACE_MAX_FILE_TREE_MS, 2500)
+const MAX_DIFF_MS = nonNegativeInt(process.env.TAU_WORKSPACE_MAX_DIFF_MS, 1000)
+const MAX_PORTS_MS = nonNegativeInt(process.env.TAU_WORKSPACE_MAX_PORTS_MS, 1000)
+const MAX_PR_MS = nonNegativeInt(process.env.TAU_WORKSPACE_MAX_PR_MS, 2000)
+const GIT_TIMEOUT_MS = positiveInt(process.env.TAU_WORKSPACE_BENCH_GIT_TIMEOUT_MS, 30_000)
 
 let socketPath =
-  process.env.TAOD_SOCKET_PATH || resolveTaoStoragePaths(process.env.HOME || homedir()).socket
+  process.env.TAUD_SOCKET_PATH || resolveTauStoragePaths(process.env.HOME || homedir()).socket
 
 function positiveInt(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback
@@ -68,10 +68,10 @@ function now(): number {
   return performance.now()
 }
 
-function findTaodBinary(): string | null {
-  const exeName = process.platform === 'win32' ? 'taod.exe' : 'taod'
+function findTaudBinary(): string | null {
+  const exeName = process.platform === 'win32' ? 'taud.exe' : 'taud'
   const candidates = [
-    process.env.TAOD_PATH,
+    process.env.TAUD_PATH,
     resolve(desktopRoot, 'out/bin', exeName),
     resolve(repoRoot, 'apps/daemon/zig-out/bin', exeName),
   ].filter(Boolean) as string[]
@@ -87,7 +87,7 @@ function connectSocket(timeoutMs = 3000): Promise<net.Socket> {
     const socket = net.createConnection(socketPath)
     const timer = setTimeout(() => {
       socket.destroy()
-      rejectSocket(new Error(`Timed out connecting to taod at ${socketPath}`))
+      rejectSocket(new Error(`Timed out connecting to taud at ${socketPath}`))
     }, timeoutMs)
     socket.once('connect', () => {
       clearTimeout(timer)
@@ -112,7 +112,7 @@ async function writeAll(socket: net.Socket, payload: string, context: string): P
     }
     const onClose = () => {
       cleanup()
-      rejectWrite(new Error(`taod closed socket while writing ${context}`))
+      rejectWrite(new Error(`taud closed socket while writing ${context}`))
     }
     socket.once('error', onError)
     socket.once('close', onClose)
@@ -132,7 +132,7 @@ function sendJson(
     let buffered = Buffer.alloc(0)
     const timer = setTimeout(() => {
       cleanup()
-      rejectResponse(new Error('Timeout waiting for taod response'))
+      rejectResponse(new Error('Timeout waiting for taud response'))
     }, 15_000)
 
     const cleanup = () => {
@@ -147,7 +147,7 @@ function sendJson(
     }
     const onClose = () => {
       cleanup()
-      rejectResponse(new Error('taod closed socket before responding'))
+      rejectResponse(new Error('taud closed socket before responding'))
     }
     const onData = (chunk: Buffer) => {
       buffered = buffered.length === 0 ? Buffer.from(chunk) : Buffer.concat([buffered, chunk])
@@ -159,7 +159,7 @@ function sendJson(
         const response = JSON.parse(buffered.subarray(0, newline).toString('utf8'))
         resolveResponse({ response, rawBytes: responseBytes })
       } catch {
-        rejectResponse(new Error('Failed to parse taod response'))
+        rejectResponse(new Error('Failed to parse taud response'))
       }
     }
 
@@ -189,24 +189,24 @@ async function control(
   }
 }
 
-async function startManagedTaod(): Promise<ManagedTaod> {
-  const binaryPath = findTaodBinary()
-  if (!binaryPath) throw new Error('taod binary not found; run pnpm --filter @tao/desktop build')
+async function startManagedTaud(): Promise<ManagedTaud> {
+  const binaryPath = findTaudBinary()
+  if (!binaryPath) throw new Error('taud binary not found; run pnpm --filter @tau/desktop build')
 
-  const home = mkdtempSync(resolve(tmpdir(), 'tao-workspace-bench-home-'))
-  socketPath = resolveTaoStoragePaths(home).socket
+  const home = mkdtempSync(resolve(tmpdir(), 'tau-workspace-bench-home-'))
+  socketPath = resolveTauStoragePaths(home).socket
   const adapters = resolve(desktopRoot, 'out/adapters')
   const child = spawn(binaryPath, [], {
     cwd: dirname(binaryPath),
     env: {
       ...process.env,
       HOME: home,
-      TAOD_ADAPTER_DIR: adapters,
+      TAUD_ADAPTER_DIR: adapters,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   child.stderr?.on('data', (chunk: Buffer) => {
-    process.stderr.write(`[taod stderr] ${chunk.toString('utf8')}`)
+    process.stderr.write(`[taud stderr] ${chunk.toString('utf8')}`)
   })
 
   for (let attempt = 0; attempt < 80; attempt++) {
@@ -232,7 +232,7 @@ async function startManagedTaod(): Promise<ManagedTaod> {
     } catch {
       if (child.exitCode !== null) {
         rmSync(home, { recursive: true, force: true })
-        throw new Error(`managed taod exited before socket became ready: ${child.exitCode}`)
+        throw new Error(`managed taud exited before socket became ready: ${child.exitCode}`)
       }
       await sleep(50)
     }
@@ -240,7 +240,7 @@ async function startManagedTaod(): Promise<ManagedTaod> {
 
   child.kill('SIGKILL')
   rmSync(home, { recursive: true, force: true })
-  throw new Error('managed taod failed to start')
+  throw new Error('managed taud failed to start')
 }
 
 async function git(repo: string, args: readonly string[]): Promise<void> {
@@ -255,11 +255,11 @@ async function git(repo: string, args: readonly string[]): Promise<void> {
 }
 
 async function createSyntheticRepo(): Promise<{ root: string; cleanup: () => void }> {
-  const root = mkdtempSync(resolve(tmpdir(), 'tao-workspace-bench-repo-'))
+  const root = mkdtempSync(resolve(tmpdir(), 'tau-workspace-bench-repo-'))
   try {
     await git(root, ['init', '-q'])
-    await git(root, ['config', 'user.email', 'tao-bench@example.invalid'])
-    await git(root, ['config', 'user.name', 'Tao Bench'])
+    await git(root, ['config', 'user.email', 'tau-bench@example.invalid'])
+    await git(root, ['config', 'user.name', 'Tau Bench'])
 
     for (let index = 0; index < FILE_COUNT; index++) {
       const dir = resolve(root, 'src', String(index % 100).padStart(3, '0'))
@@ -312,11 +312,11 @@ function budgetFailures(metrics: readonly Metric[]): string[] {
 }
 
 async function runWorkspaceMetadataBenchmark(): Promise<void> {
-  const managed = await startManagedTaod()
+  const managed = await startManagedTaud()
   const repo = await createSyntheticRepo()
 
   try {
-    console.log('Tao workspace metadata benchmark (taod)')
+    console.log('Tau workspace metadata benchmark (taud)')
     console.log('')
     console.log(`  Files:    ${FILE_COUNT}`)
     console.log(`  Repo:     ${repo.root}`)

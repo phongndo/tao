@@ -51,21 +51,21 @@ function readPositiveNumberEnv(name: string, fallback: number, max: number): num
 }
 
 const budget: CombinedRendererBudget = {
-  pathCount: readPositiveNumberEnv('TAO_COMBINED_RENDERER_FILES', 25_000, 1_000_000),
-  gitStatusCount: readPositiveNumberEnv('TAO_COMBINED_RENDERER_GIT_STATUS', 1000, 1_000_000),
-  diffFileCount: readPositiveNumberEnv('TAO_COMBINED_RENDERER_DIFF_FILES', 24, 500),
-  mountedDiffFileCount: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MOUNTED_DIFF_FILES', 12, 100),
-  diffLinesPerFile: readPositiveNumberEnv('TAO_COMBINED_RENDERER_DIFF_LINES', 40, 5000),
-  terminalMiB: readPositiveNumberEnv('TAO_COMBINED_RENDERER_TERMINAL_MIB', 2, 1024),
-  terminalChunkKiB: readPositiveNumberEnv('TAO_COMBINED_RENDERER_TERMINAL_CHUNK_KIB', 64, 1024),
-  maxDurationMs: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MAX_DURATION_MS', 10_000, 600_000),
-  minTerminalMBps: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MIN_MBPS', 2, 1024),
-  maxP95FrameMs: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MAX_P95_FRAME_MS', 80, 10_000),
-  maxFrameMs: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MAX_FRAME_MS', 300, 60_000),
-  maxFramesOver16: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MAX_FRAMES_OVER_16', 120, 100_000),
-  maxFramesOver50: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MAX_FRAMES_OVER_50', 8, 100_000),
-  maxDomNodes: readPositiveNumberEnv('TAO_COMBINED_RENDERER_MAX_DOM_NODES', 12_000, 1_000_000),
-  enforce: process.env.TAO_COMBINED_RENDERER_ENFORCE === '1',
+  pathCount: readPositiveNumberEnv('TAU_COMBINED_RENDERER_FILES', 25_000, 1_000_000),
+  gitStatusCount: readPositiveNumberEnv('TAU_COMBINED_RENDERER_GIT_STATUS', 1000, 1_000_000),
+  diffFileCount: readPositiveNumberEnv('TAU_COMBINED_RENDERER_DIFF_FILES', 24, 500),
+  mountedDiffFileCount: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MOUNTED_DIFF_FILES', 12, 100),
+  diffLinesPerFile: readPositiveNumberEnv('TAU_COMBINED_RENDERER_DIFF_LINES', 40, 5000),
+  terminalMiB: readPositiveNumberEnv('TAU_COMBINED_RENDERER_TERMINAL_MIB', 2, 1024),
+  terminalChunkKiB: readPositiveNumberEnv('TAU_COMBINED_RENDERER_TERMINAL_CHUNK_KIB', 64, 1024),
+  maxDurationMs: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MAX_DURATION_MS', 10_000, 600_000),
+  minTerminalMBps: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MIN_MBPS', 2, 1024),
+  maxP95FrameMs: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MAX_P95_FRAME_MS', 80, 10_000),
+  maxFrameMs: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MAX_FRAME_MS', 300, 60_000),
+  maxFramesOver16: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MAX_FRAMES_OVER_16', 120, 100_000),
+  maxFramesOver50: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MAX_FRAMES_OVER_50', 8, 100_000),
+  maxDomNodes: readPositiveNumberEnv('TAU_COMBINED_RENDERER_MAX_DOM_NODES', 12_000, 1_000_000),
+  enforce: process.env.TAU_COMBINED_RENDERER_ENFORCE === '1',
 }
 
 function packageFileUrl(packageName: string, relativePath: string): string {
@@ -414,7 +414,7 @@ function waitForResult(timeoutMs = 120_000): Promise<CombinedRendererSample> {
 }
 
 function printResult(sample: CombinedRendererSample): void {
-  console.log('Tao combined renderer pressure benchmark')
+  console.log('Tau combined renderer pressure benchmark')
   console.log(
     `paths: ${sample.pathCount}, diff files: ${sample.diffFileCount}, mounted diffs: ${sample.mountedDiffFileCount}, terminal bytes: ${sample.terminalBytes}`,
   )
@@ -477,7 +477,7 @@ function assertBudget(sample: CombinedRendererSample): void {
 async function main(): Promise<void> {
   await app.whenReady()
 
-  const tempDir = mkdtempSync(resolve(tmpdir(), 'tao-combined-renderer-bench-'))
+  const tempDir = mkdtempSync(resolve(tmpdir(), 'tau-combined-renderer-bench-'))
   const htmlPath = resolve(tempDir, 'index.html')
   const rendererPath = resolve(tempDir, 'renderer.js')
   writeFileSync(htmlPath, rendererHtml())

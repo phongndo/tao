@@ -1,5 +1,5 @@
 const std = @import("std");
-const taod = @import("taod");
+const taud = @import("taud");
 
 pub fn main() !void {
     if (debugAllocatorEnabled()) {
@@ -34,10 +34,10 @@ fn realMain(allocator: std.mem.Allocator) !void {
         if (std.mem.eql(u8, arg, "--check")) check = true;
     }
 
-    var config = try taod.daemon.Config.fromHome(allocator, home);
+    var config = try taud.daemon.Config.fromHome(allocator, home);
     defer config.deinit(allocator);
 
-    var daemon = taod.daemon.Daemon.init(allocator, config);
+    var daemon = taud.daemon.Daemon.init(allocator, config);
     defer daemon.deinit();
 
     if (print_config) {
@@ -54,7 +54,7 @@ fn realMain(allocator: std.mem.Allocator) !void {
 
 fn debugAllocatorEnabled() bool {
     const allocator = std.heap.smp_allocator;
-    const value = std.process.getEnvVarOwned(allocator, "TAOD_DEBUG_ALLOC") catch |err| switch (err) {
+    const value = std.process.getEnvVarOwned(allocator, "TAUD_DEBUG_ALLOC") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return false,
         else => return false,
     };

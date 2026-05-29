@@ -250,7 +250,7 @@ test "generated folder and branch names are valid" {
 test "folder and branch validators reject unsafe names" {
     try std.testing.expect(isValidFolderName("luminous-galileo-a13f"));
     try std.testing.expect(!isValidFolderName("../escape"));
-    try std.testing.expect(!isValidFolderName("Tao-Name"));
+    try std.testing.expect(!isValidFolderName("Tau-Name"));
     try std.testing.expect(!isValidFolderName("double--dash"));
     try std.testing.expect(isSafeBranchName("fix-login-redirect-loop"));
     try std.testing.expect(!isSafeBranchName("../main"));
@@ -262,7 +262,7 @@ test "folder and branch validators reject unsafe names" {
 }
 
 test "workspace slug is lowercase and path safe" {
-    const slug = try workspaceSlugAlloc(std.testing.allocator, "/Users/me/Project Tao!");
+    const slug = try workspaceSlugAlloc(std.testing.allocator, "/Users/me/Project Tau!");
     defer std.testing.allocator.free(slug);
-    try std.testing.expectEqualStrings("project-tao", slug);
+    try std.testing.expectEqualStrings("project-tau", slug);
 }

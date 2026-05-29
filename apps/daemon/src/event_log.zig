@@ -3,7 +3,10 @@ const limits = @import("limits.zig");
 
 const assert = std.debug.assert;
 
-pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAOEV\0\1\0
+pub const file_magic = [_]u8{ 0x54, 0x41, 0x55, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAUEV\0\1\0
+const legacy_file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAOEV\0\1\0
+const file_name = "events.tauev";
+const legacy_file_name = "events.taoev";
 pub const session_id_header_size: usize = 36;
 pub const file_header_size: usize = file_magic.len + session_id_header_size + 8;
 pub const frame_magic: u32 = 0x54414546; // TAEF
@@ -131,7 +134,15 @@ pub fn encodeFileHeader(out: []u8, session_id: []const u8, created_at_ms: u64) !
 }
 
 pub fn hasValidHeader(data: []const u8) bool {
+    return hasCurrentHeader(data) or hasLegacyHeader(data);
+}
+
+fn hasCurrentHeader(data: []const u8) bool {
     return data.len >= file_header_size and std.mem.eql(u8, data[0..file_magic.len], &file_magic);
+}
+
+fn hasLegacyHeader(data: []const u8) bool {
+    return data.len >= file_header_size and std.mem.eql(u8, data[0..legacy_file_magic.len], &legacy_file_magic);
 }
 
 fn nextSequence(last_seq: *const u64) !u64 {
@@ -217,6 +228,27 @@ pub fn parseEventLog(data: []const u8, visitor: anytype) !ParseResult {
     };
 }
 
+fn eventLogPath(allocator: std.mem.Allocator, dir: []const u8, name: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ dir, name });
+}
+
+fn migrateLegacyEventLogPath(allocator: std.mem.Allocator, dir: []const u8) ![]u8 {
+    const current_path = try eventLogPath(allocator, dir, file_name);
+    errdefer allocator.free(current_path);
+
+    const legacy_path = try eventLogPath(allocator, dir, legacy_file_name);
+    defer allocator.free(legacy_path);
+
+    if (!fileExists(current_path) and fileExists(legacy_path)) {
+        std.fs.cwd().rename(legacy_path, current_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
+
+    return current_path;
+}
+
 pub fn openPersistentSession(
     allocator: std.mem.Allocator,
     sessions_dir: []const u8,
@@ -231,7 +263,7 @@ pub fn openPersistentSession(
     errdefer allocator.free(dir);
     try mkdirPath(allocator, dir, 0o700);
 
-    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    const event_log_path = try migrateLegacyEventLogPath(allocator, dir);
     errdefer allocator.free(event_log_path);
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
@@ -261,7 +293,7 @@ pub fn resetPersistentSession(
     errdefer allocator.free(dir);
     try mkdirPath(allocator, dir, 0o700);
 
-    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    const event_log_path = try eventLogPath(allocator, dir, file_name);
     errdefer allocator.free(event_log_path);
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
@@ -289,7 +321,7 @@ pub fn openExistingSession(
 
     const dir = try std.fs.path.join(allocator, &.{ sessions_dir, sanitized_id });
     errdefer allocator.free(dir);
-    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    const event_log_path = try migrateLegacyEventLogPath(allocator, dir);
     errdefer allocator.free(event_log_path);
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
@@ -488,6 +520,7 @@ fn repairEventLog(allocator: std.mem.Allocator, path: []const u8, session_id: []
         return;
     }
 
+    try upgradeLegacyEventLogHeader(allocator, path);
     if (parsed.valid_bytes < parsed.file_size) try truncateFile(allocator, path, parsed.valid_bytes);
 }
 
@@ -498,6 +531,17 @@ fn eventLogFileHasValidHeader(allocator: std.mem.Allocator, path: []const u8) !b
     var header: [file_header_size]u8 = undefined;
     const header_bytes = try readExactFd(file.fd, &header);
     return header_bytes == file_header_size and hasValidHeader(&header);
+}
+
+fn upgradeLegacyEventLogHeader(allocator: std.mem.Allocator, path: []const u8) !void {
+    const file = try openReadFile(allocator, path) orelse return;
+    defer _ = std.c.close(file.fd);
+
+    var header: [file_header_size]u8 = undefined;
+    const header_bytes = try readExactFd(file.fd, &header);
+    if (header_bytes != file_header_size or !hasLegacyHeader(&header)) return;
+
+    try writeFilePrefix(allocator, path, &file_magic);
 }
 
 fn parseEventLogFile(allocator: std.mem.Allocator, path: []const u8, visitor: anytype) !?FileParseResult {
@@ -734,6 +778,20 @@ fn writeFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, m
     try writeAllFd(fd, data);
 }
 
+fn writeFilePrefix(allocator: std.mem.Allocator, path: []const u8, data: []const u8) !void {
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+
+    const fd = std.c.open(path_z.ptr, .{
+        .ACCMODE = .WRONLY,
+        .CLOEXEC = true,
+    });
+    if (fd < 0) return error.FileOpenFailed;
+    defer _ = std.c.close(fd);
+
+    try writeAllFd(fd, data);
+}
+
 fn appendFile(allocator: std.mem.Allocator, path: []const u8, data: []const u8, mode: std.c.mode_t, sync: bool) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
@@ -795,6 +853,11 @@ fn mkdirPath(allocator: std.mem.Allocator, path: []const u8, mode: std.c.mode_t)
         buffer[index] = '/';
     }
     try mkdirOne(buffer.ptr, mode);
+}
+
+fn fileExists(path: []const u8) bool {
+    std.fs.cwd().access(path, .{}) catch return false;
+    return true;
 }
 
 fn mkdirOne(path: [*:0]const u8, mode: std.c.mode_t) !void {
@@ -892,7 +955,7 @@ test "event log durable append failure does not advance sequence" {
 
     const missing_path = try std.fmt.allocPrint(
         std.testing.allocator,
-        ".zig-cache/tmp/{s}/missing/events.taoev",
+        ".zig-cache/tmp/{s}/missing/events.tauev",
         .{tmp.sub_path},
     );
     defer std.testing.allocator.free(missing_path);
@@ -904,6 +967,56 @@ test "event log durable append failure does not advance sequence" {
         appendFramePathDurable(std.testing.allocator, missing_path, .output, seq, "not-written"),
     );
     try std.testing.expectEqual(@as(u64, 0), last_seq);
+}
+
+test "event log migrates legacy filename and magic without dropping frames" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const allocator = std.testing.allocator;
+    const session_id = "session:legacy/events";
+    const sessions_dir = try std.fmt.allocPrint(
+        allocator,
+        ".zig-cache/tmp/{s}/sessions",
+        .{tmp.sub_path},
+    );
+    defer allocator.free(sessions_dir);
+
+    const sanitized_id = try sanitizeSessionId(allocator, session_id);
+    defer allocator.free(sanitized_id);
+
+    const session_dir = try std.fs.path.join(allocator, &.{ sessions_dir, sanitized_id });
+    defer allocator.free(session_dir);
+    try mkdirPath(allocator, session_dir, 0o700);
+
+    const legacy_path = try eventLogPath(allocator, session_dir, legacy_file_name);
+    defer allocator.free(legacy_path);
+
+    var header: [file_header_size]u8 = undefined;
+    _ = try encodeFileHeader(&header, session_id, 123);
+    @memcpy(header[0..legacy_file_magic.len], &legacy_file_magic);
+    try writeFile(allocator, legacy_path, &header, 0o600);
+    try appendFramePath(allocator, legacy_path, .output, 1, "legacy-output");
+
+    var files = try openPersistentSession(allocator, sessions_dir, session_id);
+    defer files.deinit(allocator);
+
+    try std.testing.expect(std.mem.endsWith(u8, files.event_log_path, file_name));
+    try std.testing.expect(!fileExists(legacy_path));
+    try std.testing.expectEqual(@as(u64, 1), files.last_seq);
+
+    const event_log_file = (try openReadFile(allocator, files.event_log_path)).?;
+    defer _ = std.c.close(event_log_file.fd);
+    var migrated_header: [file_header_size]u8 = undefined;
+    const header_bytes = try readExactFd(event_log_file.fd, &migrated_header);
+    try std.testing.expectEqual(file_header_size, header_bytes);
+    try std.testing.expect(hasCurrentHeader(&migrated_header));
+
+    const frames = try readOwnedFrames(allocator, files.event_log_path);
+    defer deinitOwnedFrames(allocator, frames);
+    try std.testing.expectEqual(@as(usize, 1), frames.len);
+    try std.testing.expectEqual(FrameKind.output, frames[0].kind);
+    try std.testing.expectEqualStrings("legacy-output", frames[0].payload);
 }
 
 test "event log recovery streams valid files beyond a whole-file payload cap" {

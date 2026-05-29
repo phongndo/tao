@@ -18,8 +18,8 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const sanitize_thread = b.option(bool, "sanitize-thread", "Build taod tests with ThreadSanitizer") orelse false;
-    const fuzz = b.option(bool, "fuzz", "Build taod tests with Zig fuzz instrumentation") orelse false;
+    const sanitize_thread = b.option(bool, "sanitize-thread", "Build taud tests with ThreadSanitizer") orelse false;
+    const fuzz = b.option(bool, "fuzz", "Build taud tests with Zig fuzz instrumentation") orelse false;
 
     const options = b.addOptions();
     options.addOption([]const u8, "vt_backend", "ghostty_native");
@@ -36,13 +36,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
 
         // Keep the daemon build self-contained and avoid linking Ghostty's
-        // vendored SIMD C++ objects into taod. This still uses the upstream
+        // vendored SIMD C++ objects into taud. This still uses the upstream
         // libghostty-vt parser/state machine; only the SIMD fast paths are off.
         .simd = false,
     });
     const ghostty_vt_module = ghostty.module("ghostty-vt");
 
-    const mod = b.addModule("taod", .{
+    const mod = b.addModule("taud", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -61,20 +61,20 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .sanitize_thread = sanitize_thread,
         .fuzz = fuzz,
-        .imports = &.{.{ .name = "taod", .module = mod }},
+        .imports = &.{.{ .name = "taud", .module = mod }},
     });
     exe_mod.addOptions("build_options", options);
     if (target.result.os.tag == .linux) exe_mod.linkSystemLibrary("util", .{});
 
     const exe = b.addExecutable(.{
-        .name = "taod",
+        .name = "taud",
         .root_module = exe_mod,
         .use_llvm = true,
     });
 
     b.installArtifact(exe);
 
-    const run_step = b.step("run", "Run taod");
+    const run_step = b.step("run", "Run taud");
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
@@ -108,7 +108,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("test:fmt", "Check Zig formatting");
     fmt_step.dependOn(&fmt_check.step);
 
-    const compile_step = b.step("test:compile", "Compile taod unit tests without running them");
+    const compile_step = b.step("test:compile", "Compile taud unit tests without running them");
     compile_step.dependOn(&mod_tests.step);
     compile_step.dependOn(&exe_tests.step);
 
@@ -118,7 +118,7 @@ pub fn build(b: *std.Build) void {
     const sanitizer_step = b.step("test:sanitize-thread", "Run tests with ThreadSanitizer; pass -Dsanitize-thread=true");
     sanitizer_step.dependOn(&mod_test_run.step);
 
-    const check_step = b.step("check", "Compile and format-check taod without running tests");
+    const check_step = b.step("check", "Compile and format-check taud without running tests");
     check_step.dependOn(&exe.step);
     check_step.dependOn(&mod_tests.step);
     check_step.dependOn(&exe_tests.step);

@@ -59,9 +59,11 @@ Search should behave like Codex search:
 
 Customizability means users can change Tau's UI and workflows through extensions without Tau hardcoding every workflow.
 
+Tau extensions are Tau-owned UI and workflow adapters. Pi remains the source of truth for kernel capabilities, slash command definitions, and session events; Tau extensions wrap those Pi primitives with renderer surfaces, project/thread actions, settings, and local presentation.
+
 Initial extension surfaces should be constrained:
 
-- Slash command definitions surfaced from Pi/Tau.
+- Slash command definitions discovered from Pi and exposed through Tau extension manifests.
 - Tool call renderers.
 - Diff viewers.
 - File viewers.
@@ -70,11 +72,17 @@ Initial extension surfaces should be constrained:
 
 Do not start with arbitrary dashboard or full custom UI extensions. That makes the trust model and product surface too large too early.
 
-The goal is for a user to ask Pi/Tau to build their workflow, with enough Tau extension docs and examples available for the AI to safely implement that workflow.
+The goal is for a user to ask Pi to build their Tau workflow, with enough Tau extension docs and examples available for the AI to safely implement that workflow.
 
 ## Pi Integration
 
 The key technical question is how Pi exposes session and extension state.
+
+Blocking verification ticket:
+
+- Before any Pi-first UI or extension feature work, build a Pi capability probe that records whether Pi exposes structured RPC/events for assistant messages, tool calls, approvals, diffs, errors, files, and command status.
+- The probe must also document how Pi discovers slash commands and extensions, how Pi persists sessions, and which state must remain Pi-owned versus indexable by Tau.
+- If the probe shows that Pi exposes only terminal output or partial structure, use the narrow bridge plan below and keep the first UI pass limited to verified events.
 
 Need to research and test:
 
@@ -167,7 +175,7 @@ Keep them as:
 
 - Temporary sandboxes for risky edits.
 - Optional per-thread execution environments.
-- A feature similar to T3 Chat/Codex app style temporary worktrees.
+- A feature similar to Codex app-style temporary worktrees.
 
 Do not:
 
@@ -265,7 +273,7 @@ Anything beyond this should wait until the foundation is proven.
 
 ## Risks
 
-- Pi may not expose enough structured session data.
+- Pi may not expose enough structured session data; the blocking Pi capability ticket must prove this before UI scope expands, otherwise Tau should fall back to the narrow bridge plan.
 - A powerful extension system can become a security hole if trust is vague.
 - Remote control can balloon into a second product if scoped poorly.
 - Renaming workspace/tab concepts without a migration plan can destabilize persistence.
@@ -283,3 +291,11 @@ Anything beyond this should wait until the foundation is proven.
 - Worktrees stay, but only as temporary/sandboxed support.
 - Persistence should be Pi-owned where possible.
 - Extension system is central, but dashboard/full-UI extensions are not part of the first cut.
+
+### Migration Strategy
+
+Existing Tau users move from the workspace/worktree model to the project/thread model in phases:
+
+- Before project/thread UI becomes the default, the desktop persistence owner adds schema changes and compatibility shims that read existing workspace/worktree records as projects with threads.
+- During the first beta, the desktop UX owner ships in-app notices that explain the renamed concepts, the rollback path, and the deprecation timeline for worktree-first flows.
+- Before compatibility shims are removed, the desktop tooling owner adds import/export and automated converters for worktrees to projects/threads, with Pi session ownership kept separate from Tau indexes.

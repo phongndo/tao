@@ -1,4 +1,4 @@
-export type TaoStoragePaths = {
+export type TauStoragePaths = {
   readonly root: string
   readonly database: string
   readonly settings: string
@@ -21,20 +21,20 @@ function joinPath(...parts: string[]): string {
     .join('/')
 }
 
-export function resolveTaoStoragePaths(homeDir: string): TaoStoragePaths {
+export function resolveTauStoragePaths(homeDir: string): TauStoragePaths {
   const home = trimTrailingSlash(homeDir.trim())
-  const root = joinPath(home, '.tao')
+  const root = joinPath(home, '.tau')
   const run = joinPath(root, 'run')
   const sessions = joinPath(root, 'sessions')
 
   return {
     root,
-    database: joinPath(root, 'tao.db'),
+    database: joinPath(root, 'tau.db'),
     settings: joinPath(root, 'settings.json'),
     paneLayouts: joinPath(root, 'pane-layouts.json'),
     run,
-    socket: joinPath(run, 'taod.sock'),
-    pid: joinPath(run, 'taod.pid'),
+    socket: joinPath(run, 'taud.sock'),
+    pid: joinPath(run, 'taud.pid'),
     sessions,
     adapters: joinPath(root, 'adapters'),
   }

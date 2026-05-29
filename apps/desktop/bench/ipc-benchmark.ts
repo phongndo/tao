@@ -64,24 +64,24 @@ function readPositiveIntEnv(name: string, fallback: number, max: number): number
   return parsed
 }
 
-const TOTAL_MB = readPositiveIntEnv('TAO_IPC_BENCH_MB', 64, 4096)
-const CHUNK_KB = readPositiveIntEnv('TAO_IPC_BENCH_CHUNK_KB', 64, 1024)
-const RUNS = readPositiveIntEnv('TAO_IPC_BENCH_RUNS', 3, 100)
-const PING_EVERY_CHUNKS = readPositiveIntEnv('TAO_IPC_BENCH_PING_EVERY_CHUNKS', 4, 1_000_000)
-const ENFORCE_BUDGET = process.env.TAO_IPC_BENCH_ENFORCE === '1'
-const MIN_MESSAGEPORT_MBPS = readNonNegativeNumberEnv('TAO_IPC_MIN_MESSAGEPORT_MBPS', 0, 100_000)
+const TOTAL_MB = readPositiveIntEnv('TAU_IPC_BENCH_MB', 64, 4096)
+const CHUNK_KB = readPositiveIntEnv('TAU_IPC_BENCH_CHUNK_KB', 64, 1024)
+const RUNS = readPositiveIntEnv('TAU_IPC_BENCH_RUNS', 3, 100)
+const PING_EVERY_CHUNKS = readPositiveIntEnv('TAU_IPC_BENCH_PING_EVERY_CHUNKS', 4, 1_000_000)
+const ENFORCE_BUDGET = process.env.TAU_IPC_BENCH_ENFORCE === '1'
+const MIN_MESSAGEPORT_MBPS = readNonNegativeNumberEnv('TAU_IPC_MIN_MESSAGEPORT_MBPS', 0, 100_000)
 const MAX_MESSAGEPORT_P99_CONTROL_MS = readNonNegativeNumberEnv(
-  'TAO_IPC_MAX_MESSAGEPORT_P99_CONTROL_MS',
+  'TAU_IPC_MAX_MESSAGEPORT_P99_CONTROL_MS',
   Number.POSITIVE_INFINITY,
   Number.POSITIVE_INFINITY,
 )
 const MAX_MESSAGEPORT_CONTROL_STALLS_16 = readNonNegativeNumberEnv(
-  'TAO_IPC_MAX_MESSAGEPORT_CONTROL_STALLS_16',
+  'TAU_IPC_MAX_MESSAGEPORT_CONTROL_STALLS_16',
   Number.POSITIVE_INFINITY,
   Number.POSITIVE_INFINITY,
 )
 const MAX_MESSAGEPORT_DATA_STALLS_16 = readNonNegativeNumberEnv(
-  'TAO_IPC_MAX_MESSAGEPORT_DATA_STALLS_16',
+  'TAU_IPC_MAX_MESSAGEPORT_DATA_STALLS_16',
   Number.POSITIVE_INFINITY,
   Number.POSITIVE_INFINITY,
 )
@@ -128,7 +128,7 @@ function summarize(mode: BenchMode, samples: readonly BenchSample[]): BenchSumma
 }
 
 function printSummary({ legacy, port }: { legacy: BenchSummary; port: BenchSummary }): void {
-  console.log('Tao Electron IPC benchmark')
+  console.log('Tau Electron IPC benchmark')
   console.log(
     `payload: ${TOTAL_MB} MiB, chunk: ${CHUNK_KB} KiB, runs: ${RUNS}, control ping: every ${PING_EVERY_CHUNKS} chunks`,
   )

@@ -1,12 +1,12 @@
 import type { MosaicDirection, MosaicNode, MosaicParent } from 'react-mosaic-component'
 import { Schema } from 'effect'
 import { create } from 'zustand'
-import type { PaneFocusDirection } from '@tao/shared/app-command'
-import type { PaneLayoutData } from '@tao/shared/session'
-import { type WorkspaceWorktree, WorkspaceWorktreeSchema } from '@tao/shared/workspace'
+import type { PaneFocusDirection } from '@tau/shared/app-command'
+import type { PaneLayoutData } from '@tau/shared/session'
+import { type WorkspaceWorktree, WorkspaceWorktreeSchema } from '@tau/shared/workspace'
 import { sanitizeTerminalTitle } from '../osc-title'
 
-export const LOCAL_WORKSPACE_ID = 'tao:local'
+export const LOCAL_WORKSPACE_ID = 'tau:local'
 export const WORKTREE_CONTEXT_PREFIX = 'worktree:'
 
 export function worktreeContextId(worktreeId: string): string {
@@ -19,7 +19,7 @@ export function worktreeIdFromContext(contextId: string): string | null {
     : null
 }
 
-export interface TaoState {
+export interface TauState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
   lastActiveLocalTabId: string | null
@@ -149,7 +149,7 @@ const PersistedPaneSchema = Schema.Struct({
   lastSessionId: Schema.optional(Schema.String),
 })
 
-const PersistedTaoStateSchema = Schema.Struct({
+const PersistedTauStateSchema = Schema.Struct({
   workspaces: Schema.optional(Schema.Array(PersistedWorkspaceSchema)),
   activeWorkspaceId: Schema.optional(Schema.NullOr(Schema.String)),
   lastActiveLocalTabId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -304,7 +304,7 @@ function rememberWorkspaceTab(
 function rememberLocalTab(
   workspaceId: string,
   tabId: string,
-): Pick<TaoState, 'lastActiveLocalTabId'> | {} {
+): Pick<TauState, 'lastActiveLocalTabId'> | {} {
   return workspaceId === LOCAL_WORKSPACE_ID ? { lastActiveLocalTabId: tabId } : {}
 }
 
@@ -483,7 +483,7 @@ function reorderWorkspaceTabs(tabs: Tab[], workspaceId: string): Tab[] {
   return tabs.map((tab) => (tab.workspaceId === workspaceId ? { ...tab, order: order++ } : tab))
 }
 
-function closeTabState(state: TaoState, tabId: string): Partial<TaoState> {
+function closeTabState(state: TauState, tabId: string): Partial<TauState> {
   const tab = state.tabs.find((candidate) => candidate.id === tabId)
   if (!tab) return {}
 
@@ -531,7 +531,7 @@ function closeTabState(state: TaoState, tabId: string): Partial<TaoState> {
   }
 }
 
-function closePaneState(state: TaoState, paneId: string): Partial<TaoState> {
+function closePaneState(state: TauState, paneId: string): Partial<TauState> {
   const pane = state.panes.find((candidate) => candidate.id === paneId)
   const tab = pane ? state.tabs.find((candidate) => candidate.id === pane.tabId) : null
   if (!pane || !tab) return {}
@@ -559,7 +559,7 @@ function closePaneState(state: TaoState, paneId: string): Partial<TaoState> {
   }
 }
 
-function selectWorkspaceTabState(state: TaoState, workspaceId: string): Partial<TaoState> {
+function selectWorkspaceTabState(state: TauState, workspaceId: string): Partial<TauState> {
   const workspaceTabs = getWorkspaceTabs(state.tabs, workspaceId)
   const existingTab =
     workspaceTabs.find((tab) => tab.id === state.activeTabId) ??
@@ -581,7 +581,7 @@ function selectWorkspaceTabState(state: TaoState, workspaceId: string): Partial<
   }
 }
 
-type PersistedTaoState = Schema.Schema.Type<typeof PersistedTaoStateSchema>
+type PersistedTauState = Schema.Schema.Type<typeof PersistedTauStateSchema>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -656,11 +656,11 @@ function decodePersistedLayout(
   }
 }
 
-function normalizePersistedState(persistedState: unknown): Partial<TaoState> {
-  const decoded = Schema.decodeUnknownOption(PersistedTaoStateSchema)(persistedState)
+function normalizePersistedState(persistedState: unknown): Partial<TauState> {
+  const decoded = Schema.decodeUnknownOption(PersistedTauStateSchema)(persistedState)
   if (decoded._tag === 'None') return {}
 
-  const persisted = decoded.value as PersistedTaoState
+  const persisted = decoded.value as PersistedTauState
   const workspaces = (persisted.workspaces ?? [])
     .filter(
       (workspace) => isNonEmptyString(workspace.id) && isNonEmptyString(workspace.projectPath),
@@ -763,7 +763,7 @@ function workspaceNameFallback(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
 }
 
-function repairPersistedState(state: TaoState): TaoState {
+function repairPersistedState(state: TauState): TauState {
   const hasActiveWorkspace =
     state.activeWorkspaceId !== null && contextExists(state.workspaces, state.activeWorkspaceId)
   const activeWorkspaceId = hasActiveWorkspace ? state.activeWorkspaceId : null
@@ -805,7 +805,7 @@ function upsertWorktreeInWorkspace(
   })
 }
 
-export const useTaoStore = create<TaoState>()((set) => ({
+export const useTauStore = create<TauState>()((set) => ({
   workspaces: [],
   activeWorkspaceId: null,
   lastActiveLocalTabId: null,
@@ -1275,7 +1275,7 @@ export const useTaoStore = create<TaoState>()((set) => ({
     }),
 }))
 
-export function selectPaneLayoutData(state: TaoState): PaneLayoutData {
+export function selectPaneLayoutData(state: TauState): PaneLayoutData {
   return {
     version: 2,
     workspaces: state.workspaces.map((workspace) => ({

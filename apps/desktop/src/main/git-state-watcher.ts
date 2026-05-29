@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, watch, type FSWatcher } from 'node:fs'
 import { isAbsolute, join, resolve, sep } from 'node:path'
-import type { WorkspaceRecord, WorkspaceWatcherDiagnostics } from '@tao/shared/workspace'
-import type { TaodClient } from './taod-client'
+import type { WorkspaceRecord, WorkspaceWatcherDiagnostics } from '@tau/shared/workspace'
+import type { TaudClient } from './taud-client'
 
 const GIT_REFRESH_DEBOUNCE_MS = 75
 const MAX_WATCHED_GIT_DIRS = 512
@@ -99,7 +99,7 @@ export class GitStateWatcher {
   private readonly entries = new Map<string, WatchEntry>()
 
   constructor(
-    private readonly client: () => TaodClient,
+    private readonly client: () => TaudClient,
     private readonly notifyWorkspaceChanged: (workspace: WorkspaceRecord) => void,
     private readonly debounceMs = GIT_REFRESH_DEBOUNCE_MS,
     private readonly unrefDebounceTimers = true,

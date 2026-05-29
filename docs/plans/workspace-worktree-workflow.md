@@ -5,13 +5,13 @@
 
 ## Summary
 
-Tao should make parallel agent work frictionless by treating Git worktrees as daemon-owned children of
+Tau should make parallel agent work frictionless by treating Git worktrees as daemon-owned children of
 normal workspaces. The happy path is:
 
 1. User opens/adds a workspace that points at a repository root.
 2. User presses **New Worktree** on that workspace.
-3. Tao immediately generates a temporary-friendly folder and branch name.
-4. `taod` creates the Git worktree under Tao's worktree root.
+3. Tau immediately generates a temporary-friendly folder and branch name.
+4. `taud` creates the Git worktree under Tau's worktree root.
 5. The UI selects the new worktree and opens a terminal or AI CLI with `cwd = worktree.path`.
 6. The user or AI agent may later rename the branch/title to reflect the actual task.
 
@@ -31,7 +31,7 @@ worktrees, session cwd/env metadata, and filesystem/Git lifecycle operations.
 
 - Use only two domain objects: `workspace` and `worktree`.
 - **New Worktree** is frictionless: no required name/task dialog before creation.
-- Tao creates the worktree folder and an initial Git branch before launching a shell or AI CLI.
+- Tau creates the worktree folder and an initial Git branch before launching a shell or AI CLI.
 - The generated folder is stable and should generally not be renamed.
 - The Git branch is allowed to change later; the user or AI agent can rename it after the task is
   known.
@@ -47,7 +47,7 @@ worktrees, session cwd/env metadata, and filesystem/Git lifecycle operations.
 - Frictionless **New Worktree** creation with no required naming step.
 - First-class worktree creation from the sidebar.
 - Daemon-owned workspace/worktree registry persisted in SQLite.
-- Safe generated paths under Tao's worktree root.
+- Safe generated paths under Tau's worktree root.
 - Generated names that are pleasant, unique, and branch-safe.
 - The main workspace checkout and each worktree are selectable in the UI.
 - Worktree-aware terminal and agent sessions.
@@ -73,26 +73,26 @@ metadata, not as a review product.
 ### Workspace
 
 A workspace points at a real repository root, usually the user's normal checkout. It is the parent for
-all Tao-known worktrees for that repository.
+all Tau-known worktrees for that repository.
 
 Example:
 
 ```text
-/Users/dp/code/projects/tao
+/Users/dp/code/projects/tau
 ```
 
-The workspace itself remains selectable and represents the main checkout. Tao never deletes or moves
+The workspace itself remains selectable and represents the main checkout. Tau never deletes or moves
 this path.
 
 ### Worktree
 
-A worktree is a Git worktree associated with exactly one workspace. Tao-created worktrees live under
-Tao's worktree root by default and are selectable alongside the workspace's main checkout.
+A worktree is a Git worktree associated with exactly one workspace. Tau-created worktrees live under
+Tau's worktree root by default and are selectable alongside the workspace's main checkout.
 
 Example:
 
 ```text
-~/.tao/worktrees/tao/luminous-galileo-a13f
+~/.tau/worktrees/tau/luminous-galileo-a13f
 ```
 
 ### Selection model
@@ -119,7 +119,7 @@ That derived key should decode back to `workspace_id + worktree_id?` before call
 
 ## Ownership model
 
-`taod` owns:
+`taud` owns:
 
 - workspace registry
 - worktree registry
@@ -140,7 +140,7 @@ Electron owns:
 Target flow:
 
 ```text
-Renderer → preload/main IPC → taod RPC → Git/filesystem/SQLite
+Renderer → preload/main IPC → taud RPC → Git/filesystem/SQLite
 ```
 
 Renderer state may cache daemon state, but daemon state is authoritative.
@@ -150,21 +150,21 @@ Renderer state may cache daemon state, but daemon state is authoritative.
 Default worktree root:
 
 ```text
-~/.tao/worktrees/<workspace-slug>/<generated-folder-name>
+~/.tau/worktrees/<workspace-slug>/<generated-folder-name>
 ```
 
 Examples:
 
 ```text
-~/.tao/worktrees/tao/luminous-galileo-a13f
-~/.tao/worktrees/tao/orbital-copernicus-82bd
-~/.tao/worktrees/straycat/logical-aristotle-09ce
+~/.tau/worktrees/tau/luminous-galileo-a13f
+~/.tau/worktrees/tau/orbital-copernicus-82bd
+~/.tau/worktrees/straycat/logical-aristotle-09ce
 ```
 
-The generated folder name must **not** include a `tao-` prefix.
+The generated folder name must **not** include a `tau-` prefix.
 
-Use Tao's configured state root if/when `TAO_HOME` or app-data overrides exist; otherwise default to
-`~/.tao`.
+Use Tau's configured state root if/when `TAU_HOME` or app-data overrides exist; otherwise default to
+`~/.tau`.
 
 ## Generated names
 
@@ -251,7 +251,7 @@ Collision handling:
 4. Retry with a new random suffix on collision.
 5. After several collisions, use a longer suffix.
 
-Default branch name mirrors the folder without a Tao prefix:
+Default branch name mirrors the folder without a Tau prefix:
 
 ```text
 <generated-folder-name>
@@ -264,12 +264,12 @@ folder: luminous-galileo-a13f
 branch: luminous-galileo-a13f
 ```
 
-If the user provides a branch name, Tao should still auto-generate a safe folder name unless the user
+If the user provides a branch name, Tau should still auto-generate a safe folder name unless the user
 explicitly provides a folder name in advanced options.
 
 ## Branch and folder creation policy
 
-Default behavior: Tao should create both the worktree folder and a temporary-friendly Git branch before
+Default behavior: Tau should create both the worktree folder and a temporary-friendly Git branch before
 opening the terminal/agent. The user should not have to name the worktree up front.
 
 Recommended default command:
@@ -285,11 +285,11 @@ This one Git command:
 3. checks that branch out in the new directory, and
 4. writes Git's worktree metadata under the repository's common Git directory.
 
-Tao should not create the final worktree directory manually first. It should create only parent
-directories such as `~/.tao/worktrees/<workspace-slug>` and let Git create/populate the final worktree
+Tau should not create the final worktree directory manually first. It should create only parent
+directories such as `~/.tau/worktrees/<workspace-slug>` and let Git create/populate the final worktree
 path.
 
-Why Tao should create the branch by default:
+Why Tau should create the branch by default:
 
 - The sidebar can immediately show the correct branch.
 - The daemon can detect branch/path collisions before launching an agent.
@@ -298,20 +298,20 @@ Why Tao should create the branch by default:
 - The user gets an instant terminal/agent and can decide the task name later.
 
 Git has a convenience mode where `git worktree add <path>` can infer a branch from the basename of the
-path. Tao should avoid relying on that inference and pass the generated branch name explicitly, even
+path. Tau should avoid relying on that inference and pass the generated branch name explicitly, even
 though the default generated branch name matches the folder.
 
 Supported creation modes:
 
 ```text
 auto branch, auto folder       default: branch = <generated-folder>
-manual branch, auto folder     user supplies branch; Tao generates folder
+manual branch, auto folder     user supplies branch; Tau generates folder
 existing branch, auto folder   advanced: checkout an existing branch if not checked out elsewhere
 detached worktree              advanced/later: no branch, agent/user may create one manually
 ```
 
 The agent may still create or switch branches manually after launch, because it is just running inside
-a normal Git worktree. Tao should treat that as external Git activity and refresh branch metadata from
+a normal Git worktree. Tau should treat that as external Git activity and refresh branch metadata from
 Git rather than assuming the original branch is still checked out forever.
 
 This makes the primary flow intentionally frictionless:
@@ -320,7 +320,7 @@ This makes the primary flow intentionally frictionless:
 click + Worktree → generated branch/folder → terminal or AI CLI opens there → user gives task
 ```
 
-If the task later deserves a better name, either the user or the AI CLI can rename the branch. Tao
+If the task later deserves a better name, either the user or the AI CLI can rename the branch. Tau
 should discover the new branch name on refresh and update the sidebar metadata.
 
 ### Superconductor-style agent launch
@@ -333,7 +333,7 @@ The Superconductor-style flow appears to be:
 4. The user's first task message can then cause the agent to rename/switch the branch, update the UI
    title, or simply continue using the pre-created branch.
 
-The CLI cannot start "inside a worktree" unless the worktree directory already exists. Therefore Tao's
+The CLI cannot start "inside a worktree" unless the worktree directory already exists. Therefore Tau's
 create-and-run-agent path should still create the Git worktree before spawning the CLI.
 
 Important distinction:
@@ -342,7 +342,7 @@ Important distinction:
 - Git branch: ref checked out inside that worktree.
 - UI title/task name: user-facing label that may change after the user describes the task.
 
-Those three names may start the same, but Tao should store them separately so a later branch rename or
+Those three names may start the same, but Tau should store them separately so a later branch rename or
 task-title change does not corrupt the worktree path.
 
 Suggested naming lifecycle:
@@ -365,7 +365,7 @@ Branch rename support:
 git branch -m <new-branch-name>
 ```
 
-After a branch rename, Tao should refresh the worktree's current branch from Git. The worktree folder
+After a branch rename, Tau should refresh the worktree's current branch from Git. The worktree folder
 does not need to be renamed, and should generally stay stable.
 
 ## Daemon data model
@@ -401,7 +401,7 @@ worktrees
   order_index INTEGER NOT NULL DEFAULT 0
   last_active_tab_id TEXT
   last_error TEXT
-  created_by TEXT NOT NULL DEFAULT 'tao'
+  created_by TEXT NOT NULL DEFAULT 'tau'
   created_at TEXT NOT NULL
   updated_at TEXT NOT NULL
   archived_at TEXT
@@ -426,7 +426,7 @@ Notes:
   seen during refresh that are not yet adopted into SQLite.
 - Existing `pane-layouts.json` workspace entries should be migrated/imported into daemon `workspaces`
   or treated as a UI cache after daemon ownership lands.
-- `git worktree list --porcelain` remains the truth for what Git currently knows. SQLite stores Tao's
+- `git worktree list --porcelain` remains the truth for what Git currently knows. SQLite stores Tau's
   intent and UI metadata.
 
 Recommended terminal session migration:
@@ -470,8 +470,8 @@ Recommended list shape:
   "workspaces": [
     {
       "id": "...",
-      "name": "tao",
-      "root_path": "/Users/dp/code/projects/tao",
+      "name": "tau",
+      "root_path": "/Users/dp/code/projects/tau",
       "branch": "main",
       "default_branch": "main",
       "git_status": { "changed": 0, "staged": 0 },
@@ -481,7 +481,7 @@ Recommended list shape:
           "workspace_id": "...",
           "title": "New worktree",
           "folder_name": "luminous-galileo-a13f",
-          "path": "/Users/dp/.tao/worktrees/tao/luminous-galileo-a13f",
+          "path": "/Users/dp/.tau/worktrees/tau/luminous-galileo-a13f",
           "branch": "luminous-galileo-a13f",
           "state": "active",
           "git_status": { "changed": 2, "staged": 0 }
@@ -529,7 +529,7 @@ Creation output:
   "workspace_id": "...",
   "title": "New worktree",
   "folder_name": "luminous-galileo-a13f",
-  "path": "/Users/dp/.tao/worktrees/tao/luminous-galileo-a13f",
+  "path": "/Users/dp/.tau/worktrees/tau/luminous-galileo-a13f",
   "branch": "luminous-galileo-a13f",
   "base_branch": "main",
   "target_branch": "main",
@@ -563,7 +563,7 @@ choose the same generated path/branch or race Git's worktree lock files.
 2. Insert a `worktrees` row with `state = 'creating'`.
 3. Run `git worktree add ...`.
 4. On success, update the row to `state = 'active'`.
-5. On failure, remove any partially-created path only if it is still under Tao's worktree root and is
+5. On failure, remove any partially-created path only if it is still under Tau's worktree root and is
    safe to delete, then mark the row `error` with `last_error` or delete the row if nothing was
    created.
 
@@ -640,14 +640,14 @@ Parsing notes:
   the active UI. If the path still exists but Git no longer reports it, keep it as `missing`.
 
 Adoption should create a `worktrees` row with `created_by = 'external'`. Removing an adopted worktree
-from Tao should default to unregister/archive only unless the user explicitly asks Tao to remove it
+from Tau should default to unregister/archive only unless the user explicitly asks Tau to remove it
 from Git.
 
 ## Safety rules
 
-- Resolve all generated paths under Tao's configured worktree root.
+- Resolve all generated paths under Tau's configured worktree root.
 - Reject path traversal and symlink escapes.
-- Never delete outside the configured worktree root for Tao-managed worktree removals.
+- Never delete outside the configured worktree root for Tau-managed worktree removals.
 - Never remove the workspace's main checkout through `worktree.remove`.
 - Refuse removal of dirty worktrees unless caller passes an explicit force flag.
 - Keep the original workspace checkout safe; never run destructive cleanup there.
@@ -660,7 +660,7 @@ from Git.
 Sidebar should group worktrees under their workspace:
 
 ```text
-tao
+tau
   main                         main
   luminous-galileo-a13f        luminous-galileo-a13f
   orbital-copernicus-82bd      orbital-copernicus-82bd
@@ -726,19 +726,19 @@ Suggested sidebar behavior:
 
 ## Agent session environment
 
-When spawning shells or agents inside a worktree, `taod` should inject:
+When spawning shells or agents inside a worktree, `taud` should inject:
 
 ```text
-TAO_WORKSPACE_ID
-TAO_WORKSPACE_ROOT
-TAO_WORKTREE_ID
-TAO_WORKTREE_PATH
-TAO_WORKTREE_BRANCH
-TAO_BASE_BRANCH
-TAO_TARGET_BRANCH
+TAU_WORKSPACE_ID
+TAU_WORKSPACE_ROOT
+TAU_WORKTREE_ID
+TAU_WORKTREE_PATH
+TAU_WORKTREE_BRANCH
+TAU_BASE_BRANCH
+TAU_TARGET_BRANCH
 ```
 
-For terminals in the main checkout, omit `TAO_WORKTREE_*` and set `TAO_WORKSPACE_ROOT` to the workspace
+For terminals in the main checkout, omit `TAU_WORKTREE_*` and set `TAU_WORKSPACE_ROOT` to the workspace
 root path.
 
 This requires extending daemon session spawn metadata to accept per-session environment variables and
@@ -773,7 +773,7 @@ The migration should be staged:
 - Add nullable `worktree_id` to `terminal_sessions`.
 - Add repository discovery helpers: toplevel, common git dir, default branch.
 - Add name generator in Zig.
-- Add path helpers for `~/.tao/worktrees/<workspace-slug>/<folder-name>`.
+- Add path helpers for `~/.tau/worktrees/<workspace-slug>/<folder-name>`.
 - Add tests for collision handling, path safety, generated-name shape, and branch-safe names.
 
 Suggested Zig modules:
@@ -802,7 +802,7 @@ apps/daemon/src/git.zig            # small Git command wrappers/parsers
 ### Phase 4 — Desktop bridge and schemas
 
 - Add TypeScript shared schemas for workspace/worktree RPC payloads.
-- Add Electron bridge methods that call `taod` instead of running Git directly.
+- Add Electron bridge methods that call `taud` instead of running Git directly.
 - Keep existing Git metadata queries temporarily, but migrate source of truth to daemon RPC.
 - Add one-time import from layout workspaces to daemon workspaces.
 
@@ -832,15 +832,15 @@ TypeScript guideline:
 ## Acceptance criteria for the first shippable slice
 
 - Adding a Git repository creates one workspace in SQLite.
-- Pressing **New Worktree** creates a worktree under `~/.tao/worktrees/<workspace>/<name>`.
+- Pressing **New Worktree** creates a worktree under `~/.tau/worktrees/<workspace>/<name>`.
 - The new branch defaults to `<name>`.
 - The sidebar immediately selects the new worktree and opens a terminal or selected AI CLI there.
-- Restarting Tao preserves workspaces, worktrees, and session associations.
-- Removing a clean Tao-managed worktree deletes only the worktree path and archives its worktree row.
+- Restarting Tau preserves workspaces, worktrees, and session associations.
+- Removing a clean Tau-managed worktree deletes only the worktree path and archives its worktree row.
 - Dirty worktree removal requires explicit force.
 - External deletion archives and removes the worktree from the active sidebar after refresh instead of
   crashing or leaving a broken row.
-- If the branch is renamed inside the worktree, refresh updates Tao's branch metadata without renaming
+- If the branch is renamed inside the worktree, refresh updates Tau's branch metadata without renaming
   the folder.
 
 ## Deferred decisions after the first slice
@@ -849,7 +849,7 @@ TypeScript guideline:
 - Whether `git fetch` should be offered as an explicit create option or background action.
 - Whether non-Git directories should become daemon workspaces or remain layout-only entries.
 - Whether force-removal belongs in the first visible UI or only in an advanced/command-palette flow.
-- Whether adopted non-Tao worktrees should ever be movable under `~/.tao/worktrees`; first slice should
+- Whether adopted non-Tau worktrees should ever be movable under `~/.tau/worktrees`; first slice should
   track them in place.
 - Whether worktree root overrides should be supported; first slice should keep a daemon-global root for
   safety.

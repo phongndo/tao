@@ -43,14 +43,14 @@ pub fn Context(comptime Daemon: type) type {
                     worktree_row = database.findWorktreeById(daemon.allocator, worktree_id) catch null;
                 }
             }
-            if (item.workspace_id) |workspace_id| try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKSPACE_ID", .value = workspace_id });
-            if (workspace_row) |row| try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKSPACE_ROOT", .value = row.root_path });
+            if (item.workspace_id) |workspace_id| try env_pairs.append(daemon.allocator, .{ .name = "TAU_WORKSPACE_ID", .value = workspace_id });
+            if (workspace_row) |row| try env_pairs.append(daemon.allocator, .{ .name = "TAU_WORKSPACE_ROOT", .value = row.root_path });
             if (worktree_row) |row| {
-                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_ID", .value = row.id });
-                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_PATH", .value = row.path });
-                try env_pairs.append(daemon.allocator, .{ .name = "TAO_WORKTREE_BRANCH", .value = row.branch });
-                if (row.base_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAO_BASE_BRANCH", .value = value });
-                if (row.target_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAO_TARGET_BRANCH", .value = value });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAU_WORKTREE_ID", .value = row.id });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAU_WORKTREE_PATH", .value = row.path });
+                try env_pairs.append(daemon.allocator, .{ .name = "TAU_WORKTREE_BRANCH", .value = row.branch });
+                if (row.base_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAU_BASE_BRANCH", .value = value });
+                if (row.target_branch) |value| try env_pairs.append(daemon.allocator, .{ .name = "TAU_TARGET_BRANCH", .value = value });
             }
 
             item.pty_child = try daemon.pty_driver.spawn(.{
