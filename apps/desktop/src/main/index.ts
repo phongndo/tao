@@ -1,5 +1,5 @@
 /**
- * Tao — Electron Performance Research & Implementation
+ * Tau — Electron Performance Research & Implementation
  *
  * Electron 42 (Chromium ~136) on macOS arm64.
  *
@@ -9,14 +9,14 @@
  * TL;DR improvements applied:
  *   - GPU rasterization + zero-copy (canvas rendering)
  *   - V8 heap limit tuned for terminal workloads
- *   - PTY isolated in taod with direct MessagePort IPC to the renderer bridge
+ *   - PTY isolated in taud with direct MessagePort IPC to the renderer bridge
  *   - Renderer process limit = 1 (single window app)
  *   - Disabled unused Chromium features (~15 services)
  *   - Canvas compositor layer promotion
  */
 
 import { execFile } from 'node:child_process'
-import { mkdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -25,24 +25,33 @@ import type { BrowserWindow as BrowserWindowInstance, IpcMainInvokeEvent } from 
 
 const require = createRequire(import.meta.url)
 const electronApi = require('electron') as typeof import('electron')
-const { app, BrowserWindow, contentTracing, dialog, ipcMain, MessageChannelMain } = electronApi
+const {
+  app,
+  BrowserWindow,
+  contentTracing,
+  dialog,
+  ipcMain,
+  MessageChannelMain,
+  nativeImage,
+  nativeTheme,
+} = electronApi
 import { readLayout, writeLayout } from './layout-store'
 import { disposeMainRuntime, runMainEffect } from './runtime'
 import { defaultSettings, readSettings, writeSettings } from './settings-store'
-import { TaodPtyBridge } from './taod-pty-bridge'
-import { TaodClient } from './taod-client'
+import { TaudPtyBridge } from './taud-pty-bridge'
+import { TaudClient } from './taud-client'
 import { GitStateWatcher } from './git-state-watcher'
-import type { AppCommand, PaneFocusDirection } from '@tao/shared/app-command'
+import type { AppCommand, PaneFocusDirection } from '@tau/shared/app-command'
 import {
   PaneLayoutDataSchema,
   SettingsDataSchema,
   type PaneLayoutData,
   type SettingsData,
-} from '@tao/shared/session'
+} from '@tau/shared/session'
 import {
-  TaodLifecycleRecoveryInputSchema,
-  type TaodLifecycleRecoveryInput,
-} from '@tao/shared/taod-protocol'
+  TaudLifecycleRecoveryInputSchema,
+  type TaudLifecycleRecoveryInput,
+} from '@tau/shared/taud-protocol'
 import {
   WorkspaceError,
   WorkspaceAddInputSchema,
@@ -61,7 +70,7 @@ import {
   type WorkspaceRecord,
   type WorkspaceIpcResponse,
   type WorkspaceWorktree,
-} from '@tao/shared/workspace'
+} from '@tau/shared/workspace'
 
 const execFileAsync = promisify(execFile)
 
@@ -128,20 +137,60 @@ app.commandLine.appendSwitch('renderer-process-limit', '1')
 
 let mainWindow: BrowserWindowInstance | null = null
 let mainWindowLoadPromise: Promise<void> | null = null
-let taodBridge: TaodPtyBridge | null = null
-let taodClient: TaodClient | null = null
+let taudBridge: TaudPtyBridge | null = null
+let taudClient: TaudClient | null = null
 let gitStateWatcher: GitStateWatcher | null = null
+
+// ─── Application Icon ───
+
+function appIconFileName(): string {
+  return nativeTheme.shouldUseDarkColors ? 'tau-icon-dark.png' : 'tau-icon-light.png'
+}
+
+function resolveAppIconPath(): string | null {
+  const fileName = appIconFileName()
+  const candidates = [
+    join(__dirname, '../renderer/icons', fileName),
+    join(__dirname, '../../public/icons', fileName),
+    resolve(process.cwd(), 'apps/desktop/public/icons', fileName),
+    resolve(process.cwd(), 'public/icons', fileName),
+  ]
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? null
+}
+
+function loadAppIcon() {
+  const iconPath = resolveAppIconPath()
+  if (!iconPath) return null
+
+  const icon = nativeImage.createFromPath(iconPath)
+  return icon.isEmpty() ? null : icon
+}
+
+function applyAppIcon() {
+  const icon = loadAppIcon()
+  if (!icon) return
+
+  if (process.platform === 'darwin') {
+    app.dock?.setIcon(icon)
+  }
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.setIcon(icon)
+  }
+}
 
 // ─── Window Creation ───
 
 function createWindow(): BrowserWindowInstance {
+  const appIcon = loadAppIcon()
   mainWindow = new BrowserWindow({
     width: 900,
     height: 600,
     minWidth: 400,
     minHeight: 300,
     backgroundColor: '#151515',
-    title: 'Tao',
+    title: 'Tau',
+    ...(appIcon ? { icon: appIcon } : {}),
     show: false, // Show only when terminal is ready
     // Accept first mouse click immediately (no click-through delay)
     acceptFirstMouse: true,
@@ -286,29 +335,29 @@ async function sendPtyPortToRenderer() {
   if (!mainWindow || mainWindow.isDestroyed()) return
 
   try {
-    const bridge = ensureTaodBridge()
+    const bridge = ensureTaudBridge()
     await bridge.ensureReady()
 
     const { port1, port2 } = new MessageChannelMain()
     bridge.connectPort(port1)
     mainWindow.webContents.postMessage('pty:port', null, [port2])
   } catch (err) {
-    console.warn(`[main] Tao daemon unavailable: ${errorMessageFromUnknown(err)}`)
+    console.warn(`[main] Tau daemon unavailable: ${errorMessageFromUnknown(err)}`)
   }
 }
 
-function ensureTaodBridge(): TaodPtyBridge {
-  taodBridge ??= new TaodPtyBridge({ client: ensureTaodClient() })
-  return taodBridge
+function ensureTaudBridge(): TaudPtyBridge {
+  taudBridge ??= new TaudPtyBridge({ client: ensureTaudClient() })
+  return taudBridge
 }
 
-function ensureTaodClient(): TaodClient {
-  taodClient ??= new TaodClient({ detachDaemon: !isElectronSmoke() })
-  return taodClient
+function ensureTaudClient(): TaudClient {
+  taudClient ??= new TaudClient({ detachDaemon: !isElectronSmoke() })
+  return taudClient
 }
 
 function ensureGitStateWatcher(): GitStateWatcher {
-  gitStateWatcher ??= new GitStateWatcher(ensureTaodClient, (workspace) => {
+  gitStateWatcher ??= new GitStateWatcher(ensureTaudClient, (workspace) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
     mainWindow.webContents.send('workspace:changed', workspace)
   })
@@ -318,10 +367,10 @@ function ensureGitStateWatcher(): GitStateWatcher {
 async function disposeSessionBackends(): Promise<void> {
   gitStateWatcher?.dispose()
   gitStateWatcher = null
-  taodBridge?.dispose()
-  taodBridge = null
-  const client = taodClient
-  taodClient = null
+  taudBridge?.dispose()
+  taudBridge = null
+  const client = taudClient
+  taudClient = null
   await client?.dispose()
 }
 
@@ -389,9 +438,9 @@ function pickWorkspaceDirectoryRequest(event: IpcMainInvokeEvent): Promise<strin
   })
 }
 
-async function runTaodWorkspaceRequest<A>(
+async function runTaudWorkspaceRequest<A>(
   event: IpcMainInvokeEvent,
-  run: (client: TaodClient) => Promise<A>,
+  run: (client: TaudClient) => Promise<A>,
 ): Promise<WorkspaceIpcResponse<A>> {
   if (event.sender !== mainWindow?.webContents) {
     return workspaceIpcFailure(
@@ -400,7 +449,7 @@ async function runTaodWorkspaceRequest<A>(
   }
 
   try {
-    const client = ensureTaodClient()
+    const client = ensureTaudClient()
     const value = await run(client)
     return workspaceIpcSuccess(value)
   } catch (error) {
@@ -441,7 +490,7 @@ ipcMain.on('pty:requestPort', (event) => {
 ipcMain.handle('workspace:pickDirectory', pickWorkspaceDirectoryRequest)
 
 ipcMain.handle('workspace:list', async (event) => {
-  const response = await runTaodWorkspaceRequest<readonly WorkspaceRecord[]>(event, (client) =>
+  const response = await runTaudWorkspaceRequest<readonly WorkspaceRecord[]>(event, (client) =>
     client.listWorkspaces(),
   )
   if (response.ok) ensureGitStateWatcher().syncWorkspaces(response.value)
@@ -449,7 +498,7 @@ ipcMain.handle('workspace:list', async (event) => {
 })
 
 ipcMain.handle('workspace:add', async (event, input: unknown) => {
-  const response = await runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) => {
+  const response = await runTaudWorkspaceRequest<WorkspaceRecord>(event, (client) => {
     const data = decodeWorkspaceIpcInput(WorkspaceAddInputSchema, input, 'invalid-workspace')
     return client.addWorkspace(data)
   })
@@ -458,7 +507,7 @@ ipcMain.handle('workspace:add', async (event, input: unknown) => {
 })
 
 ipcMain.handle('workspace:refresh', async (event, workspaceId: unknown) => {
-  const response = await runTaodWorkspaceRequest<WorkspaceRecord>(event, (client) =>
+  const response = await runTaudWorkspaceRequest<WorkspaceRecord>(event, (client) =>
     client.refreshWorkspace(
       decodeWorkspaceIpcInput(WorkspaceRefreshInputSchema, workspaceId, 'invalid-workspace'),
     ),
@@ -469,7 +518,7 @@ ipcMain.handle('workspace:refresh', async (event, workspaceId: unknown) => {
 
 ipcMain.handle('workspace:remove', async (event, workspaceId: unknown) => {
   let id: string | undefined
-  const response = await runTaodWorkspaceRequest<void>(event, (client) =>
+  const response = await runTaudWorkspaceRequest<void>(event, (client) =>
     client.removeWorkspace(
       (id = decodeWorkspaceIpcInput(WorkspaceRemoveInputSchema, workspaceId, 'invalid-workspace')),
     ),
@@ -480,7 +529,7 @@ ipcMain.handle('workspace:remove', async (event, workspaceId: unknown) => {
 
 ipcMain.handle('worktree:create', async (event, input: unknown) => {
   let workspaceId: string | undefined
-  const response = await runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) => {
+  const response = await runTaudWorkspaceRequest<WorkspaceWorktree>(event, (client) => {
     const data = decodeWorkspaceIpcInput(WorktreeCreateInputSchema, input, 'invalid-worktree')
     workspaceId = data.workspaceId
     return client.createWorktree(data)
@@ -490,7 +539,7 @@ ipcMain.handle('worktree:create', async (event, input: unknown) => {
 })
 
 ipcMain.handle('worktree:refresh', (event, worktreeId: unknown) =>
-  runTaodWorkspaceRequest<WorkspaceWorktree>(event, (client) =>
+  runTaudWorkspaceRequest<WorkspaceWorktree>(event, (client) =>
     client.refreshWorktree(
       decodeWorkspaceIpcInput(WorktreeRefreshInputSchema, worktreeId, 'invalid-worktree'),
     ),
@@ -499,7 +548,7 @@ ipcMain.handle('worktree:refresh', (event, worktreeId: unknown) =>
 
 ipcMain.handle('worktree:remove', async (event, input: unknown) => {
   let workspaceId: string | undefined
-  const response = await runTaodWorkspaceRequest<void>(event, async (client) => {
+  const response = await runTaudWorkspaceRequest<void>(event, async (client) => {
     const data = decodeWorkspaceIpcInput(WorktreeRemoveInputSchema, input, 'invalid-worktree')
     const worktreeId = data.worktreeId
     try {
@@ -538,25 +587,25 @@ ipcMain.handle('settings:write', async (event, data: unknown) => {
   if (event.sender !== mainWindow?.webContents) return
   const settings = decodeSettingsData(data)
   await writeSettings(settings)
-  await taodBridge?.syncPersistenceSettings(settings)
+  await taudBridge?.syncPersistenceSettings(settings)
 })
 
-ipcMain.handle('taod:getDiagnostics', async (event) => {
+ipcMain.handle('taud:getDiagnostics', async (event) => {
   if (event.sender !== mainWindow?.webContents) return null
-  return (await taodClient?.refreshLifecycleDiagnostics()) ?? null
+  return (await taudClient?.refreshLifecycleDiagnostics()) ?? null
 })
 
-ipcMain.handle('taod:getPtyBridgeDiagnostics', (event) => {
+ipcMain.handle('taud:getPtyBridgeDiagnostics', (event) => {
   if (event.sender !== mainWindow?.webContents) return null
-  return taodBridge?.getDiagnostics() ?? null
+  return taudBridge?.getDiagnostics() ?? null
 })
 
-ipcMain.handle('taod:recover', async (event, input: unknown) => {
+ipcMain.handle('taud:recover', async (event, input: unknown) => {
   if (event.sender !== mainWindow?.webContents) return null
   const action = Schema.decodeUnknownSync(
-    TaodLifecycleRecoveryInputSchema as unknown as Schema.Decoder<unknown>,
-  )(input) as TaodLifecycleRecoveryInput
-  return await ensureTaodClient().applyLifecycleRecovery(action)
+    TaudLifecycleRecoveryInputSchema as unknown as Schema.Decoder<unknown>,
+  )(input) as TaudLifecycleRecoveryInput
+  return await ensureTaudClient().applyLifecycleRecovery(action)
 })
 
 ipcMain.handle('workspace:getWatcherDiagnostics', (event) => {
@@ -570,7 +619,7 @@ ipcMain.handle('workspace:getGitBranch', async (event, workspacePath: unknown) =
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().getGitBranch(path),
+          try: () => ensureTaudClient().getGitBranch(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -584,7 +633,7 @@ ipcMain.handle('workspace:getGitBranches', async (event, workspacePath: unknown)
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().listBranches(path),
+          try: () => ensureTaudClient().listBranches(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -598,7 +647,7 @@ ipcMain.handle('workspace:getGitWorktrees', async (event, workspacePath: unknown
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().getGitWorktrees(path),
+          try: () => ensureTaudClient().getGitWorktrees(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -612,7 +661,7 @@ ipcMain.handle('workspace:getGitStatus', async (event, workspacePath: unknown) =
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().getGitStatus(path),
+          try: () => ensureTaudClient().getGitStatus(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -626,7 +675,7 @@ ipcMain.handle('workspace:getWorkspaceFileTree', async (event, workspacePath: un
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().getWorkspaceFileTree(path),
+          try: () => ensureTaudClient().getWorkspaceFileTree(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -649,7 +698,7 @@ ipcMain.handle('workspace:getWorkspaceDiffPatch', async (event, workspacePath: u
           Effect.flatMap((path) =>
             Effect.tryPromise({
               try: () =>
-                ensureTaodClient().getWorkspaceDiffPatch({
+                ensureTaudClient().getWorkspaceDiffPatch({
                   rootPath: path,
                   scope: input.scope ?? 'all',
                   compareBranch: input.compareBranch,
@@ -667,7 +716,7 @@ function workspaceGitPathActionRequest(
   event: IpcMainInvokeEvent,
   inputValue: unknown,
   action: (
-    client: TaodClient,
+    client: TaudClient,
     input: { readonly rootPath: string; readonly path: string | readonly string[] },
   ) => Promise<void>,
 ) {
@@ -681,7 +730,7 @@ function workspaceGitPathActionRequest(
         decodeWorkspacePathFromUnknown(input.workspacePath).pipe(
           Effect.flatMap((workspacePath) =>
             Effect.tryPromise({
-              try: () => action(ensureTaodClient(), { rootPath: workspacePath, path: input.path }),
+              try: () => action(ensureTaudClient(), { rootPath: workspacePath, path: input.path }),
               catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
             }),
           ),
@@ -709,7 +758,7 @@ ipcMain.handle('workspace:getWorkspacePorts', async (event, workspacePath: unkno
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().getWorkspacePorts(path),
+          try: () => ensureTaudClient().getWorkspacePorts(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -723,7 +772,7 @@ ipcMain.handle('workspace:getPullRequestInfo', async (event, workspacePath: unkn
     decodeWorkspacePathFromUnknown(workspacePath).pipe(
       Effect.flatMap((path) =>
         Effect.tryPromise({
-          try: () => ensureTaodClient().getPullRequestInfo(path),
+          try: () => ensureTaudClient().getPullRequestInfo(path),
           catch: (error) => new WorkspaceError('ipc-failed', errorMessageFromUnknown(error)),
         }),
       ),
@@ -747,90 +796,90 @@ function nonNegativeIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
-const ELECTRON_SMOKE_TIMEOUT_MS = positiveIntEnv('TAO_ELECTRON_SMOKE_TIMEOUT_MS', 15_000)
-const ELECTRON_SMOKE_OUTPUT_BYTES = positiveIntEnv('TAO_ELECTRON_SMOKE_OUTPUT_BYTES', 16 * 1024)
+const ELECTRON_SMOKE_TIMEOUT_MS = positiveIntEnv('TAU_ELECTRON_SMOKE_TIMEOUT_MS', 15_000)
+const ELECTRON_SMOKE_OUTPUT_BYTES = positiveIntEnv('TAU_ELECTRON_SMOKE_OUTPUT_BYTES', 16 * 1024)
 const ELECTRON_SMOKE_OUTPUT_TIMEOUT_MS = positiveIntEnv(
-  'TAO_ELECTRON_SMOKE_OUTPUT_TIMEOUT_MS',
+  'TAU_ELECTRON_SMOKE_OUTPUT_TIMEOUT_MS',
   10_000,
 )
 const ELECTRON_SMOKE_OUTPUT_START_DELAY_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_OUTPUT_START_DELAY_MS',
+  'TAU_ELECTRON_SMOKE_OUTPUT_START_DELAY_MS',
   0,
 )
 const ELECTRON_SMOKE_MIN_THROUGHPUT_BYTES_PER_SEC = positiveIntEnv(
-  'TAO_ELECTRON_SMOKE_MIN_THROUGHPUT_BYTES_PER_SEC',
+  'TAU_ELECTRON_SMOKE_MIN_THROUGHPUT_BYTES_PER_SEC',
   4 * 1024,
 )
 const ELECTRON_SMOKE_MAX_PENDING_OUTPUT_BYTES = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_PENDING_OUTPUT_BYTES',
+  'TAU_ELECTRON_SMOKE_MAX_PENDING_OUTPUT_BYTES',
   1024 * 1024,
 )
-const ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB',
+const ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB = nonNegativeIntEnv(
+  'TAU_ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB',
   0,
 )
-const ELECTRON_SMOKE_MAX_TAOD_RSS_KB = nonNegativeIntEnv('TAO_ELECTRON_SMOKE_MAX_TAOD_RSS_KB', 0)
+const ELECTRON_SMOKE_MAX_TAUD_RSS_KB = nonNegativeIntEnv('TAU_ELECTRON_SMOKE_MAX_TAUD_RSS_KB', 0)
 const ELECTRON_SMOKE_MAX_RENDERER_LOAD_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_RENDERER_LOAD_MS',
+  'TAU_ELECTRON_SMOKE_MAX_RENDERER_LOAD_MS',
   0,
 )
 const ELECTRON_SMOKE_MAX_FIRST_OUTPUT_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_FIRST_OUTPUT_MS',
+  'TAU_ELECTRON_SMOKE_MAX_FIRST_OUTPUT_MS',
   0,
 )
-const ELECTRON_SMOKE_MAX_TOTAL_MS = nonNegativeIntEnv('TAO_ELECTRON_SMOKE_MAX_TOTAL_MS', 0)
+const ELECTRON_SMOKE_MAX_TOTAL_MS = nonNegativeIntEnv('TAU_ELECTRON_SMOKE_MAX_TOTAL_MS', 0)
 const ELECTRON_SMOKE_MAX_INPUT_ECHO_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_INPUT_ECHO_MS',
+  'TAU_ELECTRON_SMOKE_MAX_INPUT_ECHO_MS',
   0,
 )
-const ELECTRON_SMOKE_RELOAD = process.env.TAO_ELECTRON_SMOKE_RELOAD === '1'
-const ELECTRON_SMOKE_RELOAD_SESSION_COUNT = positiveIntEnv('TAO_ELECTRON_SMOKE_RELOAD_SESSIONS', 1)
-const ELECTRON_SMOKE_RELOAD_CYCLES = positiveIntEnv('TAO_ELECTRON_SMOKE_RELOAD_CYCLES', 1)
+const ELECTRON_SMOKE_RELOAD = process.env.TAU_ELECTRON_SMOKE_RELOAD === '1'
+const ELECTRON_SMOKE_RELOAD_SESSION_COUNT = positiveIntEnv('TAU_ELECTRON_SMOKE_RELOAD_SESSIONS', 1)
+const ELECTRON_SMOKE_RELOAD_CYCLES = positiveIntEnv('TAU_ELECTRON_SMOKE_RELOAD_CYCLES', 1)
 const ELECTRON_SMOKE_RELOAD_DURATION_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_RELOAD_DURATION_MS',
+  'TAU_ELECTRON_SMOKE_RELOAD_DURATION_MS',
   0,
 )
 const ELECTRON_SMOKE_RELOAD_INTERVAL_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_RELOAD_INTERVAL_MS',
+  'TAU_ELECTRON_SMOKE_RELOAD_INTERVAL_MS',
   0,
 )
 const ELECTRON_SMOKE_PROGRESS_INTERVAL_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_PROGRESS_INTERVAL_MS',
+  'TAU_ELECTRON_SMOKE_PROGRESS_INTERVAL_MS',
   ELECTRON_SMOKE_RELOAD_DURATION_MS > 0 ? 60_000 : 0,
 )
-const ELECTRON_SMOKE_MAX_RELOAD_MS = nonNegativeIntEnv('TAO_ELECTRON_SMOKE_MAX_RELOAD_MS', 0)
+const ELECTRON_SMOKE_MAX_RELOAD_MS = nonNegativeIntEnv('TAU_ELECTRON_SMOKE_MAX_RELOAD_MS', 0)
 const ELECTRON_SMOKE_MAX_RELOAD_ATTACH_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_RELOAD_ATTACH_MS',
+  'TAU_ELECTRON_SMOKE_MAX_RELOAD_ATTACH_MS',
   0,
 )
 const ELECTRON_SMOKE_MAX_RELOAD_ECHO_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_RELOAD_ECHO_MS',
+  'TAU_ELECTRON_SMOKE_MAX_RELOAD_ECHO_MS',
   0,
 )
 const ELECTRON_SMOKE_MAX_MAIN_RSS_GROWTH_KB = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_MAIN_RSS_GROWTH_KB',
+  'TAU_ELECTRON_SMOKE_MAX_MAIN_RSS_GROWTH_KB',
   0,
 )
 const ELECTRON_SMOKE_MAX_RENDERER_RSS_GROWTH_KB = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_RENDERER_RSS_GROWTH_KB',
+  'TAU_ELECTRON_SMOKE_MAX_RENDERER_RSS_GROWTH_KB',
   0,
 )
-const ELECTRON_SMOKE_MAX_MAIN_RSS_KB = nonNegativeIntEnv('TAO_ELECTRON_SMOKE_MAX_MAIN_RSS_KB', 0)
+const ELECTRON_SMOKE_MAX_MAIN_RSS_KB = nonNegativeIntEnv('TAU_ELECTRON_SMOKE_MAX_MAIN_RSS_KB', 0)
 const ELECTRON_SMOKE_MAX_RENDERER_RSS_KB = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_MAX_RENDERER_RSS_KB',
+  'TAU_ELECTRON_SMOKE_MAX_RENDERER_RSS_KB',
   0,
 )
-const ELECTRON_SMOKE_TRACE = process.env.TAO_ELECTRON_SMOKE_TRACE === '1'
+const ELECTRON_SMOKE_TRACE = process.env.TAU_ELECTRON_SMOKE_TRACE === '1'
 const ELECTRON_SMOKE_TRACE_PATH =
-  process.env.TAO_ELECTRON_SMOKE_TRACE_PATH ||
+  process.env.TAU_ELECTRON_SMOKE_TRACE_PATH ||
   join(process.cwd(), 'out/bench/electron-smoke-trace.json')
-const ELECTRON_SMOKE_TRACE_MEMORY = process.env.TAO_ELECTRON_SMOKE_TRACE_MEMORY === '1'
+const ELECTRON_SMOKE_TRACE_MEMORY = process.env.TAU_ELECTRON_SMOKE_TRACE_MEMORY === '1'
 const ELECTRON_SMOKE_TRACE_BUFFER_KB = positiveIntEnv(
-  'TAO_ELECTRON_SMOKE_TRACE_BUFFER_KB',
+  'TAU_ELECTRON_SMOKE_TRACE_BUFFER_KB',
   128 * 1024,
 )
 const ELECTRON_SMOKE_TRACE_CATEGORIES = (
-  process.env.TAO_ELECTRON_SMOKE_TRACE_CATEGORIES ||
+  process.env.TAU_ELECTRON_SMOKE_TRACE_CATEGORIES ||
   [
     'electron',
     'devtools.timeline',
@@ -848,7 +897,7 @@ const ELECTRON_SMOKE_TRACE_CATEGORIES = (
   .filter(Boolean)
 
 function isElectronSmoke(): boolean {
-  return process.env.TAO_ELECTRON_SMOKE === '1'
+  return process.env.TAU_ELECTRON_SMOKE === '1'
 }
 
 type ElectronSmokeTraceResult = {
@@ -1052,82 +1101,82 @@ while time.time() < deadline:
         ) {
           throw new Error('Smoke lost preload terminal output before subscription: ' + JSON.stringify(diagnostics))
         }
-        const taodDiagnostics = await api.getTaodDiagnostics()
-        if (!taodDiagnostics || !taodDiagnostics.state.endsWith('-live')) {
-          throw new Error('Smoke taod diagnostics were not live: ' + JSON.stringify(taodDiagnostics))
+        const taudDiagnostics = await api.getTaudDiagnostics()
+        if (!taudDiagnostics || !taudDiagnostics.state.endsWith('-live')) {
+          throw new Error('Smoke taud diagnostics were not live: ' + JSON.stringify(taudDiagnostics))
         }
         if (
-          typeof taodDiagnostics.daemonOwnership !== 'string' ||
-          typeof taodDiagnostics.recoveryAction !== 'string'
+          typeof taudDiagnostics.daemonOwnership !== 'string' ||
+          typeof taudDiagnostics.recoveryAction !== 'string'
         ) {
-          throw new Error('Smoke taod diagnostics did not include recovery policy: ' + JSON.stringify(taodDiagnostics))
+          throw new Error('Smoke taud diagnostics did not include recovery policy: ' + JSON.stringify(taudDiagnostics))
         }
-        if (taodDiagnostics.controlRequestCount === 0 || !taodDiagnostics.lastControlRequest) {
-          throw new Error('Smoke taod diagnostics did not record control requests')
+        if (taudDiagnostics.controlRequestCount === 0 || !taudDiagnostics.lastControlRequest) {
+          throw new Error('Smoke taud diagnostics did not record control requests')
         }
         if (
-          !taodDiagnostics.timing ||
-          typeof taodDiagnostics.timing.lastPingDurationMs !== 'number' ||
-          typeof taodDiagnostics.timing.lastTransitionAt !== 'number'
+          !taudDiagnostics.timing ||
+          typeof taudDiagnostics.timing.lastPingDurationMs !== 'number' ||
+          typeof taudDiagnostics.timing.lastTransitionAt !== 'number'
         ) {
-          throw new Error('Smoke taod diagnostics did not include lifecycle timing')
+          throw new Error('Smoke taud diagnostics did not include lifecycle timing')
         }
-        if (!taodDiagnostics.streamDiagnostics) {
-          throw new Error('Smoke taod diagnostics did not include stream diagnostics')
+        if (!taudDiagnostics.streamDiagnostics) {
+          throw new Error('Smoke taud diagnostics did not include stream diagnostics')
         }
         if (
-          !taodDiagnostics.daemonControlDiagnostics ||
-          taodDiagnostics.daemonControlDiagnostics.requestCount === 0 ||
-          !taodDiagnostics.daemonControlDiagnostics.lastRequestType ||
-          !taodDiagnostics.daemonControlDiagnostics.lastTraceId
+          !taudDiagnostics.daemonControlDiagnostics ||
+          taudDiagnostics.daemonControlDiagnostics.requestCount === 0 ||
+          !taudDiagnostics.daemonControlDiagnostics.lastRequestType ||
+          !taudDiagnostics.daemonControlDiagnostics.lastTraceId
         ) {
           throw new Error(
-            'Smoke taod diagnostics did not include daemon control trace diagnostics: ' +
-              JSON.stringify(taodDiagnostics.daemonControlDiagnostics),
+            'Smoke taud diagnostics did not include daemon control trace diagnostics: ' +
+              JSON.stringify(taudDiagnostics.daemonControlDiagnostics),
           )
         }
         if (
           ${ELECTRON_SMOKE_MAX_INPUT_ECHO_MS} > 0 &&
-          taodDiagnostics.streamDiagnostics.inputBytesTotal === 0
+          taudDiagnostics.streamDiagnostics.inputBytesTotal === 0
         ) {
-          throw new Error('Smoke taod stream diagnostics did not record terminal input bytes')
+          throw new Error('Smoke taud stream diagnostics did not record terminal input bytes')
         }
-        if (taodDiagnostics.streamDiagnostics.outputBytesTotal < ${ELECTRON_SMOKE_OUTPUT_BYTES}) {
+        if (taudDiagnostics.streamDiagnostics.outputBytesTotal < ${ELECTRON_SMOKE_OUTPUT_BYTES}) {
           throw new Error(
-            'Smoke taod stream diagnostics did not record terminal output bytes: ' +
-              JSON.stringify(taodDiagnostics.streamDiagnostics),
+            'Smoke taud stream diagnostics did not record terminal output bytes: ' +
+              JSON.stringify(taudDiagnostics.streamDiagnostics),
           )
         }
-        if (taodDiagnostics.streamDiagnostics.pendingOutputBytes > ${ELECTRON_SMOKE_MAX_PENDING_OUTPUT_BYTES}) {
+        if (taudDiagnostics.streamDiagnostics.pendingOutputBytes > ${ELECTRON_SMOKE_MAX_PENDING_OUTPUT_BYTES}) {
           throw new Error(
-            'Smoke taod pending output bytes above budget: ' +
-              JSON.stringify(taodDiagnostics.streamDiagnostics),
+            'Smoke taud pending output bytes above budget: ' +
+              JSON.stringify(taudDiagnostics.streamDiagnostics),
           )
         }
-        const bridgeDiagnostics = await api.getTaodPtyBridgeDiagnostics()
+        const bridgeDiagnostics = await api.getTaudPtyBridgeDiagnostics()
         if (!bridgeDiagnostics || !bridgeDiagnostics.portConnected) {
-          throw new Error('Smoke taod bridge diagnostics were not connected: ' + JSON.stringify(bridgeDiagnostics))
+          throw new Error('Smoke taud bridge diagnostics were not connected: ' + JSON.stringify(bridgeDiagnostics))
         }
         if (
           bridgeDiagnostics.postFailuresTotal !== 0 ||
           bridgeDiagnostics.messagesDroppedNoPortTotal !== 0
         ) {
-          throw new Error('Smoke taod bridge lost MessagePort posts: ' + JSON.stringify(bridgeDiagnostics))
+          throw new Error('Smoke taud bridge lost MessagePort posts: ' + JSON.stringify(bridgeDiagnostics))
         }
         if (
           bridgeDiagnostics.dataMessagesPostedTotal === 0 ||
           bridgeDiagnostics.dataCharsPostedTotal < ${ELECTRON_SMOKE_OUTPUT_BYTES}
         ) {
-          throw new Error('Smoke taod bridge diagnostics did not record terminal output posts: ' + JSON.stringify(bridgeDiagnostics))
+          throw new Error('Smoke taud bridge diagnostics did not record terminal output posts: ' + JSON.stringify(bridgeDiagnostics))
         }
         const rendererTraceEntries =
-          typeof window.__TAO_RENDERER_TRACE__?.entries === 'function'
-            ? window.__TAO_RENDERER_TRACE__.entries()
+          typeof window.__TAU_RENDERER_TRACE__?.entries === 'function'
+            ? window.__TAU_RENDERER_TRACE__.entries()
             : []
         const rendererTraceNames = new Set(rendererTraceEntries.map((entry) => entry.name))
         for (const requiredTraceName of [
-          'tao:ui:app-mounted',
-          'tao:ui:layout-loaded',
+          'tau:ui:app-mounted',
+          'tau:ui:layout-loaded',
         ]) {
           if (!rendererTraceNames.has(requiredTraceName)) {
             throw new Error(
@@ -1148,7 +1197,7 @@ while time.time() < deadline:
           throughputBytesPerSec,
           receivedBytes: ${ELECTRON_SMOKE_OUTPUT_BYTES},
           diagnostics,
-          taodDiagnostics,
+          taudDiagnostics,
           bridgeDiagnostics,
           rendererTraceEntries,
         }
@@ -1251,33 +1300,33 @@ function electronSmokeReloadAttachScript(input: { sessionId: string }): string {
         ) {
           throw new Error('Smoke reload lost preload terminal output before subscription: ' + JSON.stringify(diagnostics))
         }
-        const taodDiagnostics = await api.getTaodDiagnostics()
-        if (!taodDiagnostics || !taodDiagnostics.state.endsWith('-live')) {
-          throw new Error('Smoke reload taod diagnostics were not live: ' + JSON.stringify(taodDiagnostics))
+        const taudDiagnostics = await api.getTaudDiagnostics()
+        if (!taudDiagnostics || !taudDiagnostics.state.endsWith('-live')) {
+          throw new Error('Smoke reload taud diagnostics were not live: ' + JSON.stringify(taudDiagnostics))
         }
         if (
-          typeof taodDiagnostics.daemonOwnership !== 'string' ||
-          typeof taodDiagnostics.recoveryAction !== 'string'
+          typeof taudDiagnostics.daemonOwnership !== 'string' ||
+          typeof taudDiagnostics.recoveryAction !== 'string'
         ) {
-          throw new Error('Smoke reload taod diagnostics did not include recovery policy: ' + JSON.stringify(taodDiagnostics))
+          throw new Error('Smoke reload taud diagnostics did not include recovery policy: ' + JSON.stringify(taudDiagnostics))
         }
         if (
-          !taodDiagnostics.timing ||
-          typeof taodDiagnostics.timing.lastPingDurationMs !== 'number' ||
-          typeof taodDiagnostics.timing.lastTransitionAt !== 'number'
+          !taudDiagnostics.timing ||
+          typeof taudDiagnostics.timing.lastPingDurationMs !== 'number' ||
+          typeof taudDiagnostics.timing.lastTransitionAt !== 'number'
         ) {
-          throw new Error('Smoke reload taod diagnostics did not include lifecycle timing')
+          throw new Error('Smoke reload taud diagnostics did not include lifecycle timing')
         }
-        const bridgeDiagnostics = await api.getTaodPtyBridgeDiagnostics()
+        const bridgeDiagnostics = await api.getTaudPtyBridgeDiagnostics()
         if (!bridgeDiagnostics || !bridgeDiagnostics.portConnected) {
-          throw new Error('Smoke reload taod bridge diagnostics were not connected: ' + JSON.stringify(bridgeDiagnostics))
+          throw new Error('Smoke reload taud bridge diagnostics were not connected: ' + JSON.stringify(bridgeDiagnostics))
         }
         if (
           bridgeDiagnostics.postFailuresTotal !== 0 ||
           bridgeDiagnostics.messagesDroppedNoPortTotal !== 0 ||
           bridgeDiagnostics.dataMessagesPostedTotal === 0
         ) {
-          throw new Error('Smoke reload taod bridge diagnostics were unhealthy: ' + JSON.stringify(bridgeDiagnostics))
+          throw new Error('Smoke reload taud bridge diagnostics were unhealthy: ' + JSON.stringify(bridgeDiagnostics))
         }
         return {
           sessionId: ${JSON.stringify(input.sessionId)},
@@ -1286,7 +1335,7 @@ function electronSmokeReloadAttachScript(input: { sessionId: string }): string {
           inputEchoMs,
           attached,
           diagnostics,
-          taodDiagnostics,
+          taudDiagnostics,
           bridgeDiagnostics,
         }
       } finally {
@@ -1613,9 +1662,9 @@ type ElectronSmokeProcessMetrics = {
   mainRssKb: number
   rendererPid: number
   rendererRssKb: number | null
-  taodPid: number | null
-  taodRssKb: number | null
-  taodDiagnostics: ReturnType<TaodClient['getLifecycleDiagnostics']> | null
+  taudPid: number | null
+  taudRssKb: number | null
+  taudDiagnostics: ReturnType<TaudClient['getLifecycleDiagnostics']> | null
 }
 
 type ElectronSmokeReloadCycleSummary = {
@@ -1663,36 +1712,36 @@ function summarizeElectronSmokeResult(result: any) {
           ? result.diagnostics.pendingOutputTruncatedCharsTotal
           : null,
     },
-    taod: {
+    taud: {
       state:
-        typeof result?.taodDiagnostics?.state === 'string' ? result.taodDiagnostics.state : null,
+        typeof result?.taudDiagnostics?.state === 'string' ? result.taudDiagnostics.state : null,
       controlRequestCount:
-        typeof result?.taodDiagnostics?.controlRequestCount === 'number'
-          ? result.taodDiagnostics.controlRequestCount
+        typeof result?.taudDiagnostics?.controlRequestCount === 'number'
+          ? result.taudDiagnostics.controlRequestCount
           : null,
       activeSubscribers:
-        typeof result?.taodDiagnostics?.streamDiagnostics?.activeSubscribers === 'number'
-          ? result.taodDiagnostics.streamDiagnostics.activeSubscribers
+        typeof result?.taudDiagnostics?.streamDiagnostics?.activeSubscribers === 'number'
+          ? result.taudDiagnostics.streamDiagnostics.activeSubscribers
           : null,
       pendingOutputBytes:
-        typeof result?.taodDiagnostics?.streamDiagnostics?.pendingOutputBytes === 'number'
-          ? result.taodDiagnostics.streamDiagnostics.pendingOutputBytes
+        typeof result?.taudDiagnostics?.streamDiagnostics?.pendingOutputBytes === 'number'
+          ? result.taudDiagnostics.streamDiagnostics.pendingOutputBytes
           : null,
       outputBytesTotal:
-        typeof result?.taodDiagnostics?.streamDiagnostics?.outputBytesTotal === 'number'
-          ? result.taodDiagnostics.streamDiagnostics.outputBytesTotal
+        typeof result?.taudDiagnostics?.streamDiagnostics?.outputBytesTotal === 'number'
+          ? result.taudDiagnostics.streamDiagnostics.outputBytesTotal
           : null,
       inputBytesTotal:
-        typeof result?.taodDiagnostics?.streamDiagnostics?.inputBytesTotal === 'number'
-          ? result.taodDiagnostics.streamDiagnostics.inputBytesTotal
+        typeof result?.taudDiagnostics?.streamDiagnostics?.inputBytesTotal === 'number'
+          ? result.taudDiagnostics.streamDiagnostics.inputBytesTotal
           : null,
       lastPingDurationMs:
-        typeof result?.taodDiagnostics?.timing?.lastPingDurationMs === 'number'
-          ? result.taodDiagnostics.timing.lastPingDurationMs
+        typeof result?.taudDiagnostics?.timing?.lastPingDurationMs === 'number'
+          ? result.taudDiagnostics.timing.lastPingDurationMs
           : null,
       lastStartDurationMs:
-        typeof result?.taodDiagnostics?.timing?.lastStartDurationMs === 'number'
-          ? result.taodDiagnostics.timing.lastStartDurationMs
+        typeof result?.taudDiagnostics?.timing?.lastStartDurationMs === 'number'
+          ? result.taudDiagnostics.timing.lastStartDurationMs
           : null,
     },
     bridge: {
@@ -1757,46 +1806,46 @@ async function rssKbForPid(pid: number): Promise<number | null> {
 async function sampleElectronSmokeMetrics(
   window: BrowserWindowInstance,
 ): Promise<ElectronSmokeProcessMetrics> {
-  const taodDiagnostics =
-    (await taodClient?.refreshLifecycleDiagnostics().catch(() => null)) ?? null
-  const taodPid = taodDiagnostics?.spawnedPid ?? null
+  const taudDiagnostics =
+    (await taudClient?.refreshLifecycleDiagnostics().catch(() => null)) ?? null
+  const taudPid = taudDiagnostics?.spawnedPid ?? null
   const rendererPid = window.webContents.getOSProcessId()
-  const [rendererRssKb, taodRssKb] = await Promise.all([
+  const [rendererRssKb, taudRssKb] = await Promise.all([
     rssKbForPid(rendererPid),
-    taodPid ? rssKbForPid(taodPid) : Promise.resolve(null),
+    taudPid ? rssKbForPid(taudPid) : Promise.resolve(null),
   ])
 
   return {
     mainRssKb: Math.round(process.memoryUsage().rss / 1024),
     rendererPid,
     rendererRssKb,
-    taodPid,
-    taodRssKb,
-    taodDiagnostics,
+    taudPid,
+    taudRssKb,
+    taudDiagnostics,
   }
 }
 
 function summarizeElectronSmokeMetrics(metrics: ElectronSmokeProcessMetrics) {
-  const stream = metrics.taodDiagnostics?.streamDiagnostics
+  const stream = metrics.taudDiagnostics?.streamDiagnostics
   return {
     mainRssKb: metrics.mainRssKb,
     rendererPid: metrics.rendererPid,
     rendererRssKb: metrics.rendererRssKb,
-    taodPid: metrics.taodPid,
-    taodRssKb: metrics.taodRssKb,
-    taod: metrics.taodDiagnostics
+    taudPid: metrics.taudPid,
+    taudRssKb: metrics.taudRssKb,
+    taud: metrics.taudDiagnostics
       ? {
-          state: metrics.taodDiagnostics.state,
-          daemonOwnership: metrics.taodDiagnostics.daemonOwnership,
-          recoveryAction: metrics.taodDiagnostics.recoveryAction,
-          controlRequestCount: metrics.taodDiagnostics.controlRequestCount,
+          state: metrics.taudDiagnostics.state,
+          daemonOwnership: metrics.taudDiagnostics.daemonOwnership,
+          recoveryAction: metrics.taudDiagnostics.recoveryAction,
+          controlRequestCount: metrics.taudDiagnostics.controlRequestCount,
           activeSubscribers: stream?.activeSubscribers ?? null,
           pendingOutputBytes: stream?.pendingOutputBytes ?? null,
           outputBytesTotal: stream?.outputBytesTotal ?? null,
           inputBytesTotal: stream?.inputBytesTotal ?? null,
           slowSubscriberDropsTotal: stream?.slowSubscriberDropsTotal ?? null,
-          lastPingDurationMs: metrics.taodDiagnostics.timing.lastPingDurationMs ?? null,
-          lastStartDurationMs: metrics.taodDiagnostics.timing.lastStartDurationMs ?? null,
+          lastPingDurationMs: metrics.taudDiagnostics.timing.lastPingDurationMs ?? null,
+          lastStartDurationMs: metrics.taudDiagnostics.timing.lastStartDurationMs ?? null,
         }
       : null,
   }
@@ -1810,9 +1859,9 @@ async function waitForElectronSmokeBaseline(
   let lastMetrics = await sampleElectronSmokeMetrics(window)
   while (!isSmokeSettled() && Date.now() < deadline) {
     if (
-      lastMetrics.taodPid &&
-      lastMetrics.taodRssKb !== null &&
-      lastMetrics.taodDiagnostics?.state.endsWith('-live')
+      lastMetrics.taudPid &&
+      lastMetrics.taudRssKb !== null &&
+      lastMetrics.taudDiagnostics?.state.endsWith('-live')
     ) {
       return lastMetrics
     }
@@ -1868,7 +1917,7 @@ async function runElectronSmoke(): Promise<void> {
     )
   }
   const traceStarted = await startElectronSmokeTrace()
-  const token = `tao-electron-smoke-${Date.now().toString(36)}`
+  const token = `tau-electron-smoke-${Date.now().toString(36)}`
   let smokeSettled = false
   const smokePromise = withTimeout(
     window.webContents.executeJavaScript(
@@ -1918,7 +1967,7 @@ async function runElectronSmoke(): Promise<void> {
       'Electron smoke UI-state setup',
     )
     for (let index = 1; index < ELECTRON_SMOKE_RELOAD_SESSION_COUNT; index += 1) {
-      const extraToken = `tao-electron-smoke-${Date.now().toString(36)}-${index + 1}`
+      const extraToken = `tau-electron-smoke-${Date.now().toString(36)}-${index + 1}`
       const extraResult = await withTimeout(
         window.webContents.executeJavaScript(
           electronSmokeScript({ cwd: process.cwd(), token: extraToken, keepSession: true }),
@@ -1949,7 +1998,7 @@ async function runElectronSmoke(): Promise<void> {
       if (cycle > 0) {
         reloadSessionResults = []
         for (let index = 0; index < ELECTRON_SMOKE_RELOAD_SESSION_COUNT; index += 1) {
-          const extraToken = `tao-electron-smoke-${Date.now().toString(36)}-cycle-${cycle + 1}-${index + 1}`
+          const extraToken = `tau-electron-smoke-${Date.now().toString(36)}-cycle-${cycle + 1}-${index + 1}`
           const extraResult = await withTimeout(
             window.webContents.executeJavaScript(
               electronSmokeScript({ cwd: process.cwd(), token: extraToken, keepSession: true }),
@@ -2061,10 +2110,10 @@ async function runElectronSmoke(): Promise<void> {
     beforeMetrics.rendererRssKb === null || afterMetrics.rendererRssKb === null
       ? null
       : afterMetrics.rendererRssKb - beforeMetrics.rendererRssKb
-  const taodRssGrowthKb =
-    beforeMetrics.taodRssKb === null || afterMetrics.taodRssKb === null
+  const taudRssGrowthKb =
+    beforeMetrics.taudRssKb === null || afterMetrics.taudRssKb === null
       ? null
-      : afterMetrics.taodRssKb - beforeMetrics.taodRssKb
+      : afterMetrics.taudRssKb - beforeMetrics.taudRssKb
 
   if (
     ELECTRON_SMOKE_MAX_MAIN_RSS_GROWTH_KB > 0 &&
@@ -2084,13 +2133,13 @@ async function runElectronSmoke(): Promise<void> {
       )
     }
   }
-  if (ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB > 0) {
-    if (taodRssGrowthKb === null) {
-      throw new Error('Smoke could not measure taod RSS growth')
+  if (ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB > 0) {
+    if (taudRssGrowthKb === null) {
+      throw new Error('Smoke could not measure taud RSS growth')
     }
-    if (taodRssGrowthKb > ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB) {
+    if (taudRssGrowthKb > ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB) {
       throw new Error(
-        `Smoke taod RSS growth above budget: ${taodRssGrowthKb} KiB > ${ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB} KiB`,
+        `Smoke taud RSS growth above budget: ${taudRssGrowthKb} KiB > ${ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB} KiB`,
       )
     }
   }
@@ -2112,12 +2161,12 @@ async function runElectronSmoke(): Promise<void> {
     )
   }
   if (
-    ELECTRON_SMOKE_MAX_TAOD_RSS_KB > 0 &&
-    afterMetrics.taodRssKb !== null &&
-    afterMetrics.taodRssKb > ELECTRON_SMOKE_MAX_TAOD_RSS_KB
+    ELECTRON_SMOKE_MAX_TAUD_RSS_KB > 0 &&
+    afterMetrics.taudRssKb !== null &&
+    afterMetrics.taudRssKb > ELECTRON_SMOKE_MAX_TAUD_RSS_KB
   ) {
     throw new Error(
-      `Smoke taod RSS above budget: ${afterMetrics.taodRssKb} KiB > ${ELECTRON_SMOKE_MAX_TAOD_RSS_KB} KiB`,
+      `Smoke taud RSS above budget: ${afterMetrics.taudRssKb} KiB > ${ELECTRON_SMOKE_MAX_TAUD_RSS_KB} KiB`,
     )
   }
   if (ELECTRON_SMOKE_MAX_TOTAL_MS > 0 && totalMs > ELECTRON_SMOKE_MAX_TOTAL_MS) {
@@ -2179,19 +2228,19 @@ async function runElectronSmoke(): Promise<void> {
         after: afterMetrics,
         mainRssGrowthKb,
         rendererRssGrowthKb,
-        taodRssGrowthKb,
+        taudRssGrowthKb,
         maxMainRssGrowthKb:
           ELECTRON_SMOKE_MAX_MAIN_RSS_GROWTH_KB > 0 ? ELECTRON_SMOKE_MAX_MAIN_RSS_GROWTH_KB : null,
         maxRendererRssGrowthKb:
           ELECTRON_SMOKE_MAX_RENDERER_RSS_GROWTH_KB > 0
             ? ELECTRON_SMOKE_MAX_RENDERER_RSS_GROWTH_KB
             : null,
-        maxTaodRssGrowthKb:
-          ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB > 0 ? ELECTRON_SMOKE_MAX_TAOD_RSS_GROWTH_KB : null,
+        maxTaudRssGrowthKb:
+          ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB > 0 ? ELECTRON_SMOKE_MAX_TAUD_RSS_GROWTH_KB : null,
         maxMainRssKb: ELECTRON_SMOKE_MAX_MAIN_RSS_KB > 0 ? ELECTRON_SMOKE_MAX_MAIN_RSS_KB : null,
         maxRendererRssKb:
           ELECTRON_SMOKE_MAX_RENDERER_RSS_KB > 0 ? ELECTRON_SMOKE_MAX_RENDERER_RSS_KB : null,
-        maxTaodRssKb: ELECTRON_SMOKE_MAX_TAOD_RSS_KB > 0 ? ELECTRON_SMOKE_MAX_TAOD_RSS_KB : null,
+        maxTaudRssKb: ELECTRON_SMOKE_MAX_TAUD_RSS_KB > 0 ? ELECTRON_SMOKE_MAX_TAUD_RSS_KB : null,
       },
       trace: traceResult,
     }),
@@ -2225,6 +2274,9 @@ async function finishElectronSmoke(code: number): Promise<void> {
 }
 
 app.whenReady().then(() => {
+  applyAppIcon()
+  nativeTheme.on('updated', applyAppIcon)
+
   if (isElectronSmoke()) {
     void runElectronSmoke().catch((error) => {
       console.error('[electron-smoke] failed:', error)

@@ -12,7 +12,7 @@ const electronPath = require('electron') as string
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const desktopRoot = resolve(repoRoot, 'apps/desktop')
 const outRoot = resolve(desktopRoot, 'out')
-const taodPath = resolve(outRoot, 'bin', process.platform === 'win32' ? 'taod.exe' : 'taod')
+const taudPath = resolve(outRoot, 'bin', process.platform === 'win32' ? 'taud.exe' : 'taud')
 const adaptersRoot = resolve(outRoot, 'adapters')
 
 function positiveIntEnv(name: string, fallback: number): number {
@@ -30,13 +30,13 @@ function nonNegativeIntEnv(name: string, fallback: number): number {
 }
 
 const ELECTRON_SMOKE_PROCESS_TIMEOUT_MS = positiveIntEnv(
-  'TAO_ELECTRON_SMOKE_PROCESS_TIMEOUT_MS',
+  'TAU_ELECTRON_SMOKE_PROCESS_TIMEOUT_MS',
   20_000,
 )
-const ELECTRON_SMOKE_MAX_LAUNCH_MS = nonNegativeIntEnv('TAO_ELECTRON_SMOKE_MAX_LAUNCH_MS', 0)
+const ELECTRON_SMOKE_MAX_LAUNCH_MS = nonNegativeIntEnv('TAU_ELECTRON_SMOKE_MAX_LAUNCH_MS', 0)
 const ELECTRON_SMOKE_PROGRESS_TIMEOUT_MS = nonNegativeIntEnv(
-  'TAO_ELECTRON_SMOKE_PROGRESS_TIMEOUT_MS',
-  process.env.TAO_ELECTRON_SMOKE_RELOAD_DURATION_MS ? 180_000 : 0,
+  'TAU_ELECTRON_SMOKE_PROGRESS_TIMEOUT_MS',
+  process.env.TAU_ELECTRON_SMOKE_RELOAD_DURATION_MS ? 180_000 : 0,
 )
 
 function fail(message: string): never {
@@ -68,34 +68,34 @@ function assertPackageLayout(): void {
   assertFile(resolve(outRoot, 'main/index.js'), 'main bundle')
   assertFile(resolve(outRoot, 'preload/index.mjs'), 'preload bundle')
   assertFile(resolve(outRoot, 'renderer/index.html'), 'renderer entrypoint')
-  assertExecutable(taodPath, 'taod binary')
+  assertExecutable(taudPath, 'taud binary')
 
   for (const adapter of ['claude.ts', 'codex.ts', 'pi.ts']) {
-    assertFile(resolve(adaptersRoot, adapter), `taod adapter ${adapter}`)
+    assertFile(resolve(adaptersRoot, adapter), `taud adapter ${adapter}`)
   }
 }
 
-function runTaodCheck(): void {
-  const home = mkdtempSync(resolve(tmpdir(), 'tao-package-smoke-'))
+function runTaudCheck(): void {
+  const home = mkdtempSync(resolve(tmpdir(), 'tau-package-smoke-'))
   try {
-    const result = spawnSync(taodPath, ['--check'], {
+    const result = spawnSync(taudPath, ['--check'], {
       cwd: desktopRoot,
       env: {
         ...process.env,
         HOME: home,
-        TAOD_ADAPTER_DIR: adaptersRoot,
+        TAUD_ADAPTER_DIR: adaptersRoot,
       },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5000,
     })
 
-    if (result.error) fail(`taod --check failed to start: ${result.error.message}`)
+    if (result.error) fail(`taud --check failed to start: ${result.error.message}`)
     if (result.status !== 0) {
       const stderr = result.stderr.trim()
       const stdout = result.stdout.trim()
       fail(
-        `taod --check exited with ${result.status}${stderr ? `\nstderr:\n${stderr}` : ''}${
+        `taud --check exited with ${result.status}${stderr ? `\nstderr:\n${stderr}` : ''}${
           stdout ? `\nstdout:\n${stdout}` : ''
         }`,
       )
@@ -125,7 +125,7 @@ function killProcessTree(pid: number, signal: NodeJS.Signals): void {
 }
 
 function runElectronLaunchSmoke(): Promise<void> {
-  const home = mkdtempSync(resolve(tmpdir(), 'tao-electron-smoke-'))
+  const home = mkdtempSync(resolve(tmpdir(), 'tau-electron-smoke-'))
   return new Promise((resolveSmoke, rejectSmoke) => {
     let stdout = ''
     let stderr = ''
@@ -140,8 +140,8 @@ function runElectronLaunchSmoke(): Promise<void> {
       env: {
         ...process.env,
         HOME: home,
-        TAO_ELECTRON_SMOKE: '1',
-        TAOD_ADAPTER_DIR: adaptersRoot,
+        TAU_ELECTRON_SMOKE: '1',
+        TAUD_ADAPTER_DIR: adaptersRoot,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -242,18 +242,18 @@ function runElectronLaunchSmoke(): Promise<void> {
   })
 }
 
-if (process.env.TAOD_SKIP_NATIVE === '1') {
-  fail('TAOD_SKIP_NATIVE=1 cannot produce a package with taod; do not publish this artifact')
+if (process.env.TAUD_SKIP_NATIVE === '1') {
+  fail('TAUD_SKIP_NATIVE=1 cannot produce a package with taud; do not publish this artifact')
 }
 if (process.platform === 'win32') {
-  fail('Windows package smoke is unsupported while taod is POSIX-only')
+  fail('Windows package smoke is unsupported while taud is POSIX-only')
 }
 
 assertPackageLayout()
-runTaodCheck()
+runTaudCheck()
 runElectronLaunchSmoke()
   .then(() => {
-    console.log('[package-smoke] packaged taod, adapters, and Electron launch passed smoke checks')
+    console.log('[package-smoke] packaged taud, adapters, and Electron launch passed smoke checks')
   })
   .catch((error: unknown) => {
     fail(error instanceof Error ? error.message : String(error))

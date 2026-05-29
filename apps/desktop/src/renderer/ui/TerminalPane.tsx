@@ -1,7 +1,7 @@
 import type { Terminal } from '@xterm/xterm'
 import { useEffect, useRef, useState } from 'react'
 import { FiChevronDown, FiChevronUp, FiSearch, FiX } from 'react-icons/fi'
-import type { AttachSessionResult } from '@tao/shared/taod-protocol'
+import type { AttachSessionResult } from '@tau/shared/taud-protocol'
 import {
   clearTerminalSearch,
   createTerminal,

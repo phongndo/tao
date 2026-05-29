@@ -70,7 +70,7 @@ pub fn notFound(allocator: std.mem.Allocator, request: rpc.ControlRequestJson) !
 fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     const path = try std.fmt.allocPrint(
         allocator,
-        "../../packages/shared/fixtures/taod-protocol/{s}",
+        "../../packages/shared/fixtures/taud-protocol/{s}",
         .{name},
     );
     defer allocator.free(path);
@@ -88,7 +88,7 @@ test "session response matches shared golden fixture" {
         .workspace_id = "workspace-fixture",
         .cols = 80,
         .rows = 24,
-        .cwd = "/tmp/tao",
+        .cwd = "/tmp/tau",
     });
 
     const json = try sessionResponse(allocator, .{

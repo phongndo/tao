@@ -1,19 +1,19 @@
 {
-  "name": "@tao/daemon",
+  "name": "@tau/daemon",
   "version": "1.0.0",
   "private": true,
-  "description": "Tao persistence daemon",
+  "description": "Tau persistence daemon",
   "type": "module",
   "scripts": {
-    "build": "node --experimental-strip-types ../../scripts/taod.ts build",
-    "check": "node --experimental-strip-types ../../scripts/taod.ts check",
+    "build": "node --experimental-strip-types ../../scripts/taud.ts build",
+    "check": "node --experimental-strip-types ../../scripts/taud.ts check",
     "fmt": "node --experimental-strip-types ../../scripts/zig-tools.ts fmt apps/daemon",
     "fmt:check": "node --experimental-strip-types ../../scripts/zig-tools.ts fmt:check apps/daemon",
     "hardened:compile": "zig build test:compile -Dfuzz=true",
     "hardened:fmt": "zig build test:fmt",
-    "leak-check": "node --experimental-strip-types ../../scripts/taod.ts leak-check",
+    "leak-check": "node --experimental-strip-types ../../scripts/taud.ts leak-check",
     "lint": "node --experimental-strip-types ../../scripts/zig-tools.ts lint apps/daemon",
     "lsp": "zls --version",
-    "test": "node --experimental-strip-types ../../scripts/taod.ts test"
+    "test": "node --experimental-strip-types ../../scripts/taud.ts test"
   }
 }

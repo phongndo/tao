@@ -1,10 +1,10 @@
 import { homedir } from 'node:os'
 import { Schema } from 'effect'
-import { SettingsDataSchema, type SettingsData } from '@tao/shared/session'
-import { resolveTaoStoragePaths } from '@tao/shared/storage-path'
+import { SettingsDataSchema, type SettingsData } from '@tau/shared/session'
+import { resolveTauStoragePaths } from '@tau/shared/storage-path'
 import { readJsonFile, writeJsonFile } from './file-store'
 
-const settingsPath = resolveTaoStoragePaths(homedir()).settings
+const settingsPath = resolveTauStoragePaths(homedir()).settings
 
 export const defaultSettings: SettingsData = {
   version: 1,

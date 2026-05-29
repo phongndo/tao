@@ -97,7 +97,7 @@ pub const TerminalSession = struct {
     reader_started: bool,
 
     /// These invariants are intentionally cheap enough to keep in production
-    /// safety builds. The session lifecycle is Tao's central state machine;
+    /// safety builds. The session lifecycle is Tau's central state machine;
     /// every mutating method calls this so impossible states fail near the
     /// bug instead of surfacing later as persistence or stream corruption.
     pub fn assertInvariants(self: *const TerminalSession) void {
@@ -675,7 +675,7 @@ fn sessionCreateForAllocationFailure(allocator: std.mem.Allocator) !void {
         .terminal_id = "term-oom",
         .cols = 20,
         .rows = 5,
-        .cwd = "/tmp/tao-session-oom",
+        .cwd = "/tmp/tau-session-oom",
         .argv = &.{},
     });
     _ = try created.bufferPendingOutput(allocator, 1, "owned pending output");

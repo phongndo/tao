@@ -26,7 +26,7 @@ const OUTPUT_WRITE_CHUNK_MAX_CHARS = 16 * 1024
 const OUTPUT_WRITE_QUEUE_MAX_CHARS = 4 * 1024 * 1024
 const OUTPUT_WRITE_QUEUE_RESUME_CHARS = 2 * 1024 * 1024
 const OUTPUT_WRITE_QUEUE_DROP_NOTICE =
-  '\r\n\x1b[33m[Tao dropped terminal output because the renderer write queue exceeded 4 MiB]\x1b[0m\r\n'
+  '\r\n\x1b[33m[Tau dropped terminal output because the renderer write queue exceeded 4 MiB]\x1b[0m\r\n'
 
 export function createBatchedTerminalWriter(term: TerminalWriteTarget): {
   write(data: string): void

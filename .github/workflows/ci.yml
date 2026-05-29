@@ -48,16 +48,16 @@ jobs:
           set -euo pipefail
           IFS=$'\n\t'
           pnpm zig:check
-          export TAOD_CI_HOME="$(mktemp -d)"
-          trap 'rm -rf "$TAOD_CI_HOME"' EXIT
-          HOME="$TAOD_CI_HOME" pnpm --filter @tao/daemon check
+          export TAUD_CI_HOME="$(mktemp -d)"
+          trap 'rm -rf "$TAUD_CI_HOME"' EXIT
+          HOME="$TAUD_CI_HOME" pnpm --filter @tau/daemon check
           pnpm zig:leak-check
   # ── Combined quality gate: frontend (pnpm) + zig daemon ──
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TAOD_SKIP_NATIVE: '1'
+      TAUD_SKIP_NATIVE: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -99,12 +99,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: tao-dist-ubuntu
+            artifact: tau-dist-ubuntu
             skip_native: '1'
           - os: macos-15
-            artifact: tao-dist-macos
+            artifact: tau-dist-macos
           - os: windows-latest
-            artifact: tao-dist-windows
+            artifact: tau-dist-windows
             shell: bash
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -137,9 +137,9 @@ jobs:
       - name: Build
         run: pnpm build
         env:
-          TAOD_SKIP_NATIVE: ${{ matrix.skip_native }}
+          TAUD_SKIP_NATIVE: ${{ matrix.skip_native }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: matrix.artifact != 'tao-dist-windows'
+        if: matrix.artifact != 'tau-dist-windows'
         with:
           name: ${{ matrix.artifact }}
           path: apps/desktop/out/

@@ -4,7 +4,7 @@ const ghostty_vt = @import("ghostty-vt");
 pub const backend_name = "ghostty_native";
 pub const supports_current_screen_snapshots = true;
 
-const current_screen_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x47, 0x56, 0x54, 0x01, 0x00 }; // TAOGVT\1\0
+const current_screen_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x47, 0x56, 0x54, 0x01, 0x00 }; // TAUGVT\1\0
 const current_screen_version: u16 = 1;
 const current_screen_header_size: usize = 26;
 const max_current_screen_bytes: usize = 16 * 1024 * 1024;
@@ -13,7 +13,7 @@ pub const Options = struct {
     max_scrollback: u32 = 0,
 };
 
-/// Zig-native libghostty-vt backend. Tao keeps this as a small adapter so the
+/// Zig-native libghostty-vt backend. Tau keeps this as a small adapter so the
 /// daemon owns only one VT abstraction while upstream libghostty-vt's API is
 /// still explicitly marked unstable.
 pub const Terminal = struct {
@@ -79,7 +79,7 @@ pub const Terminal = struct {
     }
 
     /// Serialize only the active, visible current screen as VT restore bytes,
-    /// wrapped in a small Tao header that carries dimensions and integrity.
+    /// wrapped in a small Tau header that carries dimensions and integrity.
     /// Historical scrollback is intentionally not included.
     pub fn serializeCurrentScreenAlloc(self: *const Terminal, allocator: std.mem.Allocator) ![]u8 {
         var body: std.Io.Writer.Allocating = .init(allocator);

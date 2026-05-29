@@ -122,7 +122,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     }
 
     if (try database.worktreeFolderExists(workspace_row.id, folder_name)) return errorResponse(allocator, request, .invalid_name, "folder_name already exists");
-    if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
+    if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tau worktrees");
     const branch_in_git = (blk: {
         self.unlock();
         defer self.lock();
@@ -150,7 +150,7 @@ pub fn handleCreateLocked(self: anytype, allocator: std.mem.Allocator, request: 
     // The Git/path checks above drop the daemon lock. Re-check the persisted
     // uniqueness boundaries immediately before reserving the row.
     if (try database.worktreeFolderExists(workspace_row.id, folder_name)) return errorResponse(allocator, request, .invalid_name, "folder_name already exists");
-    if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
+    if (try database.worktreeBranchExists(workspace_row.id, branch_name)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tau worktrees");
     if (try database.worktreePathExists(worktree_path)) return errorResponse(allocator, request, .invalid_path, "worktree path already exists");
 
     const worktree_id = try workspace.idAlloc(self.allocator, "worktree");
@@ -245,7 +245,7 @@ pub fn handleHandoffLocked(self: anytype, allocator: std.mem.Allocator, request:
     defer self.allocator.free(current_path);
 
     const location = findHandoffLocationAlloc(self.allocator, database, current_path) catch |err| switch (err) {
-        error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "handoff must run from inside a taod workspace or worktree"),
+        error.InvalidWorkspace => return errorResponse(allocator, request, .invalid_workspace, "handoff must run from inside a taud workspace or worktree"),
         else => return err,
     };
     defer location.deinit(self.allocator);
@@ -423,7 +423,7 @@ pub fn handleAdoptLocked(self: anytype, allocator: std.mem.Allocator, request: r
         branch_owned = try worktree_name.detachedBranchForFolderAlloc(self.allocator, worktree_id);
         break :blk branch_owned.?;
     };
-    if (try database.worktreeBranchExists(workspace_row.id, branch)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tao worktrees");
+    if (try database.worktreeBranchExists(workspace_row.id, branch)) return errorResponse(allocator, request, .branch_exists, "branch already exists in Tau worktrees");
     try database.insertWorktree(.{
         .id = worktree_id,
         .workspace_id = workspace_row.id,
@@ -553,8 +553,8 @@ fn handleLocalToWorktreeHandoffLocked(
     defer self.allocator.free(branch);
 
     var row = findHandoffTargetWorktreeAlloc(self, database, workspace_row, branch) catch |err| switch (err) {
-        error.InvalidWorktree => return errorResponse(allocator, request, .invalid_worktree, "no taod-managed worktree can receive the current branch"),
-        error.StateConflict => return errorResponse(allocator, request, .state_conflict, "current branch matched multiple taod-managed worktrees"),
+        error.InvalidWorktree => return errorResponse(allocator, request, .invalid_worktree, "no taud-managed worktree can receive the current branch"),
+        error.StateConflict => return errorResponse(allocator, request, .state_conflict, "current branch matched multiple taud-managed worktrees"),
         error.GitFailed, error.GitNotFound => return errorResponse(allocator, request, .git_failed, "failed to resolve worktree handoff target"),
         else => return err,
     };
@@ -926,7 +926,7 @@ fn jsonAlloc(allocator: std.mem.Allocator, payload: anytype) ![]u8 {
 }
 
 fn readProtocolFixtureAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    const path = try std.fs.path.join(allocator, &.{ "../../packages/shared/fixtures/taod-protocol", name });
+    const path = try std.fs.path.join(allocator, &.{ "../../packages/shared/fixtures/taud-protocol", name });
     defer allocator.free(path);
     return std.fs.cwd().readFileAlloc(allocator, path, 4096);
 }
@@ -938,14 +938,14 @@ test "worktree response matches shared golden fixture" {
         .workspace_id = "workspace-fixture",
         .title = "Feature Worktree",
         .folder_name = "feature-worktree",
-        .path = "/tmp/tao-workspace/feature-worktree",
+        .path = "/tmp/tau-workspace/feature-worktree",
         .branch = "feature/demo",
         .base_branch = "main",
         .target_branch = "feature/demo",
         .state = "active",
         .order_index = 2,
         .last_active_tab_id = "tab-2",
-        .created_by = "tao",
+        .created_by = "tau",
         .created_at = "2026-05-22T00:00:02Z",
         .updated_at = "2026-05-22T00:00:03Z",
         .git_status = .{ .changed = 3, .staged = 1 },
@@ -979,14 +979,14 @@ test "generated create uses uuid folder and readable branch" {
 
     const repo_path = try std.fs.path.join(allocator, &.{ tmp_root, "repo" });
     defer allocator.free(repo_path);
-    const daemon_root = try std.fs.path.join(allocator, &.{ tmp_root, "taod" });
+    const daemon_root = try std.fs.path.join(allocator, &.{ tmp_root, "taud" });
     defer allocator.free(daemon_root);
     try std.fs.cwd().makePath(repo_path);
 
     const init_args = [_][]const u8{"init"};
     var out = try git.runGitAlloc(allocator, repo_path, &init_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
@@ -1055,14 +1055,14 @@ test "create rechecks branch reservation after unlocked git checks" {
 
     const repo_path = try std.fs.path.join(allocator, &.{ tmp_root, "repo" });
     defer allocator.free(repo_path);
-    const daemon_root = try std.fs.path.join(allocator, &.{ tmp_root, "taod" });
+    const daemon_root = try std.fs.path.join(allocator, &.{ tmp_root, "taud" });
     defer allocator.free(daemon_root);
     try std.fs.cwd().makePath(repo_path);
 
     const init_args = [_][]const u8{"init"};
     var out = try git.runGitAlloc(allocator, repo_path, &init_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
 
@@ -1091,7 +1091,7 @@ test "create rechecks branch reservation after unlocked git checks" {
                 .workspace_id = "workspace-1",
                 .title = "Existing",
                 .folder_name = "other-folder",
-                .path = "/tmp/tao-existing-worktree",
+                .path = "/tmp/tau-existing-worktree",
                 .branch = "feature/reused",
                 .state = "creating",
                 .order_index = 0,
@@ -1120,7 +1120,7 @@ test "create rechecks branch reservation after unlocked git checks" {
 
     try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"error_code\":\"branch-exists\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, response, "branch already exists in Tao worktrees") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "branch already exists in Tau worktrees") != null);
     try std.testing.expectEqual(@as(u64, 1), try subject.database.?.countWorktrees());
 }
 
@@ -1144,7 +1144,7 @@ test "default remove archives external worktree without deleting git worktree" {
     const init_args = [_][]const u8{"init"};
     var out = try git.runGitAlloc(allocator, repo_path, &init_args);
     allocator.free(out);
-    const commit_args = [_][]const u8{ "-c", "user.name=Tao Test", "-c", "user.email=tao-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
+    const commit_args = [_][]const u8{ "-c", "user.name=Tau Test", "-c", "user.email=tau-test@example.invalid", "commit", "--allow-empty", "-m", "initial" };
     out = try git.runGitAlloc(allocator, repo_path, &commit_args);
     allocator.free(out);
     try git.worktreeAddNewBranch(allocator, repo_path, "external-branch", external_path, "HEAD");

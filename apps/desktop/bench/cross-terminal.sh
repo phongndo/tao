@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── Tao Terminal — Cross-Terminal Throughput Benchmark ───
+# ─── Tau Terminal — Cross-Terminal Throughput Benchmark ───
 #
 # Compares real-world throughput by running `cat` on a generated test file
 # in every available terminal emulator on the system.
@@ -175,7 +175,7 @@ detect_and_bench() {
   echo ""
   echo -e "${BOLD}─── $desc ───${NC}"
 
-  echo -e "  ${YELLOW}Note: Tao renderer coverage lives in bench:renderer; this script compares external terminals and headless parser throughput.${NC}"
+  echo -e "  ${YELLOW}Note: Tau renderer coverage lives in bench:renderer; this script compares external terminals and headless parser throughput.${NC}"
 
   # xterm.js parser (headless, Node.js)
   bench_terminal "xterm.js (parser)" \
@@ -258,7 +258,7 @@ detect_and_bench() {
 
 main() {
   echo -e "${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
-  echo -e "${BOLD}║   Tao — Cross-Terminal Throughput Benchmark         ║${NC}"
+  echo -e "${BOLD}║   Tau — Cross-Terminal Throughput Benchmark         ║${NC}"
   echo -e "${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
   echo ""
 

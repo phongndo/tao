@@ -128,7 +128,7 @@ pub const migration_004_workspace_worktrees =
     \\    order_index INTEGER NOT NULL DEFAULT 0,
     \\    last_active_tab_id TEXT,
     \\    last_error TEXT,
-    \\    created_by TEXT NOT NULL DEFAULT 'tao',
+    \\    created_by TEXT NOT NULL DEFAULT 'tau',
     \\    created_at TEXT NOT NULL DEFAULT (datetime('now')),
     \\    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     \\    archived_at TEXT
@@ -635,7 +635,7 @@ pub const WorktreeRecord = struct {
     order_index: i64 = 0,
     last_active_tab_id: ?[]const u8 = null,
     last_error: ?[]const u8 = null,
-    created_by: []const u8 = "tao",
+    created_by: []const u8 = "tau",
 };
 
 pub const WorktreeRow = struct {
@@ -1242,7 +1242,7 @@ test "sqlite database applies migrations and records terminal sessions" {
         .pid = 123,
         .cols = 80,
         .rows = 24,
-        .event_log_path = "/tmp/events.taoev",
+        .event_log_path = "/tmp/events.tauev",
         .last_seq = 1,
     });
 
@@ -1275,7 +1275,7 @@ test "sqlite database looks up terminal restart metadata" {
         .status = "detached",
         .cols = 100,
         .rows = 30,
-        .event_log_path = "/tmp/restart/events.taoev",
+        .event_log_path = "/tmp/restart/events.tauev",
         .last_seq = 42,
     });
 
@@ -1301,7 +1301,7 @@ test "sqlite database records agent resume metadata and FTS excerpts" {
         .status = "live",
         .cols = 80,
         .rows = 24,
-        .event_log_path = "/tmp/agent/events.taoev",
+        .event_log_path = "/tmp/agent/events.tauev",
         .last_seq = 1,
     });
 
@@ -1354,10 +1354,10 @@ test "sqlite database records workspaces and worktrees" {
 
     try database.insertWorkspace(.{
         .id = "workspace-1",
-        .name = "tao",
-        .root_path = "/repo/tao",
-        .git_common_dir = "/repo/tao/.git",
-        .workspace_slug = "tao",
+        .name = "tau",
+        .root_path = "/repo/tau",
+        .git_common_dir = "/repo/tau/.git",
+        .workspace_slug = "tau",
         .default_branch = "main",
         .order_index = 0,
     });
@@ -1365,7 +1365,7 @@ test "sqlite database records workspaces and worktrees" {
 
     var workspace = (try database.findWorkspaceById(std.testing.allocator, "workspace-1")).?;
     defer workspace.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("/repo/tao", workspace.root_path);
+    try std.testing.expectEqualStrings("/repo/tau", workspace.root_path);
 
     try database.insertWorktree(.{
         .id = "worktree-1",
@@ -1422,10 +1422,10 @@ test "sqlite database records workspaces and worktrees" {
     try std.testing.expect(archived_workspace.archived_at != null);
     try database.updateWorkspace(.{
         .id = "workspace-1",
-        .name = "tao",
-        .root_path = "/repo/tao",
-        .git_common_dir = "/repo/tao/.git",
-        .workspace_slug = "tao",
+        .name = "tau",
+        .root_path = "/repo/tau",
+        .git_common_dir = "/repo/tau/.git",
+        .workspace_slug = "tau",
         .default_branch = "main",
         .order_index = 0,
     });
@@ -1434,10 +1434,10 @@ test "sqlite database records workspaces and worktrees" {
     try std.testing.expect(still_archived_workspace.archived_at != null);
     try database.reactivateWorkspace(.{
         .id = "workspace-1",
-        .name = "tao",
-        .root_path = "/repo/tao",
-        .git_common_dir = "/repo/tao/.git",
-        .workspace_slug = "tao",
+        .name = "tau",
+        .root_path = "/repo/tau",
+        .git_common_dir = "/repo/tau/.git",
+        .workspace_slug = "tau",
         .default_branch = "main",
         .order_index = 0,
     });

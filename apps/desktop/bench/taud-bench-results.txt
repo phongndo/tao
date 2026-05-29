@@ -1,0 +1,12 @@
+taud_benchmark|metric|value|unit
+taud_startup|avg|6|ms
+taud_startup|min|5|ms
+taud_startup|max|9|ms
+taud_pty_spawn|avg|31|ms
+taud_pty_spawn|p50|31|ms
+taud_pty_spawn|p95|33|ms
+taud_pty_spawn|p99|34|ms
+taud_idle|rss|87|MB
+taud_idle|cpu|0.0|%
+taud_load|rss|95|MB
+taud_load|cpu|98.76666666666667|%

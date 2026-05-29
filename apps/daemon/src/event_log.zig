@@ -3,7 +3,7 @@ const limits = @import("limits.zig");
 
 const assert = std.debug.assert;
 
-pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAOEV\0\1\0
+pub const file_magic = [_]u8{ 0x54, 0x41, 0x4f, 0x45, 0x56, 0x00, 0x01, 0x00 }; // TAUEV\0\1\0
 pub const session_id_header_size: usize = 36;
 pub const file_header_size: usize = file_magic.len + session_id_header_size + 8;
 pub const frame_magic: u32 = 0x54414546; // TAEF
@@ -231,7 +231,7 @@ pub fn openPersistentSession(
     errdefer allocator.free(dir);
     try mkdirPath(allocator, dir, 0o700);
 
-    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.tauev" });
     errdefer allocator.free(event_log_path);
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
@@ -261,7 +261,7 @@ pub fn resetPersistentSession(
     errdefer allocator.free(dir);
     try mkdirPath(allocator, dir, 0o700);
 
-    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.tauev" });
     errdefer allocator.free(event_log_path);
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
@@ -289,7 +289,7 @@ pub fn openExistingSession(
 
     const dir = try std.fs.path.join(allocator, &.{ sessions_dir, sanitized_id });
     errdefer allocator.free(dir);
-    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.taoev" });
+    const event_log_path = try std.fs.path.join(allocator, &.{ dir, "events.tauev" });
     errdefer allocator.free(event_log_path);
     const excerpt_path = try std.fs.path.join(allocator, &.{ dir, "excerpt.txt" });
     errdefer allocator.free(excerpt_path);
@@ -892,7 +892,7 @@ test "event log durable append failure does not advance sequence" {
 
     const missing_path = try std.fmt.allocPrint(
         std.testing.allocator,
-        ".zig-cache/tmp/{s}/missing/events.taoev",
+        ".zig-cache/tmp/{s}/missing/events.tauev",
         .{tmp.sub_path},
     );
     defer std.testing.allocator.free(missing_path);

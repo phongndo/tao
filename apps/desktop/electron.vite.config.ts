@@ -13,48 +13,48 @@ import react from '@vitejs/plugin-react'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
 /**
- * Bundle the built taod binary beside Electron's main output so production
+ * Bundle the built taud binary beside Electron's main output so production
  * builds do not depend on a source-tree-relative Zig artifact.
  */
-function copyTaodBinary() {
+function copyTaudBinary() {
   let outDir = ''
 
   return {
-    name: 'copy-taod-binary',
+    name: 'copy-taud-binary',
     configResolved(config: any) {
       outDir = config.build.outDir
     },
     closeBundle() {
-      if (process.env.TAOD_SKIP_NATIVE === '1') {
-        console.warn('[copy-taod-binary] Skipping taod copy; TAOD_SKIP_NATIVE=1')
+      if (process.env.TAUD_SKIP_NATIVE === '1') {
+        console.warn('[copy-taud-binary] Skipping taud copy; TAUD_SKIP_NATIVE=1')
         return
       }
 
       if (process.platform === 'win32') {
-        console.warn('[copy-taod-binary] Skipping taod copy on Windows; taod is POSIX-only')
+        console.warn('[copy-taud-binary] Skipping taud copy on Windows; taud is POSIX-only')
         return
       }
 
-      const exeName = 'taod'
-      const taodSource = resolve(__dirname, '../daemon/zig-out/bin', exeName)
-      const taodDestDir = resolve(outDir, '../bin')
-      const taodDest = resolve(taodDestDir, exeName)
+      const exeName = 'taud'
+      const taudSource = resolve(__dirname, '../daemon/zig-out/bin', exeName)
+      const taudDestDir = resolve(outDir, '../bin')
+      const taudDest = resolve(taudDestDir, exeName)
 
-      if (!existsSync(taodSource)) {
-        throw new Error(`[copy-taod-binary] taod source not found: ${taodSource}`)
+      if (!existsSync(taudSource)) {
+        throw new Error(`[copy-taud-binary] taud source not found: ${taudSource}`)
       }
 
-      mkdirSync(taodDestDir, { recursive: true })
-      copyFileSync(taodSource, taodDest)
-      chmodSync(taodDest, 0o755)
-      console.log('[copy-taod-binary] Copied taod to', taodDest)
+      mkdirSync(taudDestDir, { recursive: true })
+      copyFileSync(taudSource, taudDest)
+      chmodSync(taudDest, 0o755)
+      console.log('[copy-taud-binary] Copied taud to', taudDest)
 
       const adaptersSource = resolve(__dirname, '../daemon/adapters')
       const adaptersDest = resolve(outDir, '../adapters')
       if (existsSync(adaptersSource)) {
         rmSync(adaptersDest, { recursive: true, force: true })
         copyDirectory(adaptersSource, adaptersDest)
-        console.log('[copy-taod-binary] Copied taod adapters to', adaptersDest)
+        console.log('[copy-taud-binary] Copied taud adapters to', adaptersDest)
       }
     },
   }
@@ -78,9 +78,9 @@ function copyDirectory(source: string, destination: string) {
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin(), copyTaodBinary()],
+    plugins: [externalizeDepsPlugin(), copyTaudBinary()],
     build: {
-      // node-pty has been removed — taod owns PTY lifecycle
+      // node-pty has been removed — taud owns PTY lifecycle
     },
   },
   preload: {
