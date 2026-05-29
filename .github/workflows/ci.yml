@@ -94,6 +94,7 @@ jobs:
 
   # ── Build matrix across platforms ──
   build:
+    name: build (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
