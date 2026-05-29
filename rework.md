@@ -185,17 +185,26 @@ Do not:
 
 ## Implementation Backlog
 
+### Pi Capability Verification (Blocking prerequisite)
+
+- Build a Pi capability probe that records whether Pi exposes structured RPC/events for assistant messages, tool calls, approvals, diffs, errors, files, and command status.
+- Document how Pi discovers slash commands and extensions, how Pi persists sessions, and which state must remain Pi-owned versus indexable by Tau.
+- If Pi exposes only terminal output or partial structure, document the narrow bridge plan and keep the first UI shell limited to verified events.
+- Prerequisite for: Foundation (`PiSession` model), Pi Bridge, and UI Shell.
+
 ### Foundation
 
+- Depends on: Pi Capability Verification.
 - Rename product concepts in code and docs from workspace/tab to project/thread where safe.
-- Add a `PiSession` domain model beside the existing workspace model.
+- Add a `PiSession` domain model beside the existing workspace model after the probe defines which session fields Tau may own.
 - Keep compatibility shims until the UI and persistence are migrated.
 - Document non-goals: no generic AI IDE, no forced worktree workflow, no dashboard extensions yet.
 
 ### Pi Bridge
 
-- Build a minimal Pi adapter that can start Pi and stream structured events if available.
-- If Pi lacks structured events, prototype a bridge and compare it against terminal scraping.
+- Depends on: Pi Capability Verification.
+- Build a minimal Pi adapter that can start Pi and stream structured events only for the capabilities verified by the probe.
+- If Pi lacks structured events, follow the narrow bridge plan and compare it against terminal scraping before expanding adapter scope.
 - Define event types for message, tool call, approval request, diff, file activity, command output, error, and session lifecycle.
 - Prove one live flow: start Pi, send prompt, receive assistant response, approve tool call, show diff.
 
@@ -294,8 +303,31 @@ Anything beyond this should wait until the foundation is proven.
 
 ### Migration Strategy
 
-Existing Tau users move from the workspace/worktree model to the project/thread model in phases:
+Existing Tau users move from the workspace/worktree model to the project/thread model through gate-based milestones. This section is the release roadmap until a versioned roadmap exists.
 
-- Before project/thread UI becomes the default, the desktop persistence owner adds schema changes and compatibility shims that read existing workspace/worktree records as projects with threads.
-- During the first beta, the desktop UX owner ships in-app notices that explain the renamed concepts, the rollback path, and the deprecation timeline for worktree-first flows.
-- Before compatibility shims are removed, the desktop tooling owner adds import/export and automated converters for worktrees to projects/threads, with Pi session ownership kept separate from Tau indexes.
+Roles are responsibility areas, not named owners:
+
+- Desktop persistence owner: owns schema changes, compatibility shims, migration reads/writes, and data-loss checks.
+- Desktop UX owner: owns in-app notices, concept rename copy, deprecation messaging, and rollback instructions.
+- Desktop tooling owner: owns import/export and automated converters for worktrees to projects/threads.
+
+Milestones:
+
+- Phase 1, persistence gate: add schema changes and compatibility shims that read existing workspace/worktree records as projects with threads.
+- Phase 2, beta gate: ship project/thread UI behind the beta path with in-app notices, deprecation messaging for worktree-first flows, and rollback instructions.
+- Phase 3, removal gate: remove compatibility shims only after import/export, automated converters, and rollback telemetry show no unresolved migration blockers.
+
+Rollback path:
+
+- Until Phase 3 starts, users can disable the project/thread beta path, reopen Tau, and keep using workspace/worktree persistence through the compatibility shims.
+- If a conversion fails, Tau should leave the original workspace/worktree records untouched, export the failed conversion report, and let the user retry after updating Tau.
+
+Conversion risks:
+
+- Workspace metadata may not map cleanly to project metadata.
+- Active worktree sessions may require manual reconciliation with Pi-owned session state.
+- Automated converters can lose user intent if worktree names, branches, or session history conflict.
+
+Compatibility window:
+
+- Compatibility shims, import/export, automated converters, and the rollback path stay supported for at least one beta milestone and one stable milestone after project/thread UI becomes the default.
