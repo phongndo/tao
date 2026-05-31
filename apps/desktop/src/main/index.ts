@@ -150,8 +150,8 @@ function appIconFileName(): string {
 function resolveAppIconPath(): string | null {
   const fileName = appIconFileName()
   const candidates = [
-    join(__dirname, '../renderer/nightly', fileName),
     resolve(process.cwd(), 'assets/nightly', fileName),
+    join(__dirname, '../renderer/nightly', fileName),
   ]
 
   return candidates.find((candidate) => existsSync(candidate)) ?? null
@@ -186,21 +186,14 @@ function createWindow(): BrowserWindowInstance {
     height: 600,
     minWidth: 400,
     minHeight: 300,
-    backgroundColor: process.platform === 'darwin' ? '#00000000' : '#151515',
-    ...(process.platform === 'darwin'
-      ? {
-          transparent: true,
-          vibrancy: 'under-window' as const,
-          visualEffectState: 'active' as const,
-        }
-      : {}),
+    backgroundColor: '#151515',
     title: 'Tau',
     ...(appIcon ? { icon: appIcon } : {}),
     show: false, // Show only when terminal is ready
     // Accept first mouse click immediately (no click-through delay)
     acceptFirstMouse: true,
     // macOS: use built-in titlebar for smooth integration
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: 'hidden',
     trafficLightPosition: { x: 18, y: 14 },
 
     webPreferences: {
