@@ -3502,7 +3502,7 @@ export function App() {
   }, [activePaneId, layoutLoaded, panes])
 
   useEffect(() => {
-    document.title = activeTab ? `${activeTab.name} — Tao` : 'Tao'
+    document.title = activeTab ? `${activeTab.name} — Tau` : 'Tau'
   }, [activeTab])
 
   useEffect(() => {
