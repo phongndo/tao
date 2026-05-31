@@ -186,7 +186,14 @@ function createWindow(): BrowserWindowInstance {
     height: 600,
     minWidth: 400,
     minHeight: 300,
-    backgroundColor: '#151515',
+    backgroundColor: process.platform === 'darwin' ? '#00000000' : '#151515',
+    ...(process.platform === 'darwin'
+      ? {
+          transparent: true,
+          vibrancy: 'under-window' as const,
+          visualEffectState: 'active' as const,
+        }
+      : {}),
     title: 'Tau',
     ...(appIcon ? { icon: appIcon } : {}),
     show: false, // Show only when terminal is ready

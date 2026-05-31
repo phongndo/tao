@@ -1,11 +1,11 @@
 import {
-  FiAlertTriangle,
   FiChevronsDown,
   FiChevronLeft,
   FiChevronRight,
   FiChevronDown,
   FiArchive,
   FiChevronsUp,
+  FiCpu,
   FiFileText,
   FiFolder,
   FiGitPullRequest,
@@ -72,8 +72,13 @@ import type {
   TaudLifecycleRecoveryAction,
 } from '@tau/shared/taud-protocol'
 
+type TerminalPreloadDiagnostics = ReturnType<Window['electronAPI']['getTerminalPreloadDiagnostics']>
+type TaudPtyBridgeDiagnostics = Awaited<
+  ReturnType<Window['electronAPI']['getTaudPtyBridgeDiagnostics']>
+>
+
 const SIDEBAR_DEFAULT_WIDTH = 240
-const SIDEBAR_EXPANDED_MIN_WIDTH = 220
+const SIDEBAR_EXPANDED_MIN_WIDTH = 240
 const SIDEBAR_MAX_WIDTH = 360
 const RIGHT_SIDEBAR_MAX_WIDTH = SIDEBAR_MAX_WIDTH * 2
 const SIDEBAR_KEYBOARD_RESIZE_STEP = 12
@@ -241,8 +246,9 @@ type DaemonRecoveryNotice = {
 
 type DaemonRecoveryPanelRow = {
   label: string
-  value: string
+  value?: string
   tone?: 'error'
+  section?: boolean
 }
 
 type ThreadSearchEntry = {
@@ -597,6 +603,19 @@ function formatDiagnosticsMs(value: number | undefined): string {
   return typeof value === 'number' ? `${Math.round(value)} ms` : 'none'
 }
 
+function formatDiagnosticsBytes(value: number | undefined): string {
+  if (typeof value !== 'number') return 'unknown'
+  if (value < 1024) return `${value} B`
+  const kib = value / 1024
+  if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KiB`
+  const mib = kib / 1024
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MiB`
+}
+
+function formatDiagnosticsBool(value: boolean | undefined): string {
+  return typeof value === 'boolean' ? (value ? 'yes' : 'no') : 'unknown'
+}
+
 function formatDiagnosticsPid(diagnostics: TaudLifecycleDiagnostics | null): string {
   if (!diagnostics) return 'none'
   if (typeof diagnostics.spawnedPid === 'number') return String(diagnostics.spawnedPid)
@@ -610,37 +629,79 @@ function daemonRecoveryRows(
   diagnostics: TaudLifecycleDiagnostics | null,
   error: string | null,
   recoveryError: string | null,
+  preloadDiagnostics: TerminalPreloadDiagnostics | null,
+  bridgeDiagnostics: TaudPtyBridgeDiagnostics | null,
+  bridgeError: string | null,
 ): DaemonRecoveryPanelRow[] {
+  const rows: DaemonRecoveryPanelRow[] = []
+  const appQueueDepth =
+    (preloadDiagnostics?.pendingClientMessages ?? 0) +
+    (preloadDiagnostics?.pendingDataSessions ?? 0) +
+    (preloadDiagnostics?.pendingOutputSessions ?? 0)
+  const droppedOrFailed =
+    (preloadDiagnostics?.pendingDataDroppedChunksTotal ?? 0) +
+    (preloadDiagnostics?.pendingDataTruncatedCharsTotal ?? 0) +
+    (preloadDiagnostics?.pendingOutputDroppedFramesTotal ?? 0) +
+    (preloadDiagnostics?.pendingOutputTruncatedCharsTotal ?? 0) +
+    (bridgeDiagnostics?.messagesDroppedNoPortTotal ?? 0) +
+    (bridgeDiagnostics?.postFailuresTotal ?? 0) +
+    (diagnostics?.controlRequestFailureCount ?? 0)
+
+  rows.push(
+    { label: 'Performance', section: true },
+    { label: 'Ping', value: formatDiagnosticsMs(diagnostics?.timing.lastPingDurationMs) },
+    { label: 'Start', value: formatDiagnosticsMs(diagnostics?.timing.lastStartDurationMs) },
+    {
+      label: 'Input',
+      value: formatDiagnosticsBytes(diagnostics?.streamDiagnostics?.inputBytesTotal),
+    },
+    {
+      label: 'Output',
+      value: formatDiagnosticsBytes(diagnostics?.streamDiagnostics?.outputBytesTotal),
+    },
+  )
+  rows.push(
+    { label: 'Efficiency', section: true },
+    {
+      label: 'Pending output',
+      value: formatDiagnosticsBytes(diagnostics?.streamDiagnostics?.pendingOutputBytes),
+    },
+    { label: 'Queue depth', value: String(appQueueDepth) },
+    { label: 'Active streams', value: String(bridgeDiagnostics?.activeStreams ?? 0) },
+    { label: 'Drops/failures', value: String(droppedOrFailed) },
+  )
+  rows.push({ label: 'Health', section: true })
   if (!diagnostics) {
-    return [
-      {
-        label: 'Diagnostics',
-        value: recoveryError ?? error ?? 'unavailable',
-        tone: recoveryError || error ? 'error' : undefined,
-      },
-    ]
+    rows.push({
+      label: 'Daemon',
+      value: recoveryError ?? error ?? 'unavailable',
+      tone: recoveryError || error ? 'error' : undefined,
+    })
+  } else {
+    rows.push(
+      { label: 'State', value: diagnostics.state },
+      { label: 'Owner', value: diagnostics.daemonOwnership },
+      { label: 'PID', value: formatDiagnosticsPid(diagnostics) },
+      { label: 'Version', value: diagnostics.daemonVersion ?? 'unknown' },
+    )
+
+    if (diagnostics.lastError) {
+      rows.push({ label: 'Last error', value: diagnostics.lastError, tone: 'error' })
+    }
   }
 
-  const rows: DaemonRecoveryPanelRow[] = [
-    { label: 'State', value: diagnostics.state },
-    { label: 'Owner', value: diagnostics.daemonOwnership },
-    { label: 'Action', value: diagnostics.recoveryAction },
-    { label: 'Version', value: diagnostics.daemonVersion ?? 'unknown' },
-    { label: 'Protocol', value: String(diagnostics.protocolVersion ?? 'unknown') },
-    { label: 'PID', value: formatDiagnosticsPid(diagnostics) },
-    { label: 'Last ping', value: formatDiagnosticsMs(diagnostics.timing.lastPingDurationMs) },
-    { label: 'Last start', value: formatDiagnosticsMs(diagnostics.timing.lastStartDurationMs) },
-    { label: 'Last control', value: diagnostics.lastControlRequest?.type ?? 'none' },
-  ]
-
-  if (diagnostics.lastError) {
-    rows.push({ label: 'Last error', value: diagnostics.lastError, tone: 'error' })
-  }
   if (error) {
     rows.push({ label: 'Poll error', value: error, tone: 'error' })
   }
   if (recoveryError) {
     rows.push({ label: 'Recovery', value: recoveryError, tone: 'error' })
+  }
+  rows.push({ label: 'Bridge', value: formatDiagnosticsBool(bridgeDiagnostics?.portConnected) })
+  if (bridgeDiagnostics?.lastError) {
+    rows.push({ label: 'Bridge error', value: bridgeDiagnostics.lastError, tone: 'error' })
+  }
+  if (bridgeError) {
+    rows.push({ label: 'Bridge poll', value: bridgeError, tone: 'error' })
   }
 
   return rows
@@ -1218,7 +1279,7 @@ const TabBar = memo(function ThreadTitleBar({
   onNextWorkspace(): void
   archivedTabIds: ReadonlySet<string>
 }) {
-  const titleLabel = activeThreadId ? (tabLabelsById.get(activeThreadId) ?? 'Thread') : 'Tau'
+  const titleLabel = activeThreadId ? (tabLabelsById.get(activeThreadId) ?? 'Thread') : null
   const isArchived = activeThreadId ? archivedTabIds.has(activeThreadId) : false
 
   return (
@@ -1234,7 +1295,7 @@ const TabBar = memo(function ThreadTitleBar({
         />
       ) : null}
       <div className="thread-titlebar-label">
-        <span className="thread-titlebar-thread">{titleLabel}</span>
+        {titleLabel ? <span className="thread-titlebar-thread">{titleLabel}</span> : null}
         {activeThreadId && activeProjectName ? (
           <span className="thread-titlebar-project">{activeProjectName}</span>
         ) : null}
@@ -1451,6 +1512,9 @@ const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
   notice,
   diagnostics,
   diagnosticsError,
+  preloadDiagnostics,
+  bridgeDiagnostics,
+  bridgeDiagnosticsError,
   recoveryError,
   isRecovering,
   isOpen,
@@ -1460,49 +1524,76 @@ const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
   notice: DaemonRecoveryNotice | null
   diagnostics: TaudLifecycleDiagnostics | null
   diagnosticsError: string | null
+  preloadDiagnostics: TerminalPreloadDiagnostics | null
+  bridgeDiagnostics: TaudPtyBridgeDiagnostics | null
+  bridgeDiagnosticsError: string | null
   recoveryError: string | null
   isRecovering: boolean
   isOpen: boolean
   onToggle(): void
   onRecover(action: TaudLifecycleRecoveryAction): void
 }) {
-  if (!notice) return null
-  const rows = daemonRecoveryRows(diagnostics, diagnosticsError, recoveryError)
-  const action = diagnostics?.recoveryAction ?? null
+  const resolvedNotice =
+    notice ??
+    ({
+      tone: bridgeDiagnosticsError ? 'error' : 'info',
+      label: 'Daemon and app diagnostics',
+      title: bridgeDiagnosticsError
+        ? `Daemon and app diagnostics; bridge poll failed: ${bridgeDiagnosticsError}`
+        : 'Daemon and app diagnostics',
+    } satisfies DaemonRecoveryNotice)
+  const rows = daemonRecoveryRows(
+    diagnostics,
+    diagnosticsError,
+    recoveryError,
+    preloadDiagnostics,
+    bridgeDiagnostics,
+    bridgeDiagnosticsError,
+  )
+  const action =
+    diagnostics?.recoveryAction && diagnostics.recoveryAction !== 'none'
+      ? diagnostics.recoveryAction
+      : null
   const actionLabel = action ? daemonRecoveryActionLabel(action) : null
 
   return (
     <div className="daemon-recovery-host">
       <button
         type="button"
-        className={`icon-button daemon-recovery-indicator daemon-recovery-indicator-${notice.tone}`}
-        aria-label={notice.label}
+        className={`icon-button daemon-recovery-indicator daemon-recovery-indicator-${resolvedNotice.tone}`}
+        aria-label={resolvedNotice.label}
         aria-expanded={isOpen}
-        title={notice.title}
+        title={resolvedNotice.title}
         onClick={onToggle}
       >
-        <FiAlertTriangle size={13} />
+        <FiCpu size={13} />
       </button>
       {isOpen ? (
-        <div className={`daemon-recovery-panel daemon-recovery-panel-${notice.tone}`}>
-          <div className="daemon-recovery-panel-header">{notice.label}</div>
+        <div className={`daemon-recovery-panel daemon-recovery-panel-${resolvedNotice.tone}`}>
+          <div className="daemon-recovery-panel-header">{resolvedNotice.label}</div>
           <div className="daemon-recovery-panel-rows">
-            {rows.map((row) => (
-              <div className="daemon-recovery-panel-row" key={row.label}>
-                <span className="daemon-recovery-panel-label">{row.label}</span>
-                <span
-                  className={[
-                    'daemon-recovery-panel-value',
-                    row.tone ? `daemon-recovery-panel-value-${row.tone}` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  title={row.value}
-                >
-                  {row.value}
-                </span>
-              </div>
-            ))}
+            {rows.map((row) =>
+              row.section ? (
+                <div className="daemon-recovery-panel-section" key={row.label}>
+                  {row.label}
+                </div>
+              ) : (
+                <div className="daemon-recovery-panel-row" key={row.label}>
+                  <span className="daemon-recovery-panel-label">{row.label}</span>
+                  <span
+                    className={[
+                      'daemon-recovery-panel-value',
+                      row.tone ? `daemon-recovery-panel-value-${row.tone}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    title={row.value}
+                  >
+                    {row.value}
+                  </span>
+                </div>
+              ),
+            )}
           </div>
           {action && actionLabel ? (
             <button
@@ -1520,36 +1611,19 @@ const DaemonRecoveryIndicator = memo(function DaemonRecoveryIndicator({
   )
 })
 
-const settingsNavItems = ['General', 'Appearance', 'Agent'] as const
-type SettingsSection = (typeof settingsNavItems)[number]
-
 const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>('General')
-
   return (
     <section className="settings-page" aria-label="Settings">
       <div className="settings-titlebar" aria-hidden="true" />
-      <aside className="settings-nav" aria-label="Settings sections">
+      <aside className="settings-nav" aria-label="Settings navigation">
         <button type="button" className="settings-back-link" onClick={onBack}>
           <FiChevronLeft size={14} />
           <span>Back to app</span>
         </button>
-        <nav className="settings-nav-list">
-          {settingsNavItems.map((item) => (
-            <button
-              type="button"
-              key={item}
-              onClick={() => setActiveSection(item)}
-              className={
-                item === activeSection
-                  ? 'settings-nav-item settings-nav-item-active'
-                  : 'settings-nav-item'
-              }
-              aria-current={item === activeSection ? 'page' : undefined}
-            >
-              {item}
-            </button>
-          ))}
+        <nav className="settings-nav-list" aria-label="Settings sections">
+          <div className="settings-nav-current" aria-current="page">
+            General
+          </div>
         </nav>
       </aside>
       <main className="settings-main">
@@ -1559,24 +1633,7 @@ const SettingsPage = memo(function SettingsPage({ onBack }: { onBack(): void }) 
               <FiChevronLeft size={14} />
               <span>Back to app</span>
             </button>
-            <h1>{activeSection}</h1>
-            <nav className="settings-mobile-nav-list" aria-label="Settings sections">
-              {settingsNavItems.map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  onClick={() => setActiveSection(item)}
-                  className={
-                    item === activeSection
-                      ? 'settings-mobile-nav-item settings-mobile-nav-item-active'
-                      : 'settings-mobile-nav-item'
-                  }
-                  aria-current={item === activeSection ? 'page' : undefined}
-                >
-                  {item}
-                </button>
-              ))}
-            </nav>
+            <h1>General</h1>
           </header>
         </div>
       </main>
@@ -3206,6 +3263,11 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [taudDiagnostics, setTaudDiagnostics] = useState<TaudLifecycleDiagnostics | null>(null)
   const [taudDiagnosticsError, setTaudDiagnosticsError] = useState<string | null>(null)
+  const [preloadDiagnostics, setPreloadDiagnostics] = useState<TerminalPreloadDiagnostics | null>(
+    null,
+  )
+  const [bridgeDiagnostics, setBridgeDiagnostics] = useState<TaudPtyBridgeDiagnostics | null>(null)
+  const [bridgeDiagnosticsError, setBridgeDiagnosticsError] = useState<string | null>(null)
   const [daemonDiagnosticsOpen, setDaemonDiagnosticsOpen] = useState(false)
   const [daemonRecoveryInFlight, setDaemonRecoveryInFlight] = useState(false)
   const [daemonRecoveryError, setDaemonRecoveryError] = useState<string | null>(null)
@@ -3393,6 +3455,24 @@ export function App() {
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const refreshTaudDiagnostics = async () => {
+      try {
+        const diagnostics = window.electronAPI.getTerminalPreloadDiagnostics()
+        if (!cancelled) setPreloadDiagnostics(diagnostics)
+      } catch (error) {
+        console.warn('[diagnostics] Failed to read preload diagnostics:', error)
+      }
+
+      try {
+        const diagnostics = await window.electronAPI.getTaudPtyBridgeDiagnostics()
+        if (cancelled) return
+        setBridgeDiagnostics(diagnostics)
+        setBridgeDiagnosticsError(null)
+      } catch (error) {
+        if (cancelled) return
+        setBridgeDiagnostics(null)
+        setBridgeDiagnosticsError(error instanceof Error ? error.message : String(error))
+      }
+
       try {
         const diagnostics = await window.electronAPI.getTaudDiagnostics()
         if (cancelled) return
@@ -3683,10 +3763,6 @@ export function App() {
     [taudDiagnostics, taudDiagnosticsError],
   )
 
-  useEffect(() => {
-    if (!daemonNotice) setDaemonDiagnosticsOpen(false)
-  }, [daemonNotice])
-
   const handleToggleDaemonDiagnostics = useCallback(() => {
     setDaemonDiagnosticsOpen((open) => !open)
   }, [])
@@ -3744,16 +3820,6 @@ export function App() {
               >
                 <FiSearch size={14} />
               </button>
-              <DaemonRecoveryIndicator
-                notice={daemonNotice}
-                diagnostics={taudDiagnostics}
-                diagnosticsError={taudDiagnosticsError}
-                recoveryError={daemonRecoveryError}
-                isRecovering={daemonRecoveryInFlight}
-                isOpen={daemonDiagnosticsOpen}
-                onToggle={handleToggleDaemonDiagnostics}
-                onRecover={handleApplyDaemonRecovery}
-              />
             </div>
           </div>
           <div className="sidebar-content">
@@ -3804,8 +3870,22 @@ export function App() {
                 onClick={() => setIsSettingsOpen(true)}
               >
                 <FiSettings size={15} />
-                <span>Settings</span>
               </button>
+              <div className="sidebar-footer-status">
+                <DaemonRecoveryIndicator
+                  notice={daemonNotice}
+                  diagnostics={taudDiagnostics}
+                  diagnosticsError={taudDiagnosticsError}
+                  preloadDiagnostics={preloadDiagnostics}
+                  bridgeDiagnostics={bridgeDiagnostics}
+                  bridgeDiagnosticsError={bridgeDiagnosticsError}
+                  recoveryError={daemonRecoveryError}
+                  isRecovering={daemonRecoveryInFlight}
+                  isOpen={daemonDiagnosticsOpen}
+                  onToggle={handleToggleDaemonDiagnostics}
+                  onRecover={handleApplyDaemonRecovery}
+                />
+              </div>
             </div>
           </div>
         </ResizeShell>
@@ -3844,12 +3924,15 @@ export function App() {
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
             archivedTabIds={archivedTabIds}
           />
-          {!sidebarExpanded && daemonNotice ? (
-            <div className="titlebar-status-actions">
+          {!sidebarExpanded ? (
+            <div className="shell-status-actions">
               <DaemonRecoveryIndicator
                 notice={daemonNotice}
                 diagnostics={taudDiagnostics}
                 diagnosticsError={taudDiagnosticsError}
+                preloadDiagnostics={preloadDiagnostics}
+                bridgeDiagnostics={bridgeDiagnostics}
+                bridgeDiagnosticsError={bridgeDiagnosticsError}
                 recoveryError={daemonRecoveryError}
                 isRecovering={daemonRecoveryInFlight}
                 isOpen={daemonDiagnosticsOpen}
