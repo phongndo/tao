@@ -1005,12 +1005,6 @@ body {
   color: #cac9dd;
 }
 
-.sidebar-footer .daemon-recovery-panel,
-.shell-status-actions .daemon-recovery-panel {
-  bottom: 46px;
-  left: 12px;
-}
-
 .daemon-recovery-panel-info {
   border-color: #395061;
 }
