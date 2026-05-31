@@ -39,8 +39,9 @@ body {
 #root {
   width: 100%;
   height: 100%;
-  --tau-titlebar-height: 42px;
+  --tau-titlebar-height: 36px;
   --tau-titlebar-control-spacer: 92px;
+  --tau-terminal-background: #151515;
   --tau-sidebar-width: 0px;
 }
 
@@ -60,7 +61,7 @@ body {
   left: 0;
   z-index: 2;
   height: var(--tau-titlebar-height);
-  background: #151516;
+  background: var(--tau-terminal-background);
   content: '';
   pointer-events: none;
 }
@@ -897,18 +898,6 @@ body {
 
 .project-titlebar-button {
   color: #8a8a92;
-}
-
-.shell-status-actions {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  z-index: 7;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  -webkit-app-region: no-drag;
 }
 
 .icon-button {
@@ -1859,7 +1848,7 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  background: #111111;
+  background: var(--tau-terminal-background);
 }
 
 .main-content {
@@ -1879,7 +1868,7 @@ body {
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  background: #18181a;
+  background: var(--tau-terminal-background);
   -webkit-app-region: drag;
 }
 
@@ -1892,7 +1881,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 0 16px;
-  background: #111111;
+  background: var(--tau-terminal-background);
   -webkit-app-region: drag;
 }
 
@@ -2488,8 +2477,9 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 0;
+  background: var(--tau-terminal-background);
   /*
    * CSS containment: tells the browser this subtree is self-contained.
    * Enables aggressive optimizations: skip layout/recalc outside this
@@ -2624,7 +2614,7 @@ body {
 }
 
 .terminal-surface .xterm-viewport {
-  background-color: #151515;
+  background-color: var(--tau-terminal-background);
 }
 
 .terminal-surface .xterm-screen,

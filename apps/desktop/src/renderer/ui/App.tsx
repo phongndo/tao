@@ -1255,33 +1255,22 @@ function ResizeShell({
 }
 
 const TabBar = memo(function ThreadTitleBar({
-  activeThreadId,
-  activeProjectName,
   showHeaderNavigation,
   isSidebarVisible,
   canGoPreviousWorkspace,
   canGoNextWorkspace,
-  tabLabelsById,
   onToggleSidebar,
   onPreviousWorkspace,
   onNextWorkspace,
-  archivedTabIds,
 }: {
-  activeThreadId: string | null
-  activeProjectName: string | null
   showHeaderNavigation: boolean
   isSidebarVisible: boolean
   canGoPreviousWorkspace: boolean
   canGoNextWorkspace: boolean
-  tabLabelsById: ReadonlyMap<string, string>
   onToggleSidebar(): void
   onPreviousWorkspace(): void
   onNextWorkspace(): void
-  archivedTabIds: ReadonlySet<string>
 }) {
-  const titleLabel = activeThreadId ? (tabLabelsById.get(activeThreadId) ?? 'Thread') : null
-  const isArchived = activeThreadId ? archivedTabIds.has(activeThreadId) : false
-
   return (
     <div className="thread-titlebar">
       {showHeaderNavigation ? (
@@ -1294,18 +1283,6 @@ const TabBar = memo(function ThreadTitleBar({
           onNextWorkspace={onNextWorkspace}
         />
       ) : null}
-      <div className="thread-titlebar-label">
-        {titleLabel ? <span className="thread-titlebar-thread">{titleLabel}</span> : null}
-        {activeThreadId && activeProjectName ? (
-          <span className="thread-titlebar-project">{activeProjectName}</span>
-        ) : null}
-        {isArchived ? (
-          <span className="tab-archive-pill" aria-label="Read-only archive">
-            <FiArchive size={10} />
-            Archive
-          </span>
-        ) : null}
-      </div>
     </div>
   )
 })
@@ -3912,35 +3889,14 @@ export function App() {
       <section className="tau-main">
         <main className="main-content">
           <TabBar
-            activeThreadId={activeTab?.id ?? null}
-            activeProjectName={activeWorkspace?.name ?? null}
             showHeaderNavigation={!sidebarExpanded}
             isSidebarVisible={sidebarExpanded}
             canGoPreviousWorkspace={canGoPreviousWorkspace}
             canGoNextWorkspace={canGoNextWorkspace}
-            tabLabelsById={tabLabelsById}
             onToggleSidebar={() => setSidebarExpanded(!sidebarExpanded)}
             onPreviousWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex - 1)}
             onNextWorkspace={() => selectWorkspaceAtIndex(activeWorkspaceIndex + 1)}
-            archivedTabIds={archivedTabIds}
           />
-          {!sidebarExpanded ? (
-            <div className="shell-status-actions">
-              <DaemonRecoveryIndicator
-                notice={daemonNotice}
-                diagnostics={taudDiagnostics}
-                diagnosticsError={taudDiagnosticsError}
-                preloadDiagnostics={preloadDiagnostics}
-                bridgeDiagnostics={bridgeDiagnostics}
-                bridgeDiagnosticsError={bridgeDiagnosticsError}
-                recoveryError={daemonRecoveryError}
-                isRecovering={daemonRecoveryInFlight}
-                isOpen={daemonDiagnosticsOpen}
-                onToggle={handleToggleDaemonDiagnostics}
-                onRecover={handleApplyDaemonRecovery}
-              />
-            </div>
-          ) : null}
           <div className="pane-grid">
             {mountedTabs.map((tab) => {
               const isTabActive = tab.id === activeTab?.id
