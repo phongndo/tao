@@ -150,8 +150,8 @@ function appIconFileName(): string {
 function resolveAppIconPath(): string | null {
   const fileName = appIconFileName()
   const candidates = [
-    join(__dirname, '../renderer/nightly', fileName),
     resolve(process.cwd(), 'assets/nightly', fileName),
+    join(__dirname, '../renderer/nightly', fileName),
   ]
 
   return candidates.find((candidate) => existsSync(candidate)) ?? null
@@ -193,7 +193,7 @@ function createWindow(): BrowserWindowInstance {
     // Accept first mouse click immediately (no click-through delay)
     acceptFirstMouse: true,
     // macOS: use built-in titlebar for smooth integration
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: 'hidden',
     trafficLightPosition: { x: 18, y: 14 },
 
     webPreferences: {
